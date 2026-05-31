@@ -1,0 +1,22 @@
+{
+  "name": "content-curator",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "pnpm --filter @curator/worker dev",
+    "build": "pnpm --filter @curator/worker build",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint apps/worker-api/src --ext .ts",
+    "test": "vitest run",
+    "deploy": "wrangler deploy --env production --config wrangler.toml",
+    "db:migrate:local": "wrangler d1 migrations apply content-curator-db --local --config wrangler.toml",
+    "db:migrate:remote": "wrangler d1 migrations apply content-curator-db --remote --env production --config wrangler.toml"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250523.0",
+    "typescript": "^5.4.5",
+    "vitest": "^2.1.8",
+    "wrangler": "^3.114.4"
+  }
+}

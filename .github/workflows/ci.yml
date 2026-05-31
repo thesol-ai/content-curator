@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Typecheck and build validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm via corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build validation (wrangler dry-run)
+        run: pnpm exec wrangler deploy --dry-run --outdir dist --config wrangler.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || 'dummy-for-dry-run' }}
+          # برای dry-run نیازی به account واقعی نیست
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || 'dummy' }}
+
+      - name: Security check - no secrets in code
+        run: |
+          # بررسی که هیچ secret واقعی commit نشده باشد
+          if grep -r "sk-ant-api\|AIza\|sk-proj" --include="*.ts" --include="*.js" --include="*.toml" . 2>/dev/null | grep -v ".git"; then
+            echo "ERROR: Possible API key found in code!"
+            exit 1
+          fi
+          echo "OK: No secrets detected in code"

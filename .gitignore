@@ -1,0 +1,43 @@
+# ── Node / pnpm ───────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+dist/
+.wrangler/
+
+# ── Secrets — هیچ‌وقت commit نشوند ──────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+*.pem
+*.key
+
+# ── Wrangler local state ──────────────────────────────────────
+.wrangler/
+wrangler.local.toml
+
+# ── Dashboard: config.js را override نکنید با secret ─────────
+# اگر config.js را با مقادیر واقعی ویرایش کردید، آن را اینجا اضافه کنید:
+# apps/dashboard/config.local.js
+
+# ── Build outputs ─────────────────────────────────────────────
+dist/
+build/
+out/
+.output/
+
+# ── IDE ───────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Test coverage ────────────────────────────────────────────
+coverage/
+.nyc_output/
