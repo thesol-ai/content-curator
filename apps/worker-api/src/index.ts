@@ -20,7 +20,7 @@ export default {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, x-internal-api-secret',
+          'Access-Control-Allow-Headers': 'Content-Type, x-internal-api-secret, x-webhook-secret',
           'Access-Control-Max-Age': '86400',
         },
       });
@@ -43,26 +43,35 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
       try {
-        // ۱. Curation
+        // Check maintenance_mode before running cron tasks
+        const maintenance = await getSettingDirect(env, 'maintenance_mode');
+        if (maintenance === 'true') {
+          console.log('[Scheduled] Skipped — maintenance_mode is active');
+          return;
+        }
+
+        // 1. Curation
         if (env.APIFY_CURATION_ENABLED === 'true') {
           const results = await runCuration(env);
           console.log('[Scheduled] Curation:', results.map(r => ({
             category: r.categoryId,
             ok: r.ok,
+            new: r.itemsNew,
+            selected: r.itemsAiSelected,
             queued: r.itemsQueued,
           })));
         }
 
-        // ۲. Publish due items
+        // 2. Publish due items
         const publishResult = await publishDueItems(env);
         console.log('[Scheduled] Published:', publishResult);
 
-        // ۳. Cleanup dedupe keys قدیمی (هر بار cron)
+        // 3. Cleanup old dedupe keys (runs every cron tick)
         const cleaned = await cleanupOldDedupeKeys(env);
         if (cleaned > 0) console.log(`[Scheduled] Cleaned ${cleaned} old dedupe keys`);
 
       } catch (err) {
-        console.error('[Scheduled] Error:', err);
+        console.error('[Scheduled] Error:', err instanceof Error ? err.message : String(err));
       }
     })());
   },
@@ -78,27 +87,36 @@ async function routeRequest(
 ): Promise<Response> {
   const path = url.pathname;
 
-  // ── Public ──
+  // Public endpoints — always available
   if (path === '/health' || path === '/') {
     return handleHealth(request, env);
   }
-
   if (path === '/status') {
     return handleStatus(request, env);
   }
 
-  // ── Apify webhook — secret در query param یا header ──
+  // Maintenance mode check — blocks all non-health routes
+  const maintenance = await getSettingDirect(env, 'maintenance_mode');
+  if (maintenance === 'true') {
+    return Response.json(
+      { ok: false, error: 'maintenance_mode', message: 'System is in maintenance mode' },
+      { status: 503 }
+    );
+  }
+
+  // Apify webhook — accepts secret from header OR query param (header preferred)
   if (path === '/webhook/apify') {
-    const secret = url.searchParams.get('secret') ?? request.headers.get('x-internal-api-secret');
+    const secret =
+      request.headers.get('x-webhook-secret') ??
+      request.headers.get('x-internal-api-secret') ??
+      url.searchParams.get('secret');
     if (!verifySecret(secret, env)) {
       return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
     }
-    // با waitUntil: سریع acknowledge کن، پردازش async ادامه یابد
-    const responsePromise = handleApifyWebhook(request, env, ctx);
-    return responsePromise;
+    return handleApifyWebhook(request, env, ctx);
   }
 
-  // ── Internal — نیاز به secret ──
+  // Internal admin endpoints — require x-internal-api-secret header
   if (path.startsWith('/internal/')) {
     const secret = request.headers.get('x-internal-api-secret');
     if (!verifySecret(secret, env)) {
@@ -114,8 +132,17 @@ async function routeRequest(
 
 function verifySecret(provided: string | null, env: Env): boolean {
   const expected = env.INTERNAL_API_SECRET?.trim();
-  if (!expected) {
-    return env.ENVIRONMENT === 'local';
-  }
+  if (!expected) return env.ENVIRONMENT === 'local';
   return provided === expected;
+}
+
+// ── Settings helper (used before full DB service loads) ───────
+
+async function getSettingDirect(env: Env, key: string): Promise<string> {
+  try {
+    const row = await env.DB
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .bind(key).first<{ value: string }>();
+    return row?.value ?? '';
+  } catch { return ''; }
 }

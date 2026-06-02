@@ -421,7 +421,7 @@ hr{border:none;border-top:1px solid var(--border);margin:16px 0}
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">بازه مجاز</label>
-          <input class="form-input" id="ch-allowed" value='["08:00-00:00"]'>
+          <input class="form-input" id="ch-allowed" value='["08:00-23:59"]'>
           <div class="form-hint">JSON array. مثال: ["09:00-23:00"]</div>
         </div>
         <div class="form-group">
@@ -429,6 +429,31 @@ hr{border:none;border-top:1px solid var(--border);margin:16px 0}
           <input class="form-input" id="ch-blocked" value='["00:00-08:00"]'>
           <div class="form-hint">JSON array. ساعات بدون ارسال</div>
         </div>
+      </div>
+      <hr>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">AI و لحن کانال</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Channel Label</label>
+          <input class="form-input" id="ch-label" placeholder="Crypto فارسی — آموزشی">
+          <div class="form-hint">نام نمایشی برای context ترجمه و داشبورد</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Tone Profile</label>
+          <select class="form-input" id="ch-tone">
+            <option value="neutral">neutral</option>
+            <option value="formal">formal</option>
+            <option value="casual">casual</option>
+            <option value="educational">educational</option>
+            <option value="news">news</option>
+            <option value="analytical">analytical</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Custom Instructions</label>
+        <textarea class="form-input" id="ch-instructions" rows="3" placeholder="مثلاً: مخاطب مبتدی است، اصطلاحات تخصصی را ساده توضیح بده"></textarea>
+        <div class="form-hint">فقط برای همین کانال در ترجمه استفاده می‌شود</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -463,10 +488,17 @@ hr{border:none;border-top:1px solid var(--border);margin:16px 0}
           <option value="crypto_editorial">crypto_editorial — کریپتو و بلاکچین</option>
           <option value="design_editorial">design_editorial — دیزاین و UX</option>
           <option value="marketing_editorial">marketing_editorial — مارکتینگ</option>
+          <option value="branding_editorial">branding_editorial — برندینگ</option>
+          <option value="finance_editorial">finance_editorial — فایننس</option>
           <option value="product_editorial">product_editorial — پروداکت</option>
           <option value="ai_news_editorial">ai_news_editorial — هوش مصنوعی</option>
           <option value="default_editorial">default_editorial — عمومی</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Custom Prompt</label>
+        <textarea class="form-input" id="cat-custom-prompt" rows="4" placeholder="اگر پر شود، به جای profile آماده برای Claude scoring استفاده می‌شود"></textarea>
+        <div class="form-hint">اختیاری. برای دسته‌بندی‌های خاص یا policy دقیق‌تر.</div>
       </div>
       <div class="form-row3">
         <div class="form-group">
@@ -804,6 +836,8 @@ function queueRows(items, showCancel, published=false) {
       <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(q.caption_short||'')}">${esc((q.caption_short||'—').slice(0,60))}</div>
       <div class="fs11 text-muted">${q.channel_id} · ${q.telegram_method||''} · retry:${q.retry_count||0}</div>
       ${q.publish_error?`<div class="fs11 text-red">${esc(q.publish_error.slice(0,80))}</div>`:''}
+      ${q.media_warning?`<div class="fs11 text-amber">media: ${esc(q.media_warning.slice(0,90))}</div>`:''}
+      ${q.all_message_ids&&q.all_message_ids!=='[]'?`<div class="fs11 text-muted mono">messages: ${esc(q.all_message_ids)}</div>`:''}
     </div>
     <div style="text-align:left">
       <div class="fs11 text-muted">${published?'✓ '+fmtDate(q.published_at):fmtTime(q.scheduled_at)}</div>
@@ -913,7 +947,7 @@ async function renderCategories(c) {
         <span class="tag ${cat.enabled?'tag-green':'tag-dim'}" style="margin-right:auto">${cat.enabled?'active':'disabled'}</span>
         <button class="btn-sm" onclick="openCatEdit('${cat.id}')">ویرایش</button>
       </div>
-      <div class="fs12 text-muted mono mb8">profile: ${cat.prompt_profile} · threshold: ${cat.score_threshold} · freshness: ${cat.freshness_hours}h · media: ${cat.media_mode}</div>
+      <div class="fs12 text-muted mono mb8">profile: ${cat.prompt_profile}${cat.custom_prompt?' · custom prompt':''} · threshold: ${cat.score_threshold} · freshness: ${cat.freshness_hours}h · media: ${cat.media_mode}</div>
       <div class="flex gap8 mb8" style="flex-wrap:wrap">
         <span class="fs11 text-muted">زبان‌ها:</span>
         ${langs.map(l=>`<span class="tag tag-purple">${l}</span>`).join('')}
@@ -944,7 +978,7 @@ async function renderChannels(c) {
   <div class="ch-card">
     <div class="ch-card-head">
       <div class="dot ${ch.publish_enabled?'dot-green':'dot-dim'}"></div>
-      <span class="ch-name">${ch.id}</span>
+      <span class="ch-name">${ch.channel_label||ch.id}</span><span class="text-muted fs11 mono">${ch.id}</span>
       <span class="tag tag-purple">${ch.language}</span>
       <span class="tag tag-dim">${ch.category_id}</span>
       <span class="tag ${ch.publish_enabled?'tag-green':'tag-dim'}" style="margin-right:auto">${ch.publish_enabled?'publishing':'paused'}</span>
@@ -959,10 +993,12 @@ async function renderChannels(c) {
       <span>📅 max ${ch.max_per_day}/day</span>
       <span>⏱ max ${ch.max_per_hour}/hr</span>
       <span>⏳ gap ${ch.min_gap_minutes}min</span>
+      <span>🎙 ${ch.tone_profile||'neutral'}</span>
     </div>
     <div class="ch-meta mt8">
       <span>✅ allowed: ${ch.allowed_windows}</span>
       <span>🚫 blocked: ${ch.blocked_windows}</span>
+      ${ch.custom_instructions?'<span>🧠 custom AI instructions</span>':''}
     </div>
   </div>`).join('')}`;
 }
@@ -1042,7 +1078,9 @@ async function delApify(id) {
 async function renderAI(c) {
   // نمایش تنظیمات AI از wrangler و status اتصال providers
   let health = {};
+  let stats = {};
   try { health = await api('/health'); } catch(e) {}
+  try { stats = await api('/internal/stats'); } catch(e) {}
 
   const GEMINI_MODELS = [
     {v:'gemini-2.5-flash-lite', l:'Gemini 2.5 Flash-Lite — ارزان‌ترین ($0.10/$0.40 per 1M)'},
@@ -1061,11 +1099,25 @@ async function renderAI(c) {
     {v:'claude-sonnet-4-6',         l:'Claude Sonnet 4.6 — قوی‌تر ($3.00/$15 per 1M)'},
   ];
 
+  const stream = stats.runtime_config?.stream_transcode || {};
+  const streamEnabled = stream.enabled === true;
+  const partialMediaEnabled = stats.runtime_config?.media_group_partial_publish_enabled !== false;
+
   c.innerHTML = `
   <div class="alert alert-blue">
     <strong>معماری دو مرحله‌ای:</strong><br>
     مرحله ۱ — <span class="tag tag-purple">Claude Haiku</span> فقط Scoring + Risk assessment (ارزان — ~2K output tokens per run)<br>
     مرحله ۲ — <span class="tag tag-blue">Gemini یا OpenAI</span> Translation + Caption نوشتن (بیشتر output — باید ارزان‌ترین انتخاب شود)
+  </div>
+
+  <div class="alert ${streamEnabled?'alert-amber':'alert-green'}">
+    <strong>Cloudflare Stream fallback:</strong>
+    <span class="tag ${streamEnabled?'tag-amber':'tag-dim'}">${streamEnabled?'enabled':'disabled'}</span><br>
+    ${streamEnabled
+      ? 'Stream فقط بعد از شکست sendVideo با خطای media استفاده می‌شود و ممکن است هزینه ایجاد کند.'
+      : 'غیرفعال است؛ حتی اگر secretها ست شده باشند، بدون STREAM_TRANSCODE_ENABLED=true هیچ call هزینه‌دار انجام نمی‌شود.'}
+    <div class="fs11 text-muted mt8">reason: ${esc(stream.reason || 'unknown')} · configured: ${stream.configured?'yes':'no'}</div>
+    <div class="fs11 text-muted mt8">media group partial publish: <span class="tag ${partialMediaEnabled?'tag-amber':'tag-red'}">${partialMediaEnabled?'enabled':'disabled'}</span></div>
   </div>
 
   <div class="grid2 mb16">
@@ -1353,6 +1405,9 @@ async function emergencyStop() {
   toast('⏹ همه switches خاموش شد','warn'); loadPills(); loadPage('switches');
 }
 
+let editingChannelId = null;
+let editingCategoryId = null;
+
 // ══ Modals ════════════════════════════════════════════════════
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); }));
@@ -1360,14 +1415,21 @@ document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('cli
 async function openChModal(categoryId) {
   const cats = await api('/internal/categories');
   fillSelect('ch-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label, categoryId);
+  editingChannelId = null;
+  document.getElementById('ch-id').disabled = false;
   document.getElementById('ch-id').value = '';
   document.getElementById('ch-chat').value = '';
+  document.getElementById('ch-label').value = '';
+  document.getElementById('ch-tone').value = 'neutral';
+  document.getElementById('ch-instructions').value = '';
   document.getElementById('modal-ch-title').textContent = 'افزودن کانال';
   document.getElementById('modal-channel').classList.add('open');
 }
 async function openChEdit(ch) {
   const cats = await api('/internal/categories');
   fillSelect('ch-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label, ch.category_id);
+  editingChannelId = ch.id;
+  document.getElementById('ch-id').disabled = true;
   document.getElementById('ch-id').value = ch.id;
   document.getElementById('ch-chat').value = ch.telegram_chat_id;
   document.getElementById('ch-lang').value = ch.language;
@@ -1377,6 +1439,9 @@ async function openChEdit(ch) {
   document.getElementById('ch-gap').value = ch.min_gap_minutes;
   document.getElementById('ch-allowed').value = ch.allowed_windows;
   document.getElementById('ch-blocked').value = ch.blocked_windows;
+  document.getElementById('ch-label').value = ch.channel_label || '';
+  document.getElementById('ch-tone').value = ch.tone_profile || 'neutral';
+  document.getElementById('ch-instructions').value = ch.custom_instructions || '';
   document.getElementById('modal-ch-title').textContent = 'ویرایش کانال: ' + ch.id;
   document.getElementById('modal-channel').classList.add('open');
 }
@@ -1392,16 +1457,26 @@ async function saveChannel() {
     min_gap_minutes:+document.getElementById('ch-gap').value,
     allowed_windows:document.getElementById('ch-allowed').value,
     blocked_windows:document.getElementById('ch-blocked').value,
+    channel_label:document.getElementById('ch-label').value.trim(),
+    tone_profile:document.getElementById('ch-tone').value,
+    custom_instructions:document.getElementById('ch-instructions').value.trim(),
   };
   if (!body.id||!body.telegram_chat_id) { toast('ID و Chat ID اجباری است','err'); return; }
   try {
-    await api('/internal/channels', {method:'POST', body:JSON.stringify(body)});
-    toast('✓ کانال ذخیره شد'); closeModal('modal-channel'); loadPage('channels');
+    if (editingChannelId) {
+      await api(`/internal/channels/${editingChannelId}`, {method:'PATCH', body:JSON.stringify(body)});
+    } else {
+      await api('/internal/channels', {method:'POST', body:JSON.stringify(body)});
+    }
+    toast('✓ کانال ذخیره شد'); closeModal('modal-channel'); editingChannelId=null; loadPage('channels');
   } catch(e) { toast(e.message,'err'); }
 }
 
 async function openCatModal() {
+  editingCategoryId = null;
+  document.getElementById('cat-id').disabled = false;
   document.getElementById('cat-id').value=''; document.getElementById('cat-label').value='';
+  document.getElementById('cat-custom-prompt').value='';
   document.getElementById('modal-cat-title').textContent='افزودن Category';
   document.querySelectorAll('#lang-checkboxes input').forEach(cb => cb.checked = cb.value==='fa');
   document.getElementById('modal-cat').classList.add('open');
@@ -1410,12 +1485,15 @@ async function openCatEdit(id) {
   const d = await api('/internal/categories');
   const cat = (d.categories||[]).find(c=>c.id===id);
   if (!cat) return;
+  editingCategoryId = cat.id;
+  document.getElementById('cat-id').disabled = true;
   document.getElementById('cat-id').value=cat.id;
   document.getElementById('cat-label').value=cat.label;
   document.getElementById('cat-profile').value=cat.prompt_profile;
   document.getElementById('cat-score').value=cat.score_threshold;
   document.getElementById('cat-fresh').value=cat.freshness_hours;
   document.getElementById('cat-media').value=cat.media_mode;
+  document.getElementById('cat-custom-prompt').value=cat.custom_prompt||'';
   const langs = JSON.parse(cat.language_targets||'[]');
   document.querySelectorAll('#lang-checkboxes input').forEach(cb => cb.checked=langs.includes(cb.value));
   document.getElementById('modal-cat-title').textContent='ویرایش: '+cat.id;
@@ -1430,12 +1508,17 @@ async function saveCat() {
     score_threshold:+document.getElementById('cat-score').value,
     freshness_hours:+document.getElementById('cat-fresh').value,
     media_mode:document.getElementById('cat-media').value,
+    custom_prompt:document.getElementById('cat-custom-prompt').value.trim(),
     language_targets:JSON.stringify(langs),
   };
   if (!body.id||!body.label) { toast('ID و نام اجباری است','err'); return; }
   try {
-    await api('/internal/categories', {method:'POST', body:JSON.stringify(body)});
-    toast('✓ Category ذخیره شد'); closeModal('modal-cat'); loadPage('categories');
+    if (editingCategoryId) {
+      await api(`/internal/categories/${editingCategoryId}`, {method:'PATCH', body:JSON.stringify(body)});
+    } else {
+      await api('/internal/categories', {method:'POST', body:JSON.stringify(body)});
+    }
+    toast('✓ Category ذخیره شد'); closeModal('modal-cat'); editingCategoryId=null; loadPage('categories');
   } catch(e) { toast(e.message,'err'); }
 }
 
@@ -1740,7 +1823,7 @@ async function wizSaveCh() {
   const chat = document.getElementById('wiz-ch-chat')?.value.trim();
   if (!chat || !wizData.categoryId) return;
   const lang = document.getElementById('wiz-ch-lang').value;
-  const body = {id:`${wizData.categoryId}_${lang}`, category_id:wizData.categoryId, telegram_chat_id:chat, language:lang, timezone:document.getElementById('wiz-ch-tz').value, max_per_day:+document.getElementById('wiz-ch-day').value, max_per_hour:+document.getElementById('wiz-ch-hour').value, min_gap_minutes:+document.getElementById('wiz-ch-gap').value, allowed_windows:'["08:00-00:00"]', blocked_windows:'["00:00-08:00"]'};
+  const body = {id:`${wizData.categoryId}_${lang}`, category_id:wizData.categoryId, telegram_chat_id:chat, language:lang, timezone:document.getElementById('wiz-ch-tz').value, max_per_day:+document.getElementById('wiz-ch-day').value, max_per_hour:+document.getElementById('wiz-ch-hour').value, min_gap_minutes:+document.getElementById('wiz-ch-gap').value, allowed_windows:'["08:00-23:59"]', blocked_windows:'["00:00-08:00"]'};
   try { await api('/internal/channels', {method:'POST', body:JSON.stringify(body)}); } catch(e) {}
 }
 

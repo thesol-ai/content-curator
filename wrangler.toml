@@ -3,26 +3,36 @@ main = "apps/worker-api/src/index.ts"
 compatibility_date = "2026-05-01"
 workers_dev = true
 
+# ── D1 Database ───────────────────────────────────────────────
 [[d1_databases]]
 binding = "DB"
 database_name = "content-curator-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "00000000-0000-0000-0000-000000000000"  # ← با wrangler d1 create جایگزین کنید
 migrations_dir = "migrations"
 
+# ── R2 Bucket (اختیاری — برای MEDIA_PROCESSING_MODE=r2_storage) ──────────
+# پس از ایجاد bucket: wrangler r2 bucket create content-curator-media
+# [[r2_buckets]]
+# binding = "MEDIA_BUCKET"
+# bucket_name = "content-curator-media"
+
+# ── Cron ─────────────────────────────────────────────────────
 [triggers]
 crons = ["*/30 * * * *"]
 
-# ── Local / Default ────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# Local / Default
+# ══════════════════════════════════════════════════════════════
 [vars]
 ENVIRONMENT   = "local"
 LOG_LEVEL     = "info"
 
-# Apify pipeline
+# ── Apify ─────────────────────────────────────────────────────
 APIFY_CURATION_ENABLED      = "false"
 APIFY_CURATION_DRY_RUN      = "true"
 APIFY_MAX_ITEMS_PER_SOURCE  = "50"
 
-# AI — Scoring (Claude Haiku — فقط برای scoring و risk assessment)
+# ── AI Scoring (Claude) ───────────────────────────────────────
 # مدل‌های موجود: claude-haiku-4-5-20251001
 AI_SCORING_MODEL              = "claude-haiku-4-5-20251001"
 AI_SCORE_THRESHOLD_DEFAULT    = "75"
@@ -33,33 +43,40 @@ AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
 AI_MAX_OUTPUT_TOKENS          = "2048"
 AI_MAX_RETRIES                = "1"
 
-# AI — Translation
-# TRANSLATION_PROVIDER: 'gemini' | 'openai' | 'claude'
-#   gemini  → ارزان‌ترین، Flash-Lite ~$0.04 per 90K output tokens
-#   openai  → gpt-4o-mini ~$0.05 per 90K output tokens
-#   claude  → گران‌ترین، فقط اگر نه Gemini نه OpenAI دارید
-#
-# مدل‌های Gemini:
-#   gemini-2.5-flash-lite    → ارزان‌ترین ($0.10/$0.40 per 1M)
-#   gemini-2.5-flash         → متعادل ($0.30/$2.50 per 1M)
-#   gemini-2.5-pro           → قوی‌ترین ($1.25/$10 per 1M)
-#
-# مدل‌های OpenAI:
-#   gpt-4.1-nano  → ارزان‌ترین ($0.10/$0.40 per 1M)
-#   gpt-4o-mini   → متعادل ($0.15/$0.60 per 1M)
-#   gpt-4.1-mini  → خوب ($0.40/$1.60 per 1M)
+# ── AI Translation ────────────────────────────────────────────
+# TRANSLATION_PROVIDER: gemini | openai | claude
+# Gemini: gemini-2.5-flash-lite ($0.10/$0.40) | gemini-2.5-flash ($0.30/$2.50)
+# OpenAI: gpt-4.1-nano ($0.10/$0.40) | gpt-4o-mini ($0.15/$0.60)
 TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 
-# Telegram
+# ── Telegram ──────────────────────────────────────────────────
 TELEGRAM_FINAL_PUBLISH_ENABLED     = "false"
 TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "false"
 TELEGRAM_PUBLISH_DUE_LIMIT         = "5"
 
-# Media
-MEDIA_PROCESSING_MODE = "direct_url"
+# ── Media Processing ──────────────────────────────────────────
+# direct_url    → URL مستقیم به Telegram (سریع، برای تست)
+# binary_upload → دانلود + multipart upload (توصیه برای production)
+# r2_storage    → دانلود → R2 → URL پایدار (بهترین قابلیت اطمینان)
+MEDIA_PROCESSING_MODE     = "direct_url"
+MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED = "true"
+MEDIA_MAX_DOWNLOAD_MB     = "50"
+MEDIA_DOWNLOAD_TIMEOUT_SEC = "60"
 
-# ── Production ─────────────────────────────────────────────────
+# Deduplication window in hours (default 168 = 7 days)
+DEDUPE_WINDOW_HOURS = "168"
+
+# R2 public URL (فقط برای r2_storage mode)
+# R2_PUBLIC_BASE_URL = "https://media.yourdomain.com"
+
+# Cloudflare Stream paid fallback is disabled by default.
+# It requires STREAM_TRANSCODE_ENABLED=true plus secrets before any Stream API call.
+STREAM_TRANSCODE_ENABLED = "false"
+
+# ══════════════════════════════════════════════════════════════
+# Production
+# ══════════════════════════════════════════════════════════════
 [env.production]
 name = "content-curator"
 workers_dev = true
@@ -68,30 +85,55 @@ workers_dev = true
 ENVIRONMENT   = "production"
 LOG_LEVEL     = "info"
 
-APIFY_CURATION_ENABLED      = "false"
-APIFY_CURATION_DRY_RUN      = "true"
+APIFY_CURATION_ENABLED      = "true"
+APIFY_CURATION_DRY_RUN      = "false"
 APIFY_MAX_ITEMS_PER_SOURCE  = "100"
 
 AI_SCORING_MODEL              = "claude-haiku-4-5-20251001"
 AI_SCORE_THRESHOLD_DEFAULT    = "75"
-AI_MAX_CALLS_PER_DAY          = "10"
-AI_DAILY_TOKEN_BUDGET         = "50000"
+AI_MAX_CALLS_PER_DAY          = "100"
+AI_DAILY_TOKEN_BUDGET         = "200000"
 AI_MAX_CANDIDATES_PER_RUN     = "50"
 AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
 AI_MAX_OUTPUT_TOKENS          = "2048"
-AI_MAX_RETRIES                = "1"
+AI_MAX_RETRIES                = "2"
 
 TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 
-TELEGRAM_FINAL_PUBLISH_ENABLED     = "false"
-TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "false"
-TELEGRAM_PUBLISH_DUE_LIMIT         = "5"
+TELEGRAM_FINAL_PUBLISH_ENABLED     = "true"
+TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
+TELEGRAM_PUBLISH_DUE_LIMIT         = "10"
 
-MEDIA_PROCESSING_MODE = "direct_url"
+# در production از binary_upload استفاده کنید
+MEDIA_PROCESSING_MODE      = "binary_upload"
+MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED = "true"
+MEDIA_MAX_DOWNLOAD_MB      = "50"
+MEDIA_DOWNLOAD_TIMEOUT_SEC = "90"
+
+DEDUPE_WINDOW_HOURS = "168"
+
+# Paid video transcoding fallback. Keep disabled unless explicitly approved.
+STREAM_TRANSCODE_ENABLED = "false"
 
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "content-curator-db"
-database_id = "00000000-0000-0000-0000-000000000000"
-migrations_dir = "migrations"
+database_id = "00000000-0000-0000-0000-000000000000"  # ← جایگزین کنید
+
+# [[env.production.r2_buckets]]
+# binding = "MEDIA_BUCKET"
+# bucket_name = "content-curator-media"
+
+# ══════════════════════════════════════════════════════════════
+# Cloudflare Stream (اختیاری — برای video transcoding)
+# بدون این: video های ناسازگار → sendDocument fallback
+# با این: video transcode → H.264 MP4 → sendVideo
+#
+# راه‌اندازی:
+#   wrangler secret put CLOUDFLARE_STREAM_API_TOKEN
+#   CLOUDFLARE_ACCOUNT_ID را در [vars] تنظیم کنید
+# ══════════════════════════════════════════════════════════════
+# STREAM_TRANSCODE_ENABLED = "true"
+# CLOUDFLARE_ACCOUNT_ID = "your-account-id"
+# STREAM_TRANSCODE_TIMEOUT_SEC = "120"

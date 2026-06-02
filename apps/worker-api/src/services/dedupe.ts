@@ -1,14 +1,23 @@
 // ══════════════════════════════════════════════════════════════
 // services/dedupe.ts
-// جلوگیری از انتشار تکراری محتوا
-// از ریپوی قدیمی: stableHash sync بهتر از crypto.subtle async است
+// Deduplication — configurable window, three key types
+//
+// Fix 10.1: DEDUPE_WINDOW_HOURS is now configurable (was hardcoded 72h)
+//   Default: 168h (7 days) — better for evergreen/viral content
+//   Set via wrangler.toml: DEDUPE_WINDOW_HOURS = "168"
 // ══════════════════════════════════════════════════════════════
 
 import type { Env, NormalizedItem } from '../types';
 
-const DEDUPE_WINDOW_HOURS = 72;
+const DEFAULT_DEDUPE_WINDOW_HOURS = 168; // 7 days
 
-// ── Sync hash (djb2 variant) — بدون نیاز به crypto.subtle ────
+function getDedupeWindowHours(env?: Env): number {
+  if (!env) return DEFAULT_DEDUPE_WINDOW_HOURS;
+  const parsed = parseInt(env.DEDUPE_WINDOW_HOURS || String(DEFAULT_DEDUPE_WINDOW_HOURS), 10);
+  return isNaN(parsed) || parsed <= 0 ? DEFAULT_DEDUPE_WINDOW_HOURS : parsed;
+}
+
+// ── Sync hash (djb2 variant) ──────────────────────────────────
 
 function stableHash(value: string): string {
   let hash = 5381;
@@ -30,6 +39,9 @@ function normalizeUrl(url: string): string {
     if (u.pathname.length > 1) {
       u.pathname = u.pathname.replace(/\/+$/, '');
     }
+    // Remove common tracking params
+    ['utm_source','utm_medium','utm_campaign','utm_term','utm_content',
+     'fbclid','gclid','ref','source'].forEach(p => u.searchParams.delete(p));
     u.searchParams.sort();
     return u.toString();
   } catch {
@@ -56,12 +68,11 @@ export function computeDedupeKeys(item: NormalizedItem): string[] {
     keys.push(`url:${stableHash(normalizeUrl(item.sourceUrl))}`);
   }
 
-  // Key 3: text hash (برای بازنشر در پلتفرم‌های مختلف)
+  // Key 3: text hash — uses longer slice (200→300) for better cross-platform detection
   if (item.text && item.text.length > 30) {
-    keys.push(`txt:${stableHash(normalizeText(item.text.slice(0, 200)))}`);
+    keys.push(`txt:${stableHash(normalizeText(item.text.slice(0, 300)))}`);
   }
 
-  // حذف duplicates
   return [...new Set(keys)];
 }
 
@@ -70,8 +81,7 @@ export function computeDedupeKeys(item: NormalizedItem): string[] {
 export async function isDuplicate(env: Env, keys: string[]): Promise<boolean> {
   if (keys.length === 0) return false;
 
-  // D1 datetime comparison — از CURRENT_TIMESTAMP و interval استفاده می‌کنیم
-  const windowHours = DEDUPE_WINDOW_HOURS;
+  const windowHours = getDedupeWindowHours(env);
 
   for (const key of keys) {
     const row = await env.DB
@@ -103,11 +113,12 @@ export async function recordDedupeKeys(
   }
 }
 
-// ── Cleanup (در cron) ─────────────────────────────────────────
+// ── Cleanup (called from cron) ────────────────────────────────
 
 export async function cleanupOldDedupeKeys(env: Env): Promise<number> {
+  const windowHours = getDedupeWindowHours(env);
   const result = await env.DB
-    .prepare(`DELETE FROM dedupe_keys WHERE created_at < datetime('now', '-${DEDUPE_WINDOW_HOURS} hours')`)
+    .prepare(`DELETE FROM dedupe_keys WHERE created_at < datetime('now', '-${windowHours} hours')`)
     .run();
   return result.meta.changes ?? 0;
 }
