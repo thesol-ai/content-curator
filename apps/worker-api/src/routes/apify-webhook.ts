@@ -1,6 +1,11 @@
 // ══════════════════════════════════════════════════════════════
 // routes/apify-webhook.ts
 // دریافت webhook از Apify — سریع acknowledge، async process
+//
+// اصلاحات v2:
+//   ✓ datasetId به runCuration پاس می‌شود — فقط source مطابق پردازش می‌شود
+//   ✓ platform از payload استخراج و لاگ می‌شود
+//   ✓ webhook secret validation از header هم پشتیبانی می‌کند
 // ══════════════════════════════════════════════════════════════
 
 import type { Env } from '../types';
@@ -15,6 +20,19 @@ export async function handleApifyWebhook(
     return Response.json({ ok: false, error: 'method_not_allowed' }, { status: 405 });
   }
 
+  // Secret validation — از header (امن‌تر) یا query param
+  const url = new URL(req.url);
+  const secretFromHeader = req.headers.get('x-webhook-secret');
+  const secretFromQuery  = url.searchParams.get('secret');
+  const expectedSecret   = env.INTERNAL_API_SECRET;
+
+  if (expectedSecret) {
+    const provided = secretFromHeader ?? secretFromQuery;
+    if (!provided || provided !== expectedSecret) {
+      return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+    }
+  }
+
   let body: any;
   try {
     body = await req.json();
@@ -23,19 +41,21 @@ export async function handleApifyWebhook(
   }
 
   // Apify webhook در payload یا resource.defaultDatasetId
-  const datasetId = body.datasetId ?? body.resource?.defaultDatasetId;
+  const datasetId  = body.datasetId ?? body.resource?.defaultDatasetId;
   const actorRunId = body.actorRunId ?? body.resource?.id ?? 'unknown';
+  const platform   = body.platform ?? body.meta?.platform ?? 'unknown'; // اگر موجود بود
 
   if (!datasetId) {
     return Response.json({ ok: false, error: 'missing datasetId' }, { status: 400 });
   }
 
-  console.log(`[Webhook] Apify run ${actorRunId}, dataset ${datasetId}`);
+  console.log(`[Webhook] Apify run=${actorRunId} dataset=${datasetId} platform=${platform}`);
 
   // سریع 200 بده — Apify 30 ثانیه timeout دارد
   // پردازش واقعی async با waitUntil
+  // datasetId پاس می‌شود تا فقط source مرتبط پردازش شود
   ctx.waitUntil(
-    runCuration(env).then(results => {
+    runCuration(env, datasetId).then(results => {
       console.log('[Webhook] Curation complete:', results.map(r => ({
         category: r.categoryId,
         platform: r.platform,
@@ -43,9 +63,10 @@ export async function handleApifyWebhook(
         new: r.itemsNew,
         selected: r.itemsAiSelected,
         queued: r.itemsQueued,
+        errors: r.errors.length,
       })));
     }).catch(err => {
-      console.error('[Webhook] Curation error:', err);
+      console.error('[Webhook] Curation error:', err instanceof Error ? err.message : String(err));
     })
   );
 
@@ -54,5 +75,6 @@ export async function handleApifyWebhook(
     message: 'Webhook received, curation started',
     datasetId,
     actorRunId,
+    platform,
   });
 }

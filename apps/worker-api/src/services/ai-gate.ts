@@ -3,14 +3,9 @@
 // دو مرحله جداگانه:
 //   مرحله ۱ — Claude: فقط Scoring + Risk assessment
 //   مرحله ۲ — Gemini یا OpenAI: Translation + Caption نوشتن
-//
-// چرا جدا؟
-//   Translation حدود ۹۰٪ هزینه را می‌خورد (output token گران است).
-//   Gemini Flash-Lite یا GPT-4o-mini برای ترجمه ۳× ارزان‌تر هستند.
-//   Claude را فقط برای کار دقیق‌تر (scoring + risk) نگه می‌داریم.
 // ══════════════════════════════════════════════════════════════
 
-import type { Env, NormalizedItem, AIGateResult, CategoryRow } from '../types';
+import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from '../types';
 
 // ── Provider configs ──────────────────────────────────────────
 
@@ -22,6 +17,28 @@ const GEMINI_URL = (model: string) =>
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
+type AIProvider = 'anthropic' | 'gemini' | 'openai' | 'claude';
+type AIPurpose = 'scoring' | 'translation';
+
+interface AIUsageRecord {
+  provider: AIProvider;
+  purpose: AIPurpose;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  status: 'success' | 'failed' | 'skipped';
+  errorMessage?: string;
+}
+
+interface AIBudgetCheck {
+  allowed: boolean;
+  reason?: string;
+  callsToday: number;
+  tokensToday: number;
+  maxCalls: number;
+  tokenBudget: number;
+}
+
 // ── Prompt profiles (per category) ───────────────────────────
 
 const PROMPT_PROFILES: Record<string, string> = {
@@ -31,15 +48,20 @@ const PROMPT_PROFILES: Record<string, string> = {
   crypto_editorial:
     'Curate for a crypto/blockchain audience. Explain market, protocol, token, and risk context cautiously. ' +
     'NEVER provide financial advice. NEVER invent price predictions. ' +
-    'Risk flags: pump_and_dump, financial_advice, unverified_claims, price_prediction.',
+    'Flag sponsored content, unverified claims, token promotions, and pump-and-dump signals. ' +
+    'Be especially strict: reject any post that could amplify scams or market manipulation. ' +
+    'Risk flags: pump_and_dump, financial_advice, unverified_claims, price_prediction, ' +
+    'sponsored_content, regulatory_sensitive, scam_amplification.',
 
   design_editorial:
     'Curate for designers and product teams. Emphasize UX implications, visual patterns, tools, practical takeaways. ' +
-    'Risk flags: plagiarism, brand_misrepresentation, misleading_attribution.',
+    'Verify attribution of visual work. ' +
+    'Risk flags: plagiarism, brand_misrepresentation, misleading_attribution, copyright_violation.',
 
   marketing_editorial:
     'Curate for marketing and growth teams. Emphasize strategy, channels, measurable outcomes. ' +
-    'Risk flags: exaggerated_claims, fake_case_study, misleading_metrics.',
+    'Reject posts with fake metrics or unverifiable case studies. ' +
+    'Risk flags: exaggerated_claims, fake_case_study, misleading_metrics, astroturfing.',
 
   product_editorial:
     'Curate for product managers and founders. Emphasize user impact, adoption signals, roadmap implications. ' +
@@ -48,6 +70,29 @@ const PROMPT_PROFILES: Record<string, string> = {
   ai_news_editorial:
     'Curate for AI/ML practitioners. Emphasize model capabilities, safety, benchmarks. Avoid hype. ' +
     'Risk flags: capability_exaggeration, safety_downplay, hallucinated_benchmarks.',
+
+  // ── NEW: Branding ──────────────────────────────────────────
+  branding_editorial:
+    'Curate for brand strategists, designers, and marketing professionals. ' +
+    'Focus on brand identity, visual communication, brand campaigns, and brand strategy insights. ' +
+    'Verify that claims about brands are attributed to official sources. ' +
+    'Reject posts that misrepresent brand ownership, trademark, or campaign authorship. ' +
+    'Do NOT republish copyrighted campaign creative without clear attribution. ' +
+    'Reject unverified case studies or opinion presented as official brand news. ' +
+    'Risk flags: brand_misrepresentation, trademark_misuse, misattributed_campaign, ' +
+    'unverified_case_study, copyright_violation, opinion_as_fact.',
+
+  // ── NEW: Finance ───────────────────────────────────────────
+  finance_editorial:
+    'Curate for finance professionals, investors, and informed general audience. ' +
+    'Focus on macro trends, market analysis, regulatory changes, fintech innovation. ' +
+    'NEVER provide investment advice. NEVER recommend specific securities or assets. ' +
+    'ALWAYS note when content contains forward-looking statements. ' +
+    'Reject posts with misleading financial metrics, outdated market data, or regulatory-sensitive wording. ' +
+    'Require that market predictions are clearly labeled as opinion, not fact. ' +
+    'Require that content referencing financial data cites a source. ' +
+    'Risk flags: investment_advice, misleading_metrics, regulatory_sensitive, ' +
+    'market_manipulation, missing_disclaimer, outdated_data, unverified_financial_claim.',
 };
 
 // ── Language names for translation prompts ────────────────────
@@ -67,39 +112,49 @@ export async function runAIGate(
   env: Env,
   items: NormalizedItem[],
   category: CategoryRow,
-  whitelistedAccounts: string[]
+  whitelistedAccounts: string[],
+  channels: ChannelRow[] = []
 ): Promise<AIGateResult[]> {
   if (items.length === 0) return [];
 
   const cfg = loadConfig(env);
-  // languageTargets از category می‌آید
   cfg.languageTargets = JSON.parse(category.language_targets || '["fa"]');
+  cfg.translationTargets = buildTranslationTargets(cfg.languageTargets, channels);
 
   if (cfg.dryRun) {
-    return items.map(item => mockResult(item, category, cfg.languageTargets));
+    return items.map(item => mockResult(item, category, cfg.translationTargets));
   }
 
   // ── مرحله ۱: Claude — Scoring + Risk ──────────────────────
   const scoreResults = await runScoring(env, cfg, items, category, whitelistedAccounts);
 
-  // فقط آیتم‌هایی که score بالا دارند به مرحله ترجمه می‌روند
   const selectedForTranslation = items.filter((_, i) =>
     (scoreResults[i]?.publish ?? false) && (scoreResults[i]?.score ?? 0) >= category.score_threshold
   );
 
-  if (selectedForTranslation.length === 0 || cfg.languageTargets.length === 0) {
+  if (selectedForTranslation.length === 0 || cfg.translationTargets.length === 0) {
     return scoreResults;
   }
 
-  // ── مرحله ۲: Translation Provider — فقط برای selected items ─
+  // ── مرحله ۲: Translation Provider ─────────────────────────
   const translationsMap = await runTranslation(env, cfg, selectedForTranslation, category);
 
-  // ترکیب نتایج
   return scoreResults.map((result, i) => {
     const item = items[i]!;
     if (!result.publish) return result;
-    const t = translationsMap.get(item.sourceUrl);
-    return { ...result, translations: t ?? {} };
+    const t = getTranslationsForItem(translationsMap, item);
+    if (!t || Object.keys(t).length === 0) {
+      // ترجمه موجود نیست — این یک خطای مشخص است نه رد ساکت
+      console.warn(`[AIGate] No translation returned for item ${item.postId}`);
+      return { ...result, publish: false, riskFlags: [...result.riskFlags, 'translation_missing'] };
+    }
+    // بررسی اینکه آیا همه targetهای لازم پوشش داده شدند
+    const missingTargets = cfg.translationTargets.filter(target => !t[target.key]);
+    if (missingTargets.length > 0) {
+      console.warn(`[AIGate] Missing translations for targets: ${missingTargets.map(t => t.key).join(', ')} — item ${item.postId}`);
+    }
+    const missingFlags = missingTargets.map(target => `translation_missing:${target.key}`);
+    return { ...result, riskFlags: [...result.riskFlags, ...missingFlags], translations: t };
   });
 }
 
@@ -114,24 +169,53 @@ async function runScoring(
   category: CategoryRow,
   whitelist: string[]
 ): Promise<AIGateResult[]> {
-  const profile = PROMPT_PROFILES[category.prompt_profile] ?? PROMPT_PROFILES['default_editorial']!;
+  // اگر custom_prompt در DB تنظیم شده، اولویت دارد (برای هر کتگوری دلخواه)
+  const profile = category.custom_prompt?.trim() ||
+    PROMPT_PROFILES[category.prompt_profile] ||
+    PROMPT_PROFILES['default_editorial']!;
   const threshold = category.score_threshold;
+
+  const budget = await checkScoringBudget(env, cfg);
+  if (!budget.allowed) {
+    console.warn(`[AIGate] Claude scoring skipped: ${budget.reason}`);
+    await recordAIUsage(env, {
+      provider: 'anthropic',
+      purpose: 'scoring',
+      model: cfg.scoringModel,
+      inputTokens: 0,
+      outputTokens: 0,
+      status: 'skipped',
+      errorMessage: budget.reason,
+    });
+    return items.map(item => ({
+      publish: false,
+      score: 0,
+      riskLevel: 'medium' as const,
+      riskFlags: ['ai_budget_exceeded'],
+      topicFingerprint: `budget-${item.postId}`,
+      publishPriority: 'normal' as const,
+      translations: {},
+    }));
+  }
 
   const system = [
     `You are an expert content curator. ${profile}`,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
     '',
-    'Return ONLY valid JSON (no markdown):',
-    '{"items":[{"url":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"slug","publish_priority":"normal"}]}',
+    'Return ONLY a JSON object with this exact structure (no markdown, no explanation):',
+    '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal"}]}',
     '',
     'publish_priority: "breaking"|"high"|"normal"|"low"',
-    'risk_level: "low"|"medium"|"high" — set publish=false if high',
+    'risk_level: "low"|"medium"|"high" — set publish=false if high risk',
+    'topic_fingerprint: short slug for deduplication (e.g. "btc-etf-approval-sec")',
     'Do NOT include translations here.',
+    'Return only the JSON object, nothing else.',
   ].join('\n');
 
   const inputItems = items.map(it => ({
     url: it.sourceUrl,
+    post_id: it.postId,
     platform: it.platform,
     account: it.sourceAccount,
     in_whitelist: whitelist.includes(it.sourceAccount),
@@ -144,10 +228,10 @@ async function runScoring(
 
   const user = [
     `Category: ${category.id} (${category.label})`,
-    `Threshold: ${threshold}. Freshness: older than ${category.freshness_hours}h scores lower.`,
+    `Threshold: ${threshold}. Freshness: items older than ${category.freshness_hours}h should score lower.`,
     '',
-    `Analyze ${items.length} items:`,
-    JSON.stringify(inputItems, null, 1),
+    `Analyze these ${items.length} items:`,
+    JSON.stringify(inputItems),
   ].join('\n');
 
   let lastErr = '';
@@ -163,25 +247,43 @@ async function runScoring(
         },
         body: JSON.stringify({
           model: cfg.scoringModel,
-          max_tokens: 2048,
+          max_tokens: cfg.maxOutputTokens,
           system,
           messages: [{ role: 'user', content: user }],
         }),
         signal: AbortSignal.timeout(60_000),
       });
-      if (!res.ok) { lastErr = `Claude ${res.status}`; continue; }
+      if (!res.ok) { lastErr = `Claude HTTP ${res.status}`; continue; }
       const body = await res.json() as any;
+      const usage = extractAnthropicUsage(body);
+      await recordAIUsage(env, {
+        provider: 'anthropic',
+        purpose: 'scoring',
+        model: cfg.scoringModel,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        status: 'success',
+      });
       const text: string = body.content?.[0]?.text ?? '';
-      const m = text.match(/\{[\s\S]*\}/);
-      if (!m?.[0]) { lastErr = 'No JSON'; continue; }
-      const parsed = JSON.parse(m[0]) as { items: any[] };
-      if (!Array.isArray(parsed.items)) { lastErr = 'Bad structure'; continue; }
+
+      // Robust JSON extraction: try to find outermost JSON object
+      const parsed = extractJsonObject(text);
+      if (!parsed) { lastErr = 'No valid JSON in response'; continue; }
+      if (!Array.isArray(parsed.items)) { lastErr = 'Missing items array in JSON'; continue; }
       return mapScoringResults(parsed.items, items);
     } catch (e) { lastErr = e instanceof Error ? e.message : String(e); }
   }
 
-  console.error('[Scoring] Failed:', lastErr);
-  // safe fallback: همه reject
+  console.error('[Scoring] All attempts failed:', lastErr);
+  await recordAIUsage(env, {
+    provider: 'anthropic',
+    purpose: 'scoring',
+    model: cfg.scoringModel,
+    inputTokens: 0,
+    outputTokens: 0,
+    status: 'failed',
+    errorMessage: lastErr,
+  });
   return items.map(item => ({
     publish: false, score: 0, riskLevel: 'medium' as const,
     riskFlags: ['scoring_error'], topicFingerprint: `err-${item.postId}`,
@@ -189,37 +291,115 @@ async function runScoring(
   }));
 }
 
+// استخراج JSON از پاسخ AI — مقاوم در برابر markdown fences و متن اضافه
+function extractJsonObject(text: string): { items: any[] } | null {
+  // ابتدا markdown code blocks را حذف کن
+  const cleaned = text
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+
+  // پیدا کن اولین { و آخرین } را
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
+
+  const candidate = cleaned.slice(firstBrace, lastBrace + 1);
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateResult[] {
   const byUrl = new Map<string, any>();
+  const byPostId = new Map<string, any>();
+
   for (const p of parsed) {
     if (typeof p.url === 'string') {
-      byUrl.set(p.url.trim(), p);
-      byUrl.set(p.url.trim().replace(/\/$/, ''), p);
+      for (const key of urlLookupKeys(p.url)) byUrl.set(key, p);
+    }
+    if (typeof p.post_id === 'string' && p.post_id.trim()) {
+      byPostId.set(p.post_id.trim(), p);
     }
   }
 
   const validPriorities = ['breaking', 'high', 'normal', 'low'];
 
   return original.map(item => {
-    const p = byUrl.get(item.sourceUrl) ?? byUrl.get(item.sourceUrl.replace(/\/$/, ''));
+    const p = urlLookupKeys(item.sourceUrl).reduce<any>((found, key) => found ?? byUrl.get(key), undefined)
+      ?? byPostId.get(item.postId);
+
     if (!p) {
-      return { publish: false, score: 0, riskLevel: 'medium' as const, riskFlags: ['not_scored'],
-        topicFingerprint: `ns-${item.postId}`, publishPriority: 'normal' as const, translations: {} };
+      console.warn(`[Scoring] No result for URL/post_id: ${item.sourceUrl} / ${item.postId}`);
+      return {
+        publish: false, score: 0, riskLevel: 'medium' as const,
+        riskFlags: ['not_scored'], topicFingerprint: `ns-${item.postId}`,
+        publishPriority: 'normal' as const, translations: {},
+      };
     }
 
     const score = clamp(Number(p.score) || 0, 0, 100);
-    const riskLevel = (['low','medium','high'].includes(p.risk_level) ? p.risk_level : 'medium') as any;
+    const riskLevel = (['low', 'medium', 'high'].includes(p.risk_level) ? p.risk_level : 'medium') as any;
 
     return {
       publish: p.publish === true && riskLevel !== 'high' && score > 0,
       score,
       riskLevel,
-      riskFlags: Array.isArray(p.risk_flags) ? p.risk_flags.filter((f: any) => typeof f === 'string').slice(0, 10) : [],
-      topicFingerprint: typeof p.topic_fingerprint === 'string' ? p.topic_fingerprint.slice(0, 100) : `fp-${item.postId}`,
+      riskFlags: Array.isArray(p.risk_flags)
+        ? p.risk_flags.filter((f: any) => typeof f === 'string').slice(0, 10)
+        : [],
+      topicFingerprint: typeof p.topic_fingerprint === 'string'
+        ? p.topic_fingerprint.slice(0, 100)
+        : `fp-${item.postId}`,
       publishPriority: (validPriorities.includes(p.publish_priority) ? p.publish_priority : 'normal') as any,
-      translations: {}, // پر می‌شود در مرحله ۲
+      translations: {},
     };
   });
+}
+
+function urlLookupKeys(raw: string): string[] {
+  const keys = new Set<string>();
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return [];
+  keys.add(trimmed);
+  keys.add(trimmed.replace(/\/$/, ''));
+
+  try {
+    const u = new URL(trimmed);
+    u.hash = '';
+    for (const key of Array.from(u.searchParams.keys())) {
+      if (/^(utm_|fbclid$|gclid$|ref$|ref_src$|igshid$|mc_cid$|mc_eid$)/i.test(key)) {
+        u.searchParams.delete(key);
+      }
+    }
+    u.hostname = u.hostname.toLowerCase();
+    const normalized = u.toString().replace(/\/$/, '');
+    keys.add(normalized);
+    keys.add(normalized.replace(/^https:\/\//, 'http://'));
+    keys.add(normalized.replace(/^http:\/\//, 'https://'));
+  } catch {
+    // keep raw fallback keys only
+  }
+
+  return Array.from(keys);
+}
+
+
+function getTranslationsForItem(
+  translationsMap: Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>,
+  item: NormalizedItem
+): Record<string, { captionShort: string; captionFull: string; hashtags: string[] }> | undefined {
+  for (const key of urlLookupKeys(item.sourceUrl)) {
+    const t = translationsMap.get(key);
+    if (t) return t;
+  }
+  return undefined;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -232,13 +412,13 @@ async function runTranslation(
   items: NormalizedItem[],
   category: CategoryRow
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
-  const provider = cfg.translationProvider; // 'gemini' | 'openai' | 'claude'
+  const provider = cfg.translationProvider;
   const result = new Map<string, any>();
 
   if (items.length === 0) return result;
 
-  const system = buildTranslationSystem(cfg.languageTargets, category.id);
-  const user = buildTranslationUser(items, cfg.languageTargets, cfg.maxTextChars);
+  const system = buildTranslationSystem(cfg.translationTargets, category.id, category.label);
+  const user = buildTranslationUser(items, cfg.translationTargets, cfg.maxTextChars);
 
   let responseText = '';
   let lastErr = '';
@@ -251,79 +431,178 @@ async function runTranslation(
       } else if (provider === 'openai') {
         responseText = await callOpenAI(env, cfg.translationModel, system, user);
       } else {
-        // fallback به Claude
         responseText = await callClaude(env, cfg.translationModel || cfg.scoringModel, system, user);
       }
-      break;
+      if (responseText) break;
     } catch (e) { lastErr = e instanceof Error ? e.message : String(e); }
   }
 
   if (!responseText) {
-    console.error('[Translation] Failed:', lastErr);
+    console.error('[Translation] All attempts failed:', lastErr);
     return result;
   }
 
   // parse JSON از response
-  const m = responseText.match(/\{[\s\S]*\}/);
-  if (!m?.[0]) return result;
+  const parsed = extractJsonObject(responseText);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    console.error('[Translation] Could not parse JSON from response');
+    return result;
+  }
 
-  try {
-    const parsed = JSON.parse(m[0]) as { items: any[] };
-    if (!Array.isArray(parsed.items)) return result;
+  for (const p of parsed.items) {
+    if (typeof p.url !== 'string') continue;
+    const translations: Record<string, any> = {};
+    let missingCount = 0;
 
-    for (const p of parsed.items) {
-      if (typeof p.url !== 'string') continue;
-      const translations: Record<string, any> = {};
-      for (const lang of cfg.languageTargets) {
-        const t = p.translations?.[lang];
-        if (t && (t.caption_short || t.caption_full)) {
-          translations[lang] = {
-            captionShort: String(t.caption_short ?? '').slice(0, 900),
-            captionFull: String(t.caption_full ?? '').slice(0, 3500),
-            hashtags: Array.isArray(t.hashtags) ? t.hashtags.filter((h: any) => typeof h === 'string').slice(0, 10) : [],
-          };
-        }
+    for (const target of cfg.translationTargets) {
+      const t = p.translations?.[target.key];
+      if (t && (t.caption_short || t.caption_full)) {
+        translations[target.key] = {
+          captionShort: String(t.caption_short ?? '').slice(0, 900),
+          captionFull: String(t.caption_full ?? '').slice(0, 3500),
+          hashtags: Array.isArray(t.hashtags)
+            ? t.hashtags.filter((h: any) => typeof h === 'string').slice(0, 10)
+            : [],
+        };
+      } else {
+        missingCount++;
+        console.warn(`[Translation] Missing translation for target=${target.key}, url=${p.url}`);
       }
-      result.set(p.url.trim(), translations);
-      result.set(p.url.trim().replace(/\/$/, ''), translations);
     }
-  } catch { /* parse error, return empty */ }
+
+    if (missingCount > 0) {
+      console.warn(`[Translation] ${missingCount}/${cfg.translationTargets.length} targets missing for ${p.url}`);
+    }
+
+    for (const key of urlLookupKeys(p.url)) result.set(key, translations);
+  }
 
   return result;
 }
 
-function buildTranslationSystem(langs: string[], categoryId: string): string {
-  const langList = langs.map(l => `"${l}": ${LANG_NAMES[l] ?? l}`).join(', ');
+interface TranslationTarget {
+  key: string;
+  language: string;
+  label: string;
+  toneProfile: string;
+  customInstructions: string;
+  channelId?: string;
+}
+
+function buildTranslationTargets(langs: string[], channels: ChannelRow[]): TranslationTarget[] {
+  const targets: TranslationTarget[] = [];
+  const seen = new Set<string>();
+
+  for (const lang of langs) {
+    if (!/^[a-z]{2}$/.test(lang) || seen.has(lang)) continue;
+    targets.push({
+      key: lang,
+      language: lang,
+      label: LANG_NAMES[lang] ?? lang,
+      toneProfile: 'neutral',
+      customInstructions: '',
+    });
+    seen.add(lang);
+  }
+
+  for (const ch of channels) {
+    if (!ch.enabled) continue;
+    const lang = ch.language;
+    if (!langs.includes(lang)) continue;
+    const tone = sanitizeToneProfile(ch.tone_profile);
+    const custom = sanitizeInstruction(ch.custom_instructions);
+    const label = sanitizeInstruction(ch.channel_label);
+    const isChannelSpecific = Boolean(custom || label || tone !== 'neutral');
+    if (!isChannelSpecific) continue;
+
+    const key = channelTranslationKey(ch.id);
+    if (seen.has(key)) continue;
+    targets.push({
+      key,
+      language: lang,
+      label: label || ch.id,
+      toneProfile: tone,
+      customInstructions: custom,
+      channelId: ch.id,
+    });
+    seen.add(key);
+  }
+
+  return targets;
+}
+
+function channelTranslationKey(channelId: string): string {
+  return `channel:${channelId}`;
+}
+
+function sanitizeToneProfile(value: string | null | undefined): string {
+  const tone = String(value ?? 'neutral').trim().toLowerCase();
+  return /^[a-z_ -]{1,40}$/.test(tone) ? tone : 'neutral';
+}
+
+function sanitizeInstruction(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 600);
+}
+
+function buildTranslationSystem(targets: TranslationTarget[], categoryId: string, categoryLabel: string): string {
+  const targetLines = targets.map(t => {
+    const parts = [
+      `key=${JSON.stringify(t.key)}`,
+      `language=${LANG_NAMES[t.language] ?? t.language}`,
+      `tone=${t.toneProfile}`,
+    ];
+    if (t.channelId) parts.push(`channel_id=${t.channelId}`);
+    if (t.label) parts.push(`channel_label=${JSON.stringify(t.label)}`);
+    if (t.customInstructions) parts.push(`instructions=${JSON.stringify(t.customInstructions)}`);
+    return `- ${parts.join('; ')}`;
+  }).join('\n');
+
+  const exampleTranslations = targets.slice(0, Math.max(1, Math.min(2, targets.length)))
+    .map(t => `"${t.key}":{"caption_short":"≤900 chars","caption_full":"≤3500 chars","hashtags":[]}`)
+    .join(',');
+
   return [
-    `You are an expert content curator and translator for category "${categoryId}".`,
-    `For each item, write compelling Telegram posts in these languages: ${langList}.`,
+    `You are an expert content curator and Telegram channel manager for category "${categoryId}" (${categoryLabel}).`,
+    'For each item, write Telegram-ready posts for every translation target below.',
     '',
-    'Return ONLY valid JSON (no markdown):',
-    '{"items":[{"url":"...","translations":{"fa":{"caption_short":"≤900 chars","caption_full":"≤3500 chars","hashtags":[]},"en":{"caption_short":"...","caption_full":"...","hashtags":[]}}}]}',
+    'Translation targets. The JSON translations object MUST use these exact keys:',
+    targetLines,
     '',
-    'Rules:',
-    '- caption_short: engaging summary for media caption, must be compelling',
-    '- caption_full: complete post with source attribution at the end',
-    '- Persian (fa) captions must be in natural, fluent Farsi',
-    '- hashtags: 3-5 relevant hashtags per language',
-    '- Do NOT invent facts not present in the source',
+    'Return ONLY a JSON object with this exact structure (no markdown, no explanation):',
+    `{"items":[{"url":"...","translations":{${exampleTranslations}}}]}`,
+    '',
+    'Strict rules:',
+    '- caption_short: engaging 1-2 sentence summary for media caption (max 900 chars)',
+    '- caption_full: complete post with context and source attribution at the end (max 3500 chars)',
+    '- Persian (fa) captions must be in natural, fluent Farsi — NOT a literal translation',
+    '- hashtags: 3-5 relevant hashtags per target, no # prefix needed',
+    '- Do NOT invent facts not present in the source text',
+    '- Do NOT use HTML tags — plain text only',
     '- Include source URL at the end of caption_full',
+    '- Every translation target key listed above must be included for every item',
+    'Return only the JSON object, nothing else.',
   ].join('\n');
 }
 
-function buildTranslationUser(items: NormalizedItem[], langs: string[], maxChars: number): string {
+function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarget[], maxChars: number): string {
   const data = items.map(it => ({
     url: it.sourceUrl,
     platform: it.platform,
     account: it.sourceAccount,
     text: it.text.slice(0, maxChars),
     has_media: it.media.length > 0,
+    media_count: it.media.length,
   }));
 
   return [
-    `Translate and rewrite these ${items.length} items into: ${langs.join(', ')}`,
+    `Translate and rewrite these ${items.length} items for these target keys: ${targets.map(t => t.key).join(', ')}`,
+    'Remember: every item must include every requested target key in translations.',
     '',
-    JSON.stringify(data, null, 1),
+    JSON.stringify(data),
   ].join('\n');
 }
 
@@ -340,7 +619,7 @@ async function callGemini(env: Env, model: string, system: string, user: string)
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+      generationConfig: { temperature: 0.2, maxOutputTokens: cfgMaxOutputTokens(env) },
     }),
     signal: AbortSignal.timeout(90_000),
   });
@@ -351,6 +630,11 @@ async function callGemini(env: Env, model: string, system: string, user: string)
   }
 
   const body = await res.json() as any;
+  const usage = extractGeminiUsage(body);
+  await recordAIUsage(env, {
+    provider: 'gemini', purpose: 'translation', model,
+    inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
+  });
   return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 }
 
@@ -366,7 +650,7 @@ async function callOpenAI(env: Env, model: string, system: string, user: string)
     },
     body: JSON.stringify({
       model,
-      max_tokens: 4096,
+      max_tokens: cfgMaxOutputTokens(env),
       temperature: 0.2,
       messages: [
         { role: 'system', content: system },
@@ -382,6 +666,11 @@ async function callOpenAI(env: Env, model: string, system: string, user: string)
   }
 
   const body = await res.json() as any;
+  const usage = extractOpenAIUsage(body);
+  await recordAIUsage(env, {
+    provider: 'openai', purpose: 'translation', model,
+    inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
+  });
   return body.choices?.[0]?.message?.content ?? '';
 }
 
@@ -398,26 +687,31 @@ async function callClaude(env: Env, model: string, system: string, user: string)
     },
     body: JSON.stringify({
       model,
-      max_tokens: 4096,
+      max_tokens: cfgMaxOutputTokens(env),
       system,
       messages: [{ role: 'user', content: user }],
     }),
     signal: AbortSignal.timeout(90_000),
   });
 
-  if (!res.ok) throw new Error(`Claude ${res.status}`);
+  if (!res.ok) throw new Error(`Claude HTTP ${res.status}`);
   const body = await res.json() as any;
+  const usage = extractAnthropicUsage(body);
+  await recordAIUsage(env, {
+    provider: 'claude', purpose: 'translation', model,
+    inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
+  });
   return body.content?.[0]?.text ?? '';
 }
 
 // ── Mock result (dry_run) ─────────────────────────────────────
 
-function mockResult(item: NormalizedItem, category: CategoryRow, langs: string[]): AIGateResult {
+function mockResult(item: NormalizedItem, category: CategoryRow, targets: TranslationTarget[]): AIGateResult {
   const translations: Record<string, any> = {};
-  for (const lang of langs) {
-    translations[lang] = {
-      captionShort: `[DRY RUN ${lang}] ${item.text.slice(0, 80)}`,
-      captionFull: `[DRY RUN — ${category.id} — ${lang}]\n${item.text.slice(0, 400)}\n\nمنبع: ${item.sourceUrl}`,
+  for (const target of targets) {
+    translations[target.key] = {
+      captionShort: `[DRY RUN ${target.key}] ${item.text.slice(0, 80)}`,
+      captionFull: `[DRY RUN — ${category.id} — ${target.key}]\n${item.text.slice(0, 400)}\n\nمنبع: ${item.sourceUrl}`,
       hashtags: ['#dryrun'],
     };
   }
@@ -438,13 +732,14 @@ interface Config {
   translationModel: string;
   maxTextChars: number;
   maxRetries: number;
+  maxOutputTokens: number;
   languageTargets: string[];
+  translationTargets: TranslationTarget[];
 }
 
 function loadConfig(env: Env): Config {
   const provider = (env.TRANSLATION_PROVIDER || 'gemini').toLowerCase() as 'gemini' | 'openai' | 'claude';
 
-  // مدل پیش‌فرض بر اساس provider
   let defaultModel = 'gemini-2.5-flash-lite';
   if (provider === 'openai') defaultModel = 'gpt-4o-mini';
   if (provider === 'claude') defaultModel = env.AI_SCORING_MODEL || 'claude-haiku-4-5-20251001';
@@ -456,12 +751,93 @@ function loadConfig(env: Env): Config {
     translationModel: env.TRANSLATION_MODEL || defaultModel,
     maxTextChars: parseInt(env.AI_MAX_TEXT_CHARS_PER_ITEM || '400', 10),
     maxRetries: parseInt(env.AI_MAX_RETRIES || '1', 10),
-    languageTargets: [], // از category.language_targets پر می‌شود در runAIGate
+    maxOutputTokens: parseInt(env.AI_MAX_OUTPUT_TOKENS || '4096', 10),
+    languageTargets: [],
+    translationTargets: [],
   };
 }
 
-
 // ── Helpers ───────────────────────────────────────────────────
+async function checkScoringBudget(env: Env, cfg: Config): Promise<AIBudgetCheck> {
+  const maxCalls = Math.max(0, parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0);
+  const tokenBudget = Math.max(0, parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0);
+  const fallback: AIBudgetCheck = { allowed: true, callsToday: 0, tokensToday: 0, maxCalls, tokenBudget };
+
+  if (!env.DB || (maxCalls === 0 && tokenBudget === 0)) return fallback;
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+      FROM ai_usage
+      WHERE provider='anthropic'
+        AND purpose='scoring'
+        AND status='success'
+        AND created_at > datetime('now','-1 day')
+    `).first<{ calls: number; tokens: number }>();
+
+    const callsToday = Number(row?.calls ?? 0);
+    const tokensToday = Number(row?.tokens ?? 0);
+    if (maxCalls > 0 && callsToday >= maxCalls) {
+      return { allowed: false, reason: `AI_MAX_CALLS_PER_DAY reached (${callsToday}/${maxCalls})`, callsToday, tokensToday, maxCalls, tokenBudget };
+    }
+    if (tokenBudget > 0 && tokensToday >= tokenBudget) {
+      return { allowed: false, reason: `AI_DAILY_TOKEN_BUDGET reached (${tokensToday}/${tokenBudget})`, callsToday, tokensToday, maxCalls, tokenBudget };
+    }
+    return { allowed: true, callsToday, tokensToday, maxCalls, tokenBudget };
+  } catch (e) {
+    // Migration may not be applied yet. Do not take the whole curation system down because of telemetry.
+    console.warn('[AIGate] Budget check skipped:', e instanceof Error ? e.message : String(e));
+    return fallback;
+  }
+}
+
+async function recordAIUsage(env: Env, usage: AIUsageRecord): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO ai_usage (id, provider, purpose, model, input_tokens, output_tokens, status, error_message)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      usage.provider,
+      usage.purpose,
+      usage.model,
+      Math.max(0, Math.floor(usage.inputTokens || 0)),
+      Math.max(0, Math.floor(usage.outputTokens || 0)),
+      usage.status,
+      usage.errorMessage ? usage.errorMessage.slice(0, 400) : null,
+    ).run();
+  } catch (e) {
+    console.warn('[AIGate] Failed to record AI usage:', e instanceof Error ? e.message : String(e));
+  }
+}
+
+function extractAnthropicUsage(body: any): { inputTokens: number; outputTokens: number } {
+  return {
+    inputTokens: Number(body?.usage?.input_tokens ?? 0) || 0,
+    outputTokens: Number(body?.usage?.output_tokens ?? 0) || 0,
+  };
+}
+
+function extractGeminiUsage(body: any): { inputTokens: number; outputTokens: number } {
+  const usage = body?.usageMetadata ?? {};
+  return {
+    inputTokens: Number(usage.promptTokenCount ?? 0) || 0,
+    outputTokens: Number(usage.candidatesTokenCount ?? 0) || 0,
+  };
+}
+
+function extractOpenAIUsage(body: any): { inputTokens: number; outputTokens: number } {
+  return {
+    inputTokens: Number(body?.usage?.prompt_tokens ?? 0) || 0,
+    outputTokens: Number(body?.usage?.completion_tokens ?? 0) || 0,
+  };
+}
+
+function cfgMaxOutputTokens(env: Env): number {
+  return Math.max(256, Math.min(8192, parseInt(env.AI_MAX_OUTPUT_TOKENS || '4096', 10) || 4096));
+}
+
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
