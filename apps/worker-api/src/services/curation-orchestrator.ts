@@ -3,13 +3,14 @@
 // هماهنگ‌کننده اصلی pipeline
 // ══════════════════════════════════════════════════════════════
 
-import type { Env, CategoryRow, ChannelRow, ApifySourceRow, NormalizedItem, PublishedMediaResult } from '../types';
+import type { Env, CategoryRow, ChannelRow, ApifySourceRow, NormalizedItem, PublishedMediaResult, AIGateResult } from '../types';
 import { fetchApifyDataset, normalizeItem } from './apify-client';
 import { computeDedupeKeys, isDuplicate, recordDedupeKeys } from './dedupe';
 import { runAIGate } from './ai-gate';
 import { runRuleGate } from './rule-gate';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { publishToTelegram } from './telegram-publisher';
+import { getRuntimeConfig, withEffectiveCurationEnv, type RuntimeConfigOverrides } from './runtime-config';
 
 export interface CurationRunResult {
   runId: string;
@@ -29,20 +30,27 @@ export interface CurationRunResult {
 
 // ── Entry point ───────────────────────────────────────────────
 
-export async function runCuration(env: Env, datasetId?: string): Promise<CurationRunResult[]> {
-  const enabled =
-    env.APIFY_CURATION_ENABLED === 'true' ||
-    (await getSetting(env, 'apify_curation_enabled')) === 'true';
-  if (!enabled) return [];
+export interface CurationSourceScope {
+  datasetId?: string;
+  sourceId?: string;
+}
 
-  let sources = await loadApifySources(env);
+export async function runCuration(
+  env: Env,
+  scopeOrDatasetId?: string | CurationSourceScope,
+  overrides: RuntimeConfigOverrides = {}
+): Promise<CurationRunResult[]> {
+  const runtime = await getRuntimeConfig(env, overrides);
+  if (!runtime.curationEnabled) return [];
+
+  const effectiveEnv = withEffectiveCurationEnv(env, runtime);
+  const scope = normalizeCurationScope(scopeOrDatasetId);
+
+  let sources = await loadApifySources(effectiveEnv);
   if (sources.length === 0) { console.log('[Curation] No Apify sources configured'); return []; }
 
-  if (datasetId) {
-    const scoped = sources.filter(s => s.apify_dataset_id === datasetId);
-    sources = scoped.length > 0 ? scoped : sources;
-    console.log(`[Curation] Webhook dataset=${datasetId} → ${scoped.length || 'all'} sources`);
-  }
+  sources = await scopeApifySources(effectiveEnv, sources, scope);
+  if (sources.length === 0) return [];
 
   const byCategory = new Map<string, ApifySourceRow[]>();
   for (const src of sources) {
@@ -53,13 +61,83 @@ export async function runCuration(env: Env, datasetId?: string): Promise<Curatio
 
   const results: CurationRunResult[] = [];
   for (const [categoryId, categorySources] of byCategory) {
-    const category = await loadCategory(env, categoryId);
+    const category = await loadCategory(effectiveEnv, categoryId);
     if (!category) { console.warn(`[Curation] Category not found: ${categoryId}`); continue; }
     for (const source of categorySources) {
-      results.push(await processSingleSource(env, category, source));
+      results.push(await processSingleSource(effectiveEnv, category, source));
     }
   }
   return results;
+}
+
+
+function normalizeCurationScope(input?: string | CurationSourceScope): CurationSourceScope {
+  if (!input) return {};
+  if (typeof input === 'string') return { datasetId: input };
+  return {
+    datasetId: sanitizeApifyDatasetId(input.datasetId) ?? undefined,
+    sourceId: sanitizeSourceId(input.sourceId) ?? undefined,
+  };
+}
+
+async function scopeApifySources(
+  env: Env,
+  sources: ApifySourceRow[],
+  scope: CurationSourceScope,
+): Promise<ApifySourceRow[]> {
+  const datasetId = sanitizeApifyDatasetId(scope.datasetId);
+  const sourceId = sanitizeSourceId(scope.sourceId);
+
+  if (sourceId) {
+    const scoped = sources.filter(s => s.id === sourceId);
+    if (scoped.length === 0) {
+      console.warn(`[Curation] Webhook source_id=${sourceId} did not match any enabled Apify source — skipped`);
+      return [];
+    }
+
+    if (datasetId) {
+      await updateApifySourceLastDataset(env, sourceId, datasetId);
+      console.log(`[Curation] Webhook source_id=${sourceId} dataset=${datasetId} → 1 source`);
+      return scoped.map(s => ({ ...s, apify_dataset_id: datasetId, last_dataset_id: datasetId }));
+    }
+
+    console.log(`[Curation] Scoped curation source_id=${sourceId} → 1 source`);
+    return scoped;
+  }
+
+  if (datasetId) {
+    const scoped = sources
+      .filter(s => s.apify_dataset_id === datasetId || s.last_dataset_id === datasetId)
+      .map(s => ({ ...s, apify_dataset_id: datasetId, last_dataset_id: datasetId }));
+
+    if (scoped.length === 0) {
+      console.warn(`[Curation] Webhook dataset=${datasetId} did not match any enabled Apify source — skipped`);
+      return [];
+    }
+
+    for (const src of scoped) await updateApifySourceLastDataset(env, src.id, datasetId);
+    console.log(`[Curation] Webhook dataset=${datasetId} → ${scoped.length} source(s)`);
+    return scoped;
+  }
+
+  return sources;
+}
+
+function sanitizeApifyDatasetId(value: unknown): string | null {
+  const v = String(value ?? '').trim();
+  return /^[A-Za-z0-9]{8,40}$/.test(v) ? v : null;
+}
+
+function sanitizeSourceId(value: unknown): string | null {
+  const v = String(value ?? '').trim();
+  return /^[\w-]{1,64}$/.test(v) ? v : null;
+}
+
+async function updateApifySourceLastDataset(env: Env, sourceId: string, datasetId: string): Promise<void> {
+  await env.DB
+    .prepare('UPDATE apify_sources SET last_dataset_id=? WHERE id=?')
+    .bind(datasetId, sourceId)
+    .run();
 }
 
 // ── Process one source ────────────────────────────────────────
@@ -125,21 +203,53 @@ async function processSingleSource(
         }
       }
     }
-    const filteredBatch = freshBatch;
-    const filteredBatchKeys = batchKeys.filter((_, i) => batch[i]!.publishedAt >= cutoffTs);
+    const freshnessKeptKeys = batchKeys.filter((_, i) => batch[i]!.publishedAt >= cutoffTs);
+
+    const policyFilteredBatch: NormalizedItem[] = [];
+    const policyFilteredKeys: string[][] = [];
+    for (let pi = 0; pi < freshBatch.length; pi++) {
+      const item = freshBatch[pi]!;
+      const keys = freshnessKeptKeys[pi]!;
+      const preAiRejectReason = getPreAiContentRejectReason(item, category);
+      if (preAiRejectReason) {
+        const itemId = generateId('item');
+        await saveDiscoveryItem(env, itemId, runId, category.id, item, buildPolicyRejectAiResult(item, preAiRejectReason), 'ai_rejected', preAiRejectReason);
+        itemsAiRejected++;
+        if (!dryRun) await recordDedupeKeys(env, keys, itemId);
+        continue;
+      }
+      policyFilteredBatch.push(item);
+      policyFilteredKeys.push(keys);
+    }
+
+    const filteredBatch = policyFilteredBatch;
+    const filteredBatchKeys = policyFilteredKeys;
+
+    if (filteredBatch.length === 0) {
+      await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+        dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiRejected, durationMs: Date.now() - t0 });
+      return mkResult(runId, category.id, source.platform, true, dryRun,
+        { itemsFetched, itemsNew, itemsDuplicate, itemsAiRejected, durationMs: Date.now() - t0 });
+    }
 
     const whitelist = await loadWhitelistedAccounts(env, category.id);
     const channels = await loadChannels(env, category.id);
     const aiResults = await runAIGate(env, filteredBatch, category, whitelist, channels);
+    const semanticDedupeEnabledForRun = channels.some(channel => channel.semantic_dedupe_enabled !== 0);
+    const similarTopicRejects = semanticDedupeEnabledForRun
+      ? findSimilarTopicInRunRejections(filteredBatch, aiResults, category.score_threshold)
+      : new Set<number>();
 
     for (let i = 0; i < filteredBatch.length; i++) {
       const item = filteredBatch[i]!;
       const ai   = aiResults[i]!;
       const keys = filteredBatchKeys[i]!;
       const itemId = generateId('item');
-      await saveDiscoveryItem(env, itemId, runId, category.id, item, ai);
+      const rejectReason = getItemRejectReason(ai, category, item, similarTopicRejects.has(i));
+      const rejected = rejectReason !== null;
+      await saveDiscoveryItem(env, itemId, runId, category.id, item, ai,
+        rejected ? 'ai_rejected' : 'ai_selected', rejectReason);
 
-      const rejected = !ai.publish || ai.riskLevel === 'high' || ai.score < category.score_threshold;
       if (rejected) {
         itemsAiRejected++;
         if (!dryRun) await recordDedupeKeys(env, keys, itemId);
@@ -201,17 +311,155 @@ function channelTranslationKey(channelId: string): string {
   return `channel:${channelId}`;
 }
 
-// ── Publish due queue items (cron) ────────────────────────────
+export function findSimilarTopicInRunRejections(
+  items: Pick<NormalizedItem, 'sourceAccount'>[],
+  aiResults: Pick<AIGateResult, 'publish' | 'riskLevel' | 'score' | 'topicFingerprint'>[],
+  scoreThreshold: number,
+): Set<number> {
+  const groups = new Map<string, Array<{ index: number; score: number }>>();
 
-export async function publishDueItems(env: Env): Promise<{ published: number; failed: number; skipped: number }> {
-  const schedulerEnabled = env.TELEGRAM_PUBLISH_SCHEDULER_ENABLED === 'true';
-  if (!schedulerEnabled) return { published: 0, failed: 0, skipped: 0 };
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const ai = aiResults[i];
+    if (!item || !ai) continue;
+    if (!isAiPublishEligible(ai, scoreThreshold)) continue;
 
-  const limit = parseInt(env.TELEGRAM_PUBLISH_DUE_LIMIT || '5', 10);
-  const now   = Math.floor(Date.now() / 1000);
+    const fingerprint = normalizeSemanticKeyPart(ai.topicFingerprint);
+    const source = normalizeSemanticKeyPart(item.sourceAccount);
+    if (!fingerprint || !source) continue;
+
+    const key = `${source}::${fingerprint}`;
+    const group = groups.get(key) ?? [];
+    group.push({ index: i, score: Number(ai.score) || 0 });
+    groups.set(key, group);
+  }
+
+  const rejected = new Set<number>();
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    const [winner, ...rest] = group
+      .slice()
+      .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+    void winner;
+    for (const candidate of rest) rejected.add(candidate.index);
+  }
+  return rejected;
+}
+
+function isAiPublishEligible(
+  ai: Pick<AIGateResult, 'publish' | 'riskLevel' | 'score'>,
+  scoreThreshold: number,
+): boolean {
+  return ai.publish === true && ai.riskLevel !== 'high' && Number(ai.score) >= scoreThreshold;
+}
+
+function normalizeSemanticKeyPart(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 140);
+}
+
+export function getPreAiContentRejectReason(item: NormalizedItem, category: CategoryRow): string | null {
+  if (item.isReply === true && intSetting(category.allow_replies, 0) === 0) return 'reply_not_allowed';
+  if (item.isRetweet === true && intSetting(category.allow_retweets, 1) === 0) return 'retweet_not_allowed';
+  if (item.isQuote === true && intSetting(category.allow_quotes, 1) === 0) return 'quote_not_allowed';
+  const textOnlyPolicy = sanitizeTextOnlyPolicy(category.text_only_policy);
+  if (category.media_mode !== 'disabled' && item.media.length === 0 && textOnlyPolicy === 'reject') return 'text_only_rejected';
+  return null;
+}
+
+export function getItemRejectReason(ai: AIGateResult, category: CategoryRow, item: NormalizedItem, similarTopicInRun: boolean): string | null {
+  if (similarTopicInRun) return 'similar_topic_in_run';
+  if (!ai.publish) return 'ai_not_publish';
+  if (ai.riskLevel === 'high') return 'high_risk';
+  if (ai.score < category.score_threshold) return 'below_threshold';
+
+  const textOnlyPolicy = sanitizeTextOnlyPolicy(category.text_only_policy);
+  if (category.media_mode !== 'disabled' && item.media.length === 0) {
+    const minTextOnly = Number(category.min_score_for_text_only);
+    if (textOnlyPolicy === 'penalize' && Number.isFinite(minTextOnly) && ai.score < minTextOnly) return 'text_only_below_min_score';
+  }
+  if (item.media.length > 0) {
+    const minMedia = Number(category.min_score_for_media);
+    if (Number.isFinite(minMedia) && ai.score < minMedia) return 'media_below_min_score';
+  }
+  return null;
+}
+
+function intSetting(value: unknown, defaultValue: 0 | 1): 0 | 1 {
+  return value === 0 || value === '0' || value === false ? 0 : value === 1 || value === '1' || value === true ? 1 : defaultValue;
+}
+
+function sanitizeTextOnlyPolicy(value: unknown): 'allow' | 'penalize' | 'reject' {
+  const raw = String(value ?? 'allow').trim().toLowerCase();
+  return raw === 'penalize' || raw === 'reject' ? raw : 'allow';
+}
+
+function buildPolicyRejectAiResult(item: NormalizedItem, reason: string): AIGateResult {
+  return {
+    publish: false,
+    score: 0,
+    riskLevel: 'medium',
+    riskFlags: [reason],
+    topicFingerprint: `policy-${item.postId}`.slice(0, 100),
+    publishPriority: 'low',
+    translations: {},
+  };
+}
+
+// ── Publish due queue items (cron + manual admin trigger) ─────
+
+export interface PublishDueOptions {
+  /** Manual admin endpoint may provide a lower limit. Defaults to TELEGRAM_PUBLISH_DUE_LIMIT. */
+  limit?: number;
+  /** Cron requires the scheduler switch. Manual /internal/publish/due bypasses only this flag, not publish kill-switches. */
+  requireScheduler?: boolean;
+}
+
+export interface PublishQueueItemOptions {
+  /** Allowed source statuses for optimistic locking. */
+  allowedStatuses?: QueuePublishableStatus[];
+  /** Allow publishing even if scheduled_at is in the future. Used by publish-now. */
+  bypassSchedule?: boolean;
+  /** Keep channel rate limits by default. */
+  respectRateLimits?: boolean;
+  /** Test hook / deterministic timestamp. */
+  now?: number;
+}
+
+type QueuePublishableStatus = 'scheduled' | 'retry' | 'failed';
+type QueuePublishStatus = 'published' | 'failed' | 'retry' | 'skipped' | 'scheduled';
+
+export interface PublishQueueItemResult {
+  queueId: string;
+  ok: boolean;
+  status: QueuePublishStatus;
+  reason?: string;
+  telegramMessageId?: string;
+  allMessageIds?: string[];
+  error?: string;
+}
+
+export async function publishDueItems(
+  env: Env,
+  options: PublishDueOptions = {}
+): Promise<{ published: number; failed: number; skipped: number }> {
+  const runtime = await getRuntimeConfig(env);
+  const requireScheduler = options.requireScheduler !== false;
+  if (requireScheduler && !runtime.telegramSchedulerEnabled) return { published: 0, failed: 0, skipped: 0 };
+
+  const limit = clampInt(
+    options.limit ?? parseInt(env.TELEGRAM_PUBLISH_DUE_LIMIT || '5', 10),
+    1,
+    100
+  );
+  const now = Math.floor(Date.now() / 1000);
 
   const due = await env.DB.prepare(`
-    SELECT q.*, c.telegram_chat_id, c.max_per_hour, c.min_gap_minutes, c.publish_enabled
+    SELECT q.id
     FROM publish_queue q
     JOIN channels c ON q.channel_id = c.id
     WHERE q.status IN ('scheduled', 'retry')
@@ -220,79 +468,165 @@ export async function publishDueItems(env: Env): Promise<{ published: number; fa
       AND c.enabled = 1
     ORDER BY q.scheduled_at ASC
     LIMIT ?
-  `).bind(now, limit).all<any>();
+  `).bind(now, limit).all<{ id: string }>();
 
   let published = 0, failed = 0, skipped = 0;
 
   for (const row of due.results ?? []) {
-    // hourly rate limit
-    const hourAgo = now - 3600;
-    const thisHour = await env.DB
-      .prepare(`SELECT COUNT(*) as cnt FROM publish_queue WHERE channel_id=? AND status='published' AND published_at>?`)
-      .bind(row.channel_id, hourAgo).first<{ cnt: number }>();
-    if ((thisHour?.cnt ?? 0) >= row.max_per_hour) { skipped++; continue; }
-
-    // min gap
-    const lastPub = await env.DB
-      .prepare(`SELECT published_at FROM publish_queue WHERE channel_id=? AND status='published' ORDER BY published_at DESC LIMIT 1`)
-      .bind(row.channel_id).first<{ published_at: number }>();
-    if (lastPub && (now - lastPub.published_at) < row.min_gap_minutes * 60) { skipped++; continue; }
-
-    // Optimistic lock
-    const locked = await env.DB
-      .prepare(`UPDATE publish_queue SET status='publishing' WHERE id=? AND status IN ('scheduled','retry')`)
-      .bind(row.id).run();
-    if (!locked.meta.changes) { skipped++; continue; }
-
-    const mediaUrls:     string[]               = safeJsonParse(row.media_urls,     []);
-    const thumbnailUrls: string[]               = safeJsonParse(row.thumbnail_urls, []);
-    const mediaTypes:    Array<'image'|'video'> = safeJsonParse(row.media_types,    []);
-    const telegramFileIds = await loadTelegramFileIds(env, row.item_id, mediaUrls.length);
-
-    const result = await publishToTelegram(env, {
-      chatId:        row.telegram_chat_id,
-      captionShort:  row.caption_short ?? '',
-      captionFull:   row.caption_full  ?? '',
-      sourceUrl:     row.source_url    ?? '',
-      method:        row.telegram_method ?? 'sendMessage',
-      mediaUrls,
-      thumbnailUrls,
-      mediaTypes,
-      telegramFileIds,
+    const result = await publishQueueItem(env, row.id, {
+      allowedStatuses: ['scheduled', 'retry'],
+      bypassSchedule: false,
+      respectRateLimits: true,
+      now,
     });
 
-    await syncDiscoveryMediaAfterPublish(env, row.item_id, result.mediaResults, result.ok ? undefined : result);
-
-    if (result.ok && result.messageId !== 'disabled_skip') {
-      const errorNote = result.captionError
-        ? result.captionError.slice(0, 300)
-        : null;
-      const allIds = JSON.stringify(result.allMessageIds ?? []);
-
-      await env.DB
-        .prepare(`UPDATE publish_queue SET status='published', telegram_message_id=?, all_message_ids=?, published_at=?, publish_error=?, media_warning=? WHERE id=?`)
-        .bind(result.messageId ?? '', allIds, now, errorNote, errorNote, row.id).run();
-      published++;
-
-    } else if (result.messageId === 'disabled_skip') {
-      await env.DB.prepare(`UPDATE publish_queue SET status='scheduled' WHERE id=?`).bind(row.id).run();
-
-    } else {
-      const retries = (row.retry_count ?? 0) + 1;
-      const isFinal = retries >= 3;
-      const retryDelay = result.retryAfterSec ? result.retryAfterSec + 10 : 30 * 60;
-      const newStatus = isFinal ? 'failed' : 'retry';
-      const newAt     = isFinal ? now : now + retryDelay;
-
-      await env.DB
-        .prepare(`UPDATE publish_queue SET status=?, retry_count=?, scheduled_at=?, publish_error=? WHERE id=?`)
-        .bind(newStatus, retries, newAt,
-          `[${result.errorType ?? 'unknown'}] ${(result.error ?? '').slice(0, 350)}`,
-          row.id).run();
-      failed++;
-    }
+    if (result.status === 'published') published++;
+    else if (result.status === 'failed' || result.status === 'retry') failed++;
+    else skipped++;
   }
+
   return { published, failed, skipped };
+}
+
+export async function publishQueueItem(
+  env: Env,
+  queueId: string,
+  options: PublishQueueItemOptions = {},
+): Promise<PublishQueueItemResult> {
+  const now = options.now ?? Math.floor(Date.now() / 1000);
+  const allowedStatuses: QueuePublishableStatus[] = options.allowedStatuses ?? ['scheduled', 'retry'];
+  const bypassSchedule = options.bypassSchedule === true;
+  const respectRateLimits = options.respectRateLimits !== false;
+
+  if (!isValidQueueStatusList(allowedStatuses)) {
+    return { queueId, ok: false, status: 'skipped', reason: 'invalid_allowed_statuses' };
+  }
+
+  const row = await env.DB.prepare(`
+    SELECT q.*, c.telegram_chat_id, c.max_per_hour, c.min_gap_minutes,
+           c.publish_enabled, c.enabled
+    FROM publish_queue q
+    JOIN channels c ON q.channel_id = c.id
+    WHERE q.id=?
+  `).bind(queueId).first<any>();
+
+  if (!row) return { queueId, ok: false, status: 'skipped', reason: 'queue_item_not_found' };
+  if (!allowedStatuses.includes(row.status)) {
+    return { queueId, ok: false, status: 'skipped', reason: `status_not_allowed:${row.status}` };
+  }
+  if (!bypassSchedule && Number(row.scheduled_at ?? 0) > now) {
+    return { queueId, ok: false, status: 'skipped', reason: 'not_due' };
+  }
+  if (row.enabled !== 1 || row.publish_enabled !== 1) {
+    return { queueId, ok: false, status: 'skipped', reason: 'channel_disabled' };
+  }
+
+  if (respectRateLimits) {
+    const rateLimitReason = await checkChannelPublishRateLimits(env, row.channel_id, row.max_per_hour, row.min_gap_minutes, now);
+    if (rateLimitReason) return { queueId, ok: false, status: 'skipped', reason: rateLimitReason };
+  }
+
+  const placeholders = allowedStatuses.map(() => '?').join(',');
+  const locked = await env.DB
+    .prepare(`UPDATE publish_queue SET status='publishing', scheduled_at=? WHERE id=? AND status IN (${placeholders})`)
+    .bind(now, queueId, ...allowedStatuses).run();
+  if (!locked.meta.changes) {
+    return { queueId, ok: false, status: 'skipped', reason: 'optimistic_lock_failed' };
+  }
+
+  const channel = await loadChannelForPublish(env, row.channel_id);
+  if (!channel) {
+    await env.DB.prepare(`UPDATE publish_queue SET status='failed', publish_error=? WHERE id=?`)
+      .bind('channel_not_found_or_disabled', queueId).run();
+    return { queueId, ok: false, status: 'failed', reason: 'channel_not_found_or_disabled' };
+  }
+
+  const mediaUrls: string[] = safeJsonParse(row.media_urls, []);
+  const thumbnailUrls: string[] = safeJsonParse(row.thumbnail_urls, []);
+  const mediaTypes: Array<'image'|'video'> = safeJsonParse(row.media_types, []);
+  const telegramFileIds = await loadTelegramFileIds(env, row.item_id, mediaUrls.length);
+
+  const result = await publishToTelegram(env, {
+    chatId:        channel.telegram_chat_id,
+    captionShort:  row.caption_short ?? '',
+    captionFull:   row.caption_full  ?? '',
+    sourceUrl:     row.source_url    ?? '',
+    method:        row.telegram_method ?? 'sendMessage',
+    language:      row.language ?? channel.language,
+    channel,
+    mediaUrls,
+    thumbnailUrls,
+    mediaTypes,
+    telegramFileIds,
+  });
+
+  await syncDiscoveryMediaAfterPublish(env, row.item_id, result.mediaResults, result.ok ? undefined : result);
+
+  if (result.ok && result.messageId !== 'disabled_skip') {
+    const errorNote = result.captionError ? result.captionError.slice(0, 300) : null;
+    const allIds = JSON.stringify(result.allMessageIds ?? []);
+
+    await env.DB
+      .prepare(`UPDATE publish_queue SET status='published', telegram_message_id=?, all_message_ids=?, published_at=?, publish_error=?, media_warning=? WHERE id=?`)
+      .bind(result.messageId ?? '', allIds, now, errorNote, errorNote, queueId).run();
+
+    return {
+      queueId,
+      ok: true,
+      status: 'published',
+      telegramMessageId: result.messageId,
+      allMessageIds: result.allMessageIds ?? [],
+      error: result.captionError,
+    };
+  }
+
+  if (result.messageId === 'disabled_skip') {
+    await env.DB.prepare(`UPDATE publish_queue SET status='scheduled' WHERE id=?`).bind(queueId).run();
+    return { queueId, ok: true, status: 'scheduled', reason: 'publish_disabled' };
+  }
+
+  const retries = (row.retry_count ?? 0) + 1;
+  const isFinal = retries >= 3;
+  const retryDelay = result.retryAfterSec ? result.retryAfterSec + 10 : 30 * 60;
+  const newStatus: 'failed' | 'retry' = isFinal ? 'failed' : 'retry';
+  const newAt = isFinal ? now : now + retryDelay;
+  const error = `[${result.errorType ?? 'unknown'}] ${(result.error ?? '').slice(0, 350)}`;
+
+  await env.DB
+    .prepare(`UPDATE publish_queue SET status=?, retry_count=?, scheduled_at=?, publish_error=? WHERE id=?`)
+    .bind(newStatus, retries, newAt, error, queueId).run();
+
+  return { queueId, ok: false, status: newStatus, reason: result.errorType ?? 'unknown', error };
+}
+
+async function checkChannelPublishRateLimits(
+  env: Env,
+  channelId: string,
+  maxPerHour: number,
+  minGapMinutes: number,
+  now: number,
+): Promise<string | null> {
+  const hourAgo = now - 3600;
+  const thisHour = await env.DB
+    .prepare(`SELECT COUNT(*) as cnt FROM publish_queue WHERE channel_id=? AND status='published' AND published_at>?`)
+    .bind(channelId, hourAgo).first<{ cnt: number }>();
+  if ((thisHour?.cnt ?? 0) >= maxPerHour) return 'rate_limit_hourly';
+
+  const lastPub = await env.DB
+    .prepare(`SELECT published_at FROM publish_queue WHERE channel_id=? AND status='published' ORDER BY published_at DESC LIMIT 1`)
+    .bind(channelId).first<{ published_at: number }>();
+  if (lastPub && (now - lastPub.published_at) < minGapMinutes * 60) return 'rate_limit_min_gap';
+
+  return null;
+}
+
+function isValidQueueStatusList(statuses: string[]): statuses is QueuePublishableStatus[] {
+  return statuses.every(s => s === 'scheduled' || s === 'retry' || s === 'failed');
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  const n = Number.isFinite(value) ? Math.floor(value) : min;
+  return Math.max(min, Math.min(max, n));
 }
 
 // ── D1 helpers ────────────────────────────────────────────────
@@ -307,6 +641,12 @@ async function loadCategory(env: Env, id: string): Promise<CategoryRow | null> {
 async function loadChannels(env: Env, categoryId: string): Promise<ChannelRow[]> {
   const r = await env.DB.prepare('SELECT * FROM channels WHERE category_id=? AND enabled=1').bind(categoryId).all<ChannelRow>();
   return r.results ?? [];
+}
+async function loadChannelForPublish(env: Env, channelId: string): Promise<ChannelRow | null> {
+  return env.DB
+    .prepare('SELECT * FROM channels WHERE id=? AND enabled=1 AND publish_enabled=1')
+    .bind(channelId)
+    .first<ChannelRow>();
 }
 async function loadWhitelistedAccounts(env: Env, categoryId: string): Promise<string[]> {
   const r = await env.DB
@@ -328,21 +668,31 @@ async function finishRun(env: Env, id: string, _c: string, _p: string, _d: strin
     data.itemsAiSelected??0, data.itemsAiRejected??0, data.itemsQueued??0,
     data.errorMessage??null, data.durationMs??null, status, id).run();
 }
-async function saveDiscoveryItem(env: Env, id: string, runId: string, categoryId: string, item: NormalizedItem, ai: any): Promise<void> {
-  const status = !ai.publish || ai.riskLevel === 'high' ? 'ai_rejected' : 'ai_selected';
+async function saveDiscoveryItem(
+  env: Env,
+  id: string,
+  runId: string,
+  categoryId: string,
+  item: NormalizedItem,
+  ai: AIGateResult,
+  status: 'ai_selected' | 'ai_rejected',
+  rejectReason: string | null,
+): Promise<void> {
   await env.DB.prepare(`
     INSERT OR IGNORE INTO discovery_items
     (id,run_id,category_id,platform,source_account,source_url,post_id,published_at,text,
     topic_fingerprint,media_count,media_expected_count,media_extracted_count,media_extraction_warnings,
+    is_reply,is_retweet,is_quote,
     engagement_likes,engagement_shares,engagement_views,
-    ai_score,ai_risk,ai_priority,risk_flags,status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ai_score,ai_risk,ai_priority,risk_flags,status,reject_reason)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(id, runId, categoryId, item.platform, item.sourceAccount, item.sourceUrl, item.postId,
     item.publishedAt, item.text.slice(0, 1000), ai.topicFingerprint, item.media.length,
     item.expectedMediaCount ?? item.media.length, item.media.length,
     JSON.stringify((item.mediaWarnings ?? []).slice(0, 20)),
+    item.isReply === true ? 1 : 0, item.isRetweet === true ? 1 : 0, item.isQuote === true ? 1 : 0,
     item.engagementLikes, item.engagementShares, item.engagementViews,
-    ai.score, ai.riskLevel, ai.publishPriority, JSON.stringify(ai.riskFlags), status).run();
+    ai.score, ai.riskLevel, ai.publishPriority, JSON.stringify(ai.riskFlags), status, rejectReason).run();
 }
 async function saveDiscoveryMedia(env: Env, itemId: string, item: NormalizedItem): Promise<void> {
   for (let i = 0; i < item.media.length; i++) {
@@ -446,13 +796,6 @@ function mediaStatusFromPublishError(errorType?: string): string {
   if (errorType === 'expired_url') return 'expired';
   if (errorType === 'invalid_format' || errorType === 'media_error') return 'unsupported';
   return 'failed';
-}
-
-async function getSetting(env: Env, key: string): Promise<string> {
-  try {
-    const r = await env.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first<{ value: string }>();
-    return r?.value ?? '';
-  } catch { return ''; }
 }
 
 function generateId(prefix: string): string {

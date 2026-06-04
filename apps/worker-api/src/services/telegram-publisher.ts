@@ -14,7 +14,7 @@
 // این chain تضمین می‌کند که محتوا در هر حالتی ارسال می‌شود.
 // ══════════════════════════════════════════════════════════════
 
-import type { Env, PublishedMediaResult } from '../types';
+import type { Env, PublishedMediaResult, ChannelRow } from '../types';
 import {
   getProcessingMode,
   processMediaBatch,
@@ -24,7 +24,6 @@ import {
   downloadTelegramThumbnail,
 } from './media-processor';
 import {
-  buildMediaGroupPayload,
   detectMediaType,
   sanitizeCaptionText,
   safeTruncate,
@@ -35,6 +34,8 @@ import {
   deleteStreamVideoFromEnv,
 } from './video-transcoder';
 import { getStreamTranscodeState } from './stream-config';
+import { getRuntimeConfig } from './runtime-config';
+import { formatTelegramMessage } from './telegram-message-formatter';
 
 export interface PublishInput {
   chatId: string;
@@ -42,6 +43,10 @@ export interface PublishInput {
   captionFull: string;
   sourceUrl: string;
   method: string;
+  language?: string;
+  channel?: ChannelRow;
+  captionShortHtml?: string;
+  captionFullHtml?: string;
   mediaUrls: string[];
   mediaTypes?: Array<'image' | 'video'>;
   thumbnailUrls?: string[];
@@ -77,30 +82,34 @@ export function isPartialMediaGroupEnabled(env: Env): boolean {
 const TG_UPLOAD_TIMEOUT_MS = 120_000;
 const TG_TEXT_TIMEOUT_MS   = 20_000;
 
+export interface PreparedCaptions {
+  fullHtml: string;
+  shortHtml: string;
+  mediaHtml: string;
+  sendFullFollowUp: boolean;
+  fullTruncated?: boolean;
+  shortTruncated?: boolean;
+  fullFooterIncluded?: boolean;
+  shortFooterIncluded?: boolean;
+  fullFooterOmitted?: boolean;
+  shortFooterOmitted?: boolean;
+}
+
 // ── Main publish ──────────────────────────────────────────────
 
 export async function publishToTelegram(
   env: Env,
   input: PublishInput
 ): Promise<PublishResult> {
-  const publishEnabled =
-    env.TELEGRAM_FINAL_PUBLISH_ENABLED === 'true' ||
-    (await getSetting(env, 'telegram_publish_enabled')) === 'true';
-
-  if (!publishEnabled) return { ok: true, messageId: 'disabled_skip' };
+  const runtime = await getRuntimeConfig(env);
+  if (!runtime.telegramPublishEnabled) return { ok: true, messageId: 'disabled_skip' };
 
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   if (!token) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured', errorType: 'auth' };
 
   const base = `https://api.telegram.org/bot${token}`;
   const mode = getProcessingMode(env);
-
-  const safeCaptionFull  = safeTruncate(sanitizeCaptionText(input.captionFull), 4096);
-  const safeCaptionShort = safeTruncate(sanitizeCaptionText(input.captionShort), 900);
-
-  const captionForMedia = sanitizeCaptionText(input.captionFull).length <= 1024
-    ? sanitizeCaptionText(input.captionFull)
-    : safeCaptionShort.slice(0, 1024);
+  const captions = prepareTelegramCaptions(input);
 
   try {
     switch (input.method) {
@@ -108,9 +117,9 @@ export async function publishToTelegram(
       case 'sendMessage':
         return callTgJson(base, 'sendMessage', {
           chat_id: input.chatId,
-          text: safeCaptionFull,
+          text: captions.fullHtml,
           parse_mode: 'HTML',
-          link_preview_options: { is_disabled: false },
+          link_preview_options: { is_disabled: true },
         });
 
       case 'sendPhoto': {
@@ -127,24 +136,24 @@ export async function publishToTelegram(
             const result = await callTgJson(base, 'sendPhoto', {
               chat_id: input.chatId,
               photo: processed.telegramFileId,
-              caption: captionForMedia,
+              caption: captions.mediaHtml,
               parse_mode: 'HTML',
             });
-            return withSingleMediaResult(result, 0, processed, processed.telegramFileId);
+            return withSingleMediaResult(await withCaptionFollowUp(base, input.chatId, result, captions), 0, processed, processed.telegramFileId);
           }
           if (processed?.ok && processed.blob) {
-            const form = buildPhotoForm(input.chatId, processed.blob, captionForMedia);
+            const form = buildPhotoForm(input.chatId, processed.blob, captions.mediaHtml);
             const result = await callTgForm(base, 'sendPhoto', form);
-            return withSingleMediaResult(result, 0, processed);
+            return withSingleMediaResult(await withCaptionFollowUp(base, input.chatId, result, captions), 0, processed);
           }
           if (processed?.ok && processed.stableUrl) {
             const result = await callTgJson(base, 'sendPhoto', {
               chat_id: input.chatId,
               photo: processed.stableUrl,
-              caption: captionForMedia,
+              caption: captions.mediaHtml,
               parse_mode: 'HTML',
             });
-            return withSingleMediaResult(result, 0, processed);
+            return withSingleMediaResult(await withCaptionFollowUp(base, input.chatId, result, captions), 0, processed);
           }
           if (!processed?.ok) {
             console.warn(`[Publisher] Photo download failed: ${processed?.error} — falling back to URL`);
@@ -154,9 +163,9 @@ export async function publishToTelegram(
         {
           const result = await callTgJson(base, 'sendPhoto', {
             chat_id: input.chatId, photo: photoUrl,
-            caption: captionForMedia, parse_mode: 'HTML',
+            caption: captions.mediaHtml, parse_mode: 'HTML',
           });
-          return withUrlMediaResult(result, 0);
+          return withUrlMediaResult(await withCaptionFollowUp(base, input.chatId, result, captions), 0);
         }
       }
 
@@ -165,8 +174,8 @@ export async function publishToTelegram(
         if (!videoUrl) return { ok: false, error: 'No video URL', errorType: 'media_error' };
 
         const thumbnailUrl = input.thumbnailUrls?.[0];
-        return sendVideoWithFallback(env, base, input.chatId, videoUrl, captionForMedia,
-          safeCaptionFull, input.sourceUrl, thumbnailUrl, input.telegramFileIds?.[0]);
+        return sendVideoWithFallback(env, base, input.chatId, videoUrl, captions,
+          thumbnailUrl, input.telegramFileIds?.[0]);
       }
 
       case 'sendMediaGroup': {
@@ -179,11 +188,11 @@ export async function publishToTelegram(
         );
 
         if (mode !== 'direct_url') {
-          return sendBinaryMediaGroup(env, base, input, types, safeCaptionShort, safeCaptionFull);
+          return sendBinaryMediaGroup(env, base, input, types, captions);
         }
 
         // direct_url mode
-        const mediaPayload = buildMediaGroupPayload(input.mediaUrls, types, safeCaptionShort);
+        const mediaPayload = buildDirectMediaGroupPayload(input.mediaUrls, types, captions.mediaHtml);
         const result = await callTgJson(base, 'sendMediaGroup', {
           chat_id: input.chatId, media: mediaPayload,
         });
@@ -191,10 +200,8 @@ export async function publishToTelegram(
         if (!result.ok) return result;
 
         let captionError: string | undefined;
-        if (sanitizeCaptionText(input.captionFull).length > 1024) {
-          const captionResult = await callTgJson(base, 'sendMessage', {
-            chat_id: input.chatId, text: safeCaptionFull, parse_mode: 'HTML',
-          });
+        if (captions.sendFullFollowUp) {
+          const captionResult = await sendTelegramText(base, input.chatId, captions.fullHtml);
           if (!captionResult.ok) {
             captionError = `caption_send_failed: ${captionResult.error}`;
           }
@@ -220,9 +227,7 @@ async function sendVideoWithFallback(
   base: string,
   chatId: string,
   videoUrl: string,
-  captionForMedia: string,
-  captionFull: string,
-  sourceUrl: string,
+  captions: PreparedCaptions,
   thumbnailUrl?: string,
   existingFileId?: string
 ): Promise<PublishResult> {
@@ -232,9 +237,9 @@ async function sendVideoWithFallback(
   if (existingFileId) {
     const result = await callTgJson(base, 'sendVideo', {
       chat_id: chatId, video: existingFileId,
-      caption: captionForMedia, parse_mode: 'HTML', supports_streaming: true,
+      caption: captions.mediaHtml, parse_mode: 'HTML', supports_streaming: true,
     });
-    if (result.ok) return withUrlMediaResult(result, 0, existingFileId);
+    if (result.ok) return withUrlMediaResult(await withCaptionFollowUp(base, chatId, result, captions), 0, existingFileId);
     // اگر file_id کار نکرد، ادامه می‌دهیم
     console.warn(`[Publisher] file_id failed, re-processing: ${result.error}`);
   }
@@ -247,7 +252,7 @@ async function sendVideoWithFallback(
 
     if (processed?.ok && processed.stableUrl && !processed.blob) {
       const stableResult = await sendVideoUrlWithDocumentFallback(base, chatId, processed.stableUrl,
-        captionForMedia, captionFull, sourceUrl, thumbnailUrl, 'stable_url');
+        captions, thumbnailUrl, 'stable_url');
       return withSingleMediaResult(stableResult, 0, processed);
     }
 
@@ -262,10 +267,10 @@ async function sendVideoWithFallback(
 
       if (analysis.looksLikeValidVideo) {
         // ── تلاش اول: sendVideo با binary ────────────────────
-        const form = buildVideoForm(chatId, processed.blob, captionForMedia, processed.thumbnailBlob);
+        const form = buildVideoForm(chatId, processed.blob, captions.mediaHtml, processed.thumbnailBlob);
         const result = await callTgForm(base, 'sendVideo', form);
 
-        if (result.ok) return withSingleMediaResult(result, 0, processed);
+        if (result.ok) return withSingleMediaResult(await withCaptionFollowUp(base, chatId, result, captions), 0, processed);
 
         // اگر خطای media بود، transcode/document fallback
         if (isTelegramMediaFallbackError(result.errorType)) {
@@ -284,14 +289,15 @@ async function sendVideoWithFallback(
                 thumbBlob = (await downloadTelegramThumbnail(transcoded.thumbnailUrl)).blob;
               }
 
-              const transcodedForm = buildVideoForm(chatId, transcoded.mp4Blob, captionForMedia, thumbBlob);
+              const transcodedForm = buildVideoForm(chatId, transcoded.mp4Blob, captions.mediaHtml, thumbBlob);
               const transcodeResult = await callTgForm(base, 'sendVideo', transcodedForm);
 
               if (transcodeResult.ok) {
                 if (transcoded.streamVideoId) {
                   await deleteStreamVideoFromEnv(env, transcoded.streamVideoId).catch(() => {});
                 }
-                return withSingleMediaResult({ ...transcodeResult, transcodedViaStream: true }, 0, processed);
+                const withFollowUp = await withCaptionFollowUp(base, chatId, { ...transcodeResult, transcodedViaStream: true }, captions);
+                return withSingleMediaResult(withFollowUp, 0, processed);
               }
               console.warn(`[Publisher] Transcoded video also rejected: ${transcodeResult.error}`);
             } else {
@@ -302,11 +308,11 @@ async function sendVideoWithFallback(
           }
 
           // ── تلاش سوم: sendDocument ────────────────────────
-          const documentResult = await sendVideoAsDocument(base, chatId, processed.blob, captionForMedia);
-          if (documentResult.ok) return withSingleMediaResult(documentResult, 0, processed);
+          const documentResult = await sendVideoAsDocument(base, chatId, processed.blob, captions.mediaHtml);
+          if (documentResult.ok) return withSingleMediaResult(await withCaptionFollowUp(base, chatId, documentResult, captions), 0, processed);
 
           console.warn(`[Publisher] sendDocument binary fallback failed: ${documentResult.error} — falling back to text message`);
-          const textResult = await sendTextWithLink(base, chatId, captionFull, sourceUrl);
+          const textResult = await sendTextFallback(base, chatId, captions.fullHtml);
           return {
             ...textResult,
             captionError: `video_fallback_to_text_after_binary_document_failed: ${documentResult.error ?? 'unknown'}`.slice(0, 300),
@@ -330,39 +336,36 @@ async function sendVideoWithFallback(
   }
 
   // ── direct_url یا download failed: ارسال با URL مستقیم ───
-  return sendVideoUrlWithDocumentFallback(base, chatId, videoUrl, captionForMedia,
-    captionFull, sourceUrl, thumbnailUrl, 'source_url');
+  return sendVideoUrlWithDocumentFallback(base, chatId, videoUrl, captions, thumbnailUrl, 'source_url');
 }
 
 async function sendVideoUrlWithDocumentFallback(
   base: string,
   chatId: string,
   videoUrl: string,
-  captionForMedia: string,
-  captionFull: string,
-  sourceUrl: string,
+  captions: PreparedCaptions,
   thumbnailUrl: string | undefined,
   label: 'source_url' | 'stable_url'
 ): Promise<PublishResult> {
   const urlPayload: any = {
     chat_id: chatId, video: videoUrl,
-    caption: captionForMedia, parse_mode: 'HTML', supports_streaming: true,
+    caption: captions.mediaHtml, parse_mode: 'HTML', supports_streaming: true,
   };
   if (thumbnailUrl) {
     console.info('[Publisher] URL-based video thumbnail skipped; Telegram video thumbnails are only reliable with multipart upload.');
   }
 
   const urlResult = await callTgJson(base, 'sendVideo', urlPayload);
-  if (urlResult.ok) return withUrlMediaResult(urlResult, 0);
+  if (urlResult.ok) return withCaptionFollowUp(base, chatId, withUrlMediaResult(urlResult, 0), captions);
 
   // اگر URL-based هم fail شد، قبل از text fallback یک بار document را امتحان کن.
   if (isTelegramMediaFallbackError(urlResult.errorType)) {
     console.warn(`[Publisher] ${label} sendVideo rejected — trying sendDocument fallback before text link`);
-    const documentResult = await sendVideoUrlAsDocument(base, chatId, videoUrl, captionForMedia);
-    if (documentResult.ok) return withUrlMediaResult(documentResult, 0);
+    const documentResult = await sendVideoUrlAsDocument(base, chatId, videoUrl, captions.mediaHtml);
+    if (documentResult.ok) return withCaptionFollowUp(base, chatId, withUrlMediaResult(documentResult, 0), captions);
 
     console.warn(`[Publisher] sendDocument ${label} fallback failed: ${documentResult.error} — falling back to text message`);
-    const textResult = await sendTextWithLink(base, chatId, captionFull, sourceUrl);
+    const textResult = await sendTextFallback(base, chatId, captions.fullHtml);
     return {
       ...textResult,
       captionError: `video_fallback_to_text_after_document_failed: ${documentResult.error ?? 'unknown'}`.slice(0, 300),
@@ -420,8 +423,7 @@ async function sendBinaryMediaGroup(
   base: string,
   input: PublishInput,
   types: Array<'image' | 'video'>,
-  safeCaptionShort: string,
-  safeCaptionFull: string
+  captions: PreparedCaptions
 ): Promise<PublishResult> {
   const processedItems = await processMediaBatch(env, input.mediaUrls.map((url, i) => ({
     url,
@@ -481,16 +483,14 @@ async function sendBinaryMediaGroup(
     thumbnailBlob: processed.thumbnailBlob,
   }));
 
-  const { form } = buildMediaGroupForm(input.chatId, groupItems, safeCaptionShort);
+  const { form } = buildMediaGroupForm(input.chatId, groupItems, captions.mediaHtml);
   const mediaResult = await callTgForm(base, 'sendMediaGroup', form);
 
   if (!mediaResult.ok) return { ...mediaResult, captionError: warning, mediaResults: buildProcessedMediaResults(validItems, failedItems, mediaResult) };
 
   let captionError: string | undefined = warning;
-  if (sanitizeCaptionText(input.captionFull).length > 1024) {
-    const captionResult = await callTgJson(base, 'sendMessage', {
-      chat_id: input.chatId, text: safeCaptionFull, parse_mode: 'HTML',
-    });
+  if (captions.sendFullFollowUp) {
+    const captionResult = await sendTelegramText(base, input.chatId, captions.fullHtml);
     if (!captionResult.ok) {
       captionError = [warning, `caption_send_failed: ${captionResult.error}`].filter(Boolean).join(' | ');
       console.error(`[Publisher] Caption follow-up failed: ${captionResult.error}`);
@@ -502,21 +502,24 @@ async function sendBinaryMediaGroup(
 
 // ── Text-only fallback ────────────────────────────────────────
 
-async function sendTextWithLink(
+async function sendTextFallback(
   base: string,
   chatId: string,
-  captionFull: string,
-  sourceUrl: string
+  html: string
 ): Promise<PublishResult> {
-  const safeCaptionFull = safeTruncate(sanitizeCaptionText(captionFull), 4000);
-  const safeUrl = sourceUrl.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const linkLine = sourceUrl ? `\n\n🔗 <a href="${safeUrl}">منبع اصلی</a>` : '';
+  return sendTelegramText(base, chatId, html);
+}
 
+async function sendTelegramText(
+  base: string,
+  chatId: string,
+  html: string
+): Promise<PublishResult> {
   return callTgJson(base, 'sendMessage', {
     chat_id: chatId,
-    text: safeTruncate(safeCaptionFull + linkLine, 4096),
+    text: html,
     parse_mode: 'HTML',
-    link_preview_options: { is_disabled: false },
+    link_preview_options: { is_disabled: true },
   });
 }
 
@@ -601,7 +604,107 @@ async function parseTgResponse(res: Response): Promise<PublishResult> {
 
 // ── Helpers ───────────────────────────────────────────────────
 
+export function prepareTelegramCaptions(input: PublishInput): PreparedCaptions {
+  const language = input.language ?? input.channel?.language ?? 'en';
 
+  let fullHtml: string;
+  let shortHtml: string;
+  let fullTruncated = false;
+  let shortTruncated = false;
+  let fullFooterIncluded = false;
+  let shortFooterIncluded = false;
+  let fullFooterOmitted = false;
+  let shortFooterOmitted = false;
+
+  if (input.captionFullHtml) {
+    fullHtml = input.captionFullHtml;
+  } else if (input.channel) {
+    const full = formatTelegramMessage({
+      body: input.captionFull ?? '',
+      sourceUrl: input.sourceUrl,
+      language,
+      channel: input.channel,
+      maxLength: 4096,
+    });
+    fullHtml = full.html;
+    fullTruncated = full.truncated;
+    fullFooterIncluded = full.footerIncluded;
+    fullFooterOmitted = full.footerOmitted;
+  } else {
+    fullHtml = safeTruncate(sanitizeCaptionText(input.captionFull ?? ''), 4096);
+  }
+
+  const shortSource = input.captionShort || input.captionFull || '';
+  if (input.captionShortHtml) {
+    shortHtml = input.captionShortHtml;
+  } else if (input.channel) {
+    const short = formatTelegramMessage({
+      body: shortSource,
+      sourceUrl: input.sourceUrl,
+      language,
+      channel: input.channel,
+      maxLength: 1024,
+    });
+    shortHtml = short.html;
+    shortTruncated = short.truncated;
+    shortFooterIncluded = short.footerIncluded;
+    shortFooterOmitted = short.footerOmitted;
+  } else {
+    shortHtml = safeTruncate(sanitizeCaptionText(shortSource), 1024);
+  }
+
+  const mediaHtml = fullHtml.length <= 1024 ? fullHtml : shortHtml;
+
+  return {
+    fullHtml,
+    shortHtml,
+    mediaHtml,
+    sendFullFollowUp: fullHtml.length > 1024 && fullHtml !== mediaHtml,
+    fullTruncated,
+    shortTruncated,
+    fullFooterIncluded,
+    shortFooterIncluded,
+    fullFooterOmitted,
+    shortFooterOmitted,
+  };
+}
+
+function buildDirectMediaGroupPayload(
+  mediaUrls: string[],
+  mediaTypes: Array<'image' | 'video'>,
+  captionHtml: string
+): object[] {
+  return mediaUrls.map((url, i) => {
+    const type = mediaTypes[i] ?? detectMediaType(url);
+    const entry: any = {
+      type: type === 'video' ? 'video' : 'photo',
+      media: url,
+      ...(type === 'video' ? { supports_streaming: true } : {}),
+    };
+    if (i === 0) {
+      entry.caption = captionHtml;
+      entry.parse_mode = 'HTML';
+    }
+    return entry;
+  });
+}
+
+async function withCaptionFollowUp(
+  base: string,
+  chatId: string,
+  result: PublishResult,
+  captions: PreparedCaptions
+): Promise<PublishResult> {
+  if (!result.ok || !captions.sendFullFollowUp) return result;
+  const captionResult = await sendTelegramText(base, chatId, captions.fullHtml);
+  if (captionResult.ok) return result;
+  return {
+    ...result,
+    captionError: [result.captionError, `caption_send_failed: ${captionResult.error}`]
+      .filter(Boolean)
+      .join(' | '),
+  };
+}
 
 function withUrlMediaResult(result: PublishResult, mediaIndex: number, existingFileId?: string): PublishResult {
   if (!result.ok) return result;
@@ -754,11 +857,3 @@ function classifyTelegramError(description: string, errorCode: number): PublishR
   return 'unknown';
 }
 
-async function getSetting(env: Env, key: string): Promise<string> {
-  try {
-    const row = await env.DB
-      .prepare('SELECT value FROM settings WHERE key = ?')
-      .bind(key).first<{ value: string }>();
-    return row?.value ?? '';
-  } catch { return ''; }
-}

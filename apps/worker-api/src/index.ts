@@ -8,6 +8,7 @@ import { handleApifyWebhook } from './routes/apify-webhook';
 import { handleAdmin } from './routes/admin';
 import { runCuration, publishDueItems } from './services/curation-orchestrator';
 import { cleanupOldDedupeKeys } from './services/dedupe';
+import { getRuntimeConfig } from './services/runtime-config';
 
 export default {
 
@@ -43,15 +44,14 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
       try {
-        // Check maintenance_mode before running cron tasks
-        const maintenance = await getSettingDirect(env, 'maintenance_mode');
-        if (maintenance === 'true') {
+        const runtime = await getRuntimeConfig(env);
+        if (runtime.maintenanceMode) {
           console.log('[Scheduled] Skipped — maintenance_mode is active');
           return;
         }
 
         // 1. Curation
-        if (env.APIFY_CURATION_ENABLED === 'true') {
+        if (runtime.curationEnabled) {
           const results = await runCuration(env);
           console.log('[Scheduled] Curation:', results.map(r => ({
             category: r.categoryId,
@@ -96,8 +96,8 @@ async function routeRequest(
   }
 
   // Maintenance mode check — blocks all non-health routes
-  const maintenance = await getSettingDirect(env, 'maintenance_mode');
-  if (maintenance === 'true') {
+  const runtime = await getRuntimeConfig(env);
+  if (runtime.maintenanceMode) {
     return Response.json(
       { ok: false, error: 'maintenance_mode', message: 'System is in maintenance mode' },
       { status: 503 }
@@ -134,15 +134,4 @@ function verifySecret(provided: string | null, env: Env): boolean {
   const expected = env.INTERNAL_API_SECRET?.trim();
   if (!expected) return env.ENVIRONMENT === 'local';
   return provided === expected;
-}
-
-// ── Settings helper (used before full DB service loads) ───────
-
-async function getSettingDirect(env: Env, key: string): Promise<string> {
-  try {
-    const row = await env.DB
-      .prepare('SELECT value FROM settings WHERE key = ?')
-      .bind(key).first<{ value: string }>();
-    return row?.value ?? '';
-  } catch { return ''; }
 }

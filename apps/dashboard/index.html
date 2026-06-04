@@ -142,6 +142,9 @@ code{font-family:'JetBrains Mono','Fira Code',monospace;font-size:12px;backgroun
 .modal-close:hover{color:var(--text)}
 .modal-body{padding:20px 24px}
 .modal-footer{padding:0 24px 20px;display:flex;gap:8px;justify-content:flex-end}
+.preview-box{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.8;direction:auto}
+.preview-box a{color:var(--blue);text-decoration:underline}
+.action-row{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;margin-top:6px}
 
 /* ── Wizard ──────────────────────────────────────────────── */
 .wizard-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:200;align-items:center;justify-content:center}
@@ -455,6 +458,65 @@ hr{border:none;border-top:1px solid var(--border);margin:16px 0}
         <textarea class="form-input" id="ch-instructions" rows="3" placeholder="مثلاً: مخاطب مبتدی است، اصطلاحات تخصصی را ساده توضیح بده"></textarea>
         <div class="form-hint">فقط برای همین کانال در ترجمه استفاده می‌شود</div>
       </div>
+      <hr>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">Prompt Studio — Channel / Language</div>
+      <div class="form-row3">
+        <div class="form-group"><label class="form-label">Editorial Mode</label><select class="form-input" id="ch-editorial-mode"><option value="news">news</option><option value="educational">educational</option><option value="analytical">analytical</option><option value="brief">brief</option><option value="explainer">explainer</option></select></div>
+        <div class="form-group"><label class="form-label">Audience Level</label><select class="form-input" id="ch-audience-level"><option value="beginner">beginner</option><option value="intermediate">intermediate</option><option value="professional">professional</option></select></div>
+        <div class="form-group"><label class="form-label">Caption Style</label><select class="form-input" id="ch-caption-style"><option value="contextual">contextual</option><option value="straight_news">straight_news</option><option value="educational_summary">educational_summary</option><option value="insight_first">insight_first</option></select></div>
+      </div>
+      <div class="form-row3">
+        <div class="form-group"><label class="form-label">Creativity</label><input class="form-input" id="ch-creativity" type="number" min="0" max="1" step="0.1" value="0.2"><div class="form-hint">0 = دقیق‌تر، 1 = آزادتر</div></div>
+        <div class="form-group"><label class="form-label">Full Caption Max</label><input class="form-input" id="ch-caption-max" type="number" min="280" max="3500" value="1200"></div>
+        <div class="form-group"><label class="form-label">Short Caption Max</label><input class="form-input" id="ch-caption-short-max" type="number" min="80" max="900" value="280"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Language Prompt</label><textarea class="form-input" id="ch-language-prompt" rows="3" maxlength="2000" placeholder="مثلاً: فارسی روان و خبری، بدون ترجمه تحت‌اللفظی، با توضیح کوتاه برای اصطلاحات تخصصی"></textarea></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Terminology Notes</label><textarea class="form-input" id="ch-terminology-notes" rows="3" maxlength="2000" placeholder="مثلاً: stablecoin = استیبل‌کوین، liquidation = لیکوئید شدن"></textarea></div>
+        <div class="form-group"><label class="form-label">Forbidden Phrases</label><textarea class="form-input" id="ch-forbidden-phrases" rows="3" placeholder="هر عبارت در یک خط؛ مثل: در پستی جدید"></textarea></div>
+      </div>
+      <hr>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">قالب پیام تلگرام</div>
+      <div class="form-row3">
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="ch-source-enabled"> نمایش منبع</label>
+          <div class="form-hint">اگر فعال باشد، فقط label لینک‌دار نمایش داده می‌شود؛ URL خام نمی‌آید.</div>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="ch-disable-preview"> خاموش‌کردن link preview</label>
+          <div class="form-hint">برای جلوگیری از کارت X/Twitter زیر پیام.</div>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="ch-semantic-enabled"> semantic dedupe</label>
+          <div class="form-hint">کنترل آماده برای فاز dedupe.</div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Source Label Override</label>
+          <input class="form-input" id="ch-source-label" maxlength="32" placeholder="منبع یا Source">
+          <div class="form-hint">اختیاری. خالی بماند تا بر اساس زبان ساخته شود.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Semantic Window (hours)</label>
+          <input class="form-input" id="ch-semantic-window" type="number" value="24" min="1" max="168">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="ch-signature-enabled"> امضای انتهای پیام</label>
+          <textarea class="form-input" id="ch-signature-text" rows="2" maxlength="300" placeholder="— The Sol Crypto"></textarea>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="ch-footer-enabled"> نمایش ID/username کانال</label>
+          <input class="form-input" id="ch-footer-text" maxlength="80" placeholder="@thesolxcrypto_fa">
+          <div class="form-hint">اگر خالی باشد و chat id با @ شروع شود، همان استفاده می‌شود.</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Max posts/source/day</label>
+        <input class="form-input" id="ch-max-source-day" type="number" min="1" max="50" placeholder="اختیاری">
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal('modal-channel')">انصراف</button>
@@ -499,6 +561,66 @@ hr{border:none;border-top:1px solid var(--border);margin:16px 0}
         <label class="form-label">Custom Prompt</label>
         <textarea class="form-input" id="cat-custom-prompt" rows="4" placeholder="اگر پر شود، به جای profile آماده برای Claude scoring استفاده می‌شود"></textarea>
         <div class="form-hint">اختیاری. برای دسته‌بندی‌های خاص یا policy دقیق‌تر.</div>
+      </div>
+      <hr>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">Prompt Studio — Category</div>
+      <div class="form-group">
+        <label class="form-label">Editorial Guidelines</label>
+        <textarea class="form-input" id="cat-editorial-guidelines" rows="4" maxlength="3000" placeholder="مثلاً: خروجی باید شبیه پست خبری/آموزشی تلگرام باشد، نه ترجمه خام توییت. افراد مهم را در اولین اشاره معرفی کن."></textarea>
+        <div class="form-hint">برای بازنویسی نهایی همه زبان‌های این category استفاده می‌شود.</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Selection Criteria</label>
+          <textarea class="form-input" id="cat-selection-criteria" rows="3" maxlength="2000" placeholder="چه چیزهایی باعث انتخاب پست شود؟"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Rejection Criteria</label>
+          <textarea class="form-input" id="cat-rejection-criteria" rows="3" maxlength="2000" placeholder="چه چیزهایی باعث رد پست شود؟ مثل reply بدون context یا تکرار موضوعی"></textarea>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Required Context</label>
+          <textarea class="form-input" id="cat-required-context" rows="3" maxlength="2000" placeholder="مثلاً: ویتالیک بوترین = هم‌بنیان‌گذار اتریوم"></textarea>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-top:24px"><input type="checkbox" id="cat-avoid-duplicate-people"> جلوگیری از تکرار موضوعی درباره یک شخص/ایده</label>
+          <div class="form-hint">به Claude یادآوری می‌کند چند پست مشابه پشت سر هم انتخاب نکند.</div>
+        </div>
+      </div>
+      <div class="form-row3">
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="cat-allow-replies"> اجازه انتشار replyها</label>
+          <div class="form-hint">برای کانال خبری معمولاً خاموش بماند.</div>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="cat-allow-retweets"> اجازه retweet/repost</label>
+          <div class="form-hint">اگر خاموش باشد repostها قبل از AI رد می‌شوند.</div>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="cat-allow-quotes"> اجازه quote post</label>
+          <div class="form-hint">برای quoteهای بدون context بهتر است خاموش شود.</div>
+        </div>
+      </div>
+      <div class="form-row3">
+        <div class="form-group">
+          <label class="form-label">Text-only Policy</label>
+          <select class="form-input" id="cat-text-only-policy">
+            <option value="allow">allow — مجاز</option>
+            <option value="penalize">penalize — فقط با score بالاتر</option>
+            <option value="reject">reject — رد قبل از AI</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Min score for text-only</label>
+          <input class="form-input" id="cat-min-score-text-only" type="number" min="0" max="100" placeholder="اختیاری">
+          <div class="form-hint">برای policy=penalize مفید است.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Min score for media</label>
+          <input class="form-input" id="cat-min-score-media" type="number" min="0" max="100" placeholder="اختیاری">
+        </div>
       </div>
       <div class="form-row3">
         <div class="form-group">
@@ -623,6 +745,23 @@ hr{border:none;border-top:1px solid var(--border);margin:16px 0}
     <div class="modal-footer">
       <button class="btn" onclick="closeModal('modal-src')">انصراف</button>
       <button class="btn btn-primary" onclick="saveSrc()">افزودن</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Queue Preview Modal -->
+<div class="modal-overlay" id="modal-preview">
+  <div class="modal" style="width:720px">
+    <div class="modal-header">
+      <div class="modal-title" id="preview-title">Preview</div>
+      <button class="modal-close" onclick="closeModal('modal-preview')">×</button>
+    </div>
+    <div class="modal-body" id="preview-body">
+      <div class="loading"><span class="spin"></span>در حال آماده‌سازی preview…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('modal-preview')">بستن</button>
     </div>
   </div>
 </div>
@@ -805,50 +944,141 @@ async function renderOverview(c) {
 }
 
 // ══ Queue ══════════════════════════════════════════════════════
+let queueStatus = 'scheduled';
+const QUEUE_STATUSES = ['scheduled','retry','failed','published','cancelled'];
 async function renderQueue(c) {
-  const [sched, failed, pub] = await Promise.all([
-    api('/internal/queue?status=scheduled&limit=50'),
-    api('/internal/queue?status=failed&limit=20'),
-    api('/internal/queue?status=published&limit=10'),
-  ]);
+  const data = await api(`/internal/queue?status=${queueStatus}&limit=80`);
+  const stats = await api('/internal/stats').catch(() => ({}));
   c.innerHTML = `
-  <div class="grid2 mb16">
-    <div class="card">
-      <div class="panel-head"><div class="panel-title">scheduled (${sched.queue?.length||0})</div></div>
-      ${queueRows(sched.queue||[], true)}
+  <div class="card mb16">
+    <div class="panel-head">
+      <div class="panel-title">publish queue</div>
+      <div class="panel-actions">
+        <button class="btn-sm btn-green" onclick="publishDueNow()">▶ publish due</button>
+        <button class="btn-sm" onclick="loadPage('queue')">refresh</button>
+      </div>
     </div>
-    <div class="card">
-      <div class="panel-head"><div class="panel-title">failed (${failed.queue?.length||0})</div></div>
-      ${queueRows(failed.queue||[], false)}
+    <div class="flex gap8" style="flex-wrap:wrap">
+      ${QUEUE_STATUSES.map(st=>`<button class="btn-sm ${queueStatus===st?'btn-primary':''}" onclick="setQueueStatus('${st}')">${st}${queueCountBadge(st, stats)}</button>`).join('')}
     </div>
   </div>
   <div class="card">
-    <div class="panel-head"><div class="panel-title">recently published (${pub.queue?.length||0})</div></div>
-    ${queueRows(pub.queue||[], false, true)}
+    <div class="panel-head"><div class="panel-title">${queueStatus} (${data.queue?.length||0})</div></div>
+    ${queueRows(data.queue||[], queueStatus)}
   </div>`;
 }
-function queueRows(items, showCancel, published=false) {
+function queueCountBadge(st, stats) {
+  const map = {scheduled:'queue_pending', retry:'queue_retry', failed:'queue_failed'};
+  const key = map[st];
+  return key && stats[key] !== undefined ? ` · ${stats[key]}` : '';
+}
+function setQueueStatus(st) { queueStatus = st; loadPage('queue'); }
+function queueRows(items, status) {
   if (!items.length) return '<div class="text-muted fs12" style="padding:8px 0">آیتمی وجود ندارد</div>';
   return items.map(q=>`
-  <div class="row">
-    <div class="dot ${published?'dot-green':showCancel?'dot-green':'dot-amber'}"></div>
+  <div class="row" style="align-items:flex-start">
+    <div class="dot ${status==='published'?'dot-green':status==='failed'?'dot-red':status==='retry'?'dot-amber':status==='cancelled'?'dot-dim':'dot-green'}" style="margin-top:7px"></div>
     <div style="flex:1;min-width:0">
-      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(q.caption_short||'')}">${esc((q.caption_short||'—').slice(0,60))}</div>
-      <div class="fs11 text-muted">${q.channel_id} · ${q.telegram_method||''} · retry:${q.retry_count||0}</div>
-      ${q.publish_error?`<div class="fs11 text-red">${esc(q.publish_error.slice(0,80))}</div>`:''}
-      ${q.media_warning?`<div class="fs11 text-amber">media: ${esc(q.media_warning.slice(0,90))}</div>`:''}
+      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(q.caption_short||'')}">${esc((q.caption_short||'—').slice(0,90))}</div>
+      <div class="fs11 text-muted">${q.channel_id} · ${q.telegram_method||''} · retry:${q.retry_count||0} · ${q.id}</div>
+      ${q.publish_error?`<div class="fs11 text-red">${esc(q.publish_error.slice(0,120))}</div>`:''}
+      ${q.media_warning?`<div class="fs11 text-amber">media: ${esc(q.media_warning.slice(0,120))}</div>`:''}
       ${q.all_message_ids&&q.all_message_ids!=='[]'?`<div class="fs11 text-muted mono">messages: ${esc(q.all_message_ids)}</div>`:''}
+      <div class="action-row" style="justify-content:flex-start">
+        <button class="btn-sm" onclick="previewQ('${q.id}')">preview</button>
+        ${safeHref(q.source_url)?`<a class="btn-sm" href="${esc(safeHref(q.source_url))}" target="_blank" rel="noopener">source</a>`:''}
+        ${(status==='scheduled'||status==='retry'||status==='failed')?`<button class="btn-sm btn-green" onclick="publishNowQ('${q.id}')">publish now</button>`:''}
+        ${(status==='failed'||status==='retry')?`<button class="btn-sm btn-amber" onclick="retryQ('${q.id}')">retry</button>`:''}
+        ${(status==='scheduled'||status==='retry'||status==='failed')?`<button class="btn-sm btn-red" onclick="cancelQ('${q.id}')">cancel</button>`:''}
+        <button class="btn-sm" onclick="viewMedia('${q.item_id}')">media</button>
+      </div>
     </div>
-    <div style="text-align:left">
-      <div class="fs11 text-muted">${published?'✓ '+fmtDate(q.published_at):fmtTime(q.scheduled_at)}</div>
-      ${showCancel?`<button class="btn-sm btn-red" style="font-size:10px;margin-top:4px" onclick="cancelQ('${q.id}')">cancel</button>`:''}
+    <div style="text-align:left;min-width:92px">
+      <div class="fs11 text-muted">${status==='published'?'✓ '+fmtDate(q.published_at):fmtTime(q.scheduled_at)}</div>
+      <span class="tag ${statusTag(status)}">${status}</span>
     </div>
   </div>`).join('');
+}
+async function publishDueNow() {
+  const raw = prompt('چند آیتم due منتشر شود؟', '3');
+  if (raw === null) return;
+  const limit = Math.max(1, Math.min(100, Number(raw)||3));
+  try {
+    const r = await api('/internal/publish/due', {method:'POST', body:JSON.stringify({limit})});
+    toast(`published:${r.published||0} failed:${r.failed||0} skipped:${r.skipped||0}`);
+    loadPage('queue'); loadPills();
+  } catch(e) { toast(e.message,'err'); }
+}
+async function publishNowQ(id) {
+  if (!confirm('این آیتم همین الان publish شود؟')) return;
+  try {
+    const r = await api(`/internal/queue/${id}/publish-now`, {method:'POST'});
+    toast(r.published ? 'publish انجام شد' : `publish نشد: ${r.reason||r.status||'unknown'}`, r.published?'ok':'warn');
+    loadPage('queue'); loadPills();
+  } catch(e) { toast(e.message,'err'); }
+}
+async function retryQ(id) {
+  try {
+    await api(`/internal/queue/${id}/retry`, {method:'POST'});
+    toast('آیتم برای retry زمان‌بندی شد'); loadPage('queue'); loadPills();
+  } catch(e) { toast(e.message,'err'); }
 }
 async function cancelQ(id) {
   if (!confirm('آیا مطمئن هستید؟')) return;
   await api(`/internal/queue/${id}`, {method:'DELETE'});
-  toast('آیتم cancel شد'); loadPage('queue');
+  toast('آیتم cancel شد'); loadPage('queue'); loadPills();
+}
+async function previewQ(id) {
+  const body = document.getElementById('preview-body');
+  document.getElementById('preview-title').textContent = `Preview: ${id}`;
+  body.innerHTML = loading();
+  document.getElementById('modal-preview').classList.add('open');
+  try {
+    const p = await api(`/internal/queue/${id}/preview`);
+    body.innerHTML = renderPreview(p);
+  } catch(e) {
+    body.innerHTML = `<div class="alert alert-red">خطا: ${esc(e.message)}</div>`;
+  }
+}
+function renderPreview(p) {
+  const full = p.captions?.full_html || '';
+  const media = p.captions?.media_html || '';
+  const follow = p.telegram_preview?.follow_up;
+  return `
+  <div class="grid2 mb16">
+    <div class="card">
+      <div class="panel-title mb8">queue</div>
+      <div class="fs12 text-muted">method: <code>${esc(p.method||'')}</code></div>
+      <div class="fs12 text-muted">channel: <code>${esc(p.channelId||'')}</code> · ${esc(p.channel?.telegram_chat_id||'')}</div>
+      <div class="fs12 text-muted">status: <span class="tag ${statusTag(p.status)}">${esc(p.status||'')}</span></div>
+    </div>
+    <div class="card">
+      <div class="panel-title mb8">formatting</div>
+      <div class="fs12">source: ${p.formatting?.source_visible?'✅':'—'} · signature: ${p.formatting?.signature_configured?'✅':'—'} · footer: ${p.formatting?.channel_footer_configured?'✅':'—'}</div>
+      <div class="fs12 text-muted">link preview disabled: ${p.formatting?.disable_link_preview?'✅':'—'}</div>
+      ${(p.warnings||[]).map(w=>`<div class="fs11 text-amber">⚠ ${esc(w)}</div>`).join('')}
+    </div>
+  </div>
+  <div class="form-group">
+    <label class="form-label">Full Telegram HTML</label>
+    <div class="preview-box">${telegramHtmlToPreview(full)}</div>
+  </div>
+  ${media && media!==full?`<div class="form-group"><label class="form-label">Media caption HTML</label><div class="preview-box">${telegramHtmlToPreview(media)}</div></div>`:''}
+  ${follow?`<div class="warn-box">این آیتم follow-up sendMessage هم خواهد داشت و link preview آن خاموش است.</div>`:''}
+  <details class="mt16"><summary class="fs12 text-muted">raw html</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:8px;overflow:auto">${esc(full)}</pre></details>`;
+}
+function telegramHtmlToPreview(html) {
+  return String(html||'').replace(/\n/g,'<br>');
+}
+async function viewMedia(itemId) {
+  try {
+    const d = await api(`/internal/media?item=${encodeURIComponent(itemId)}&limit=20`);
+    document.getElementById('preview-title').textContent = `Media: ${itemId}`;
+    document.getElementById('preview-body').innerHTML = (d.media||[]).length ? `
+      ${(d.media||[]).map(m=>`<div class="row"><span class="tag tag-blue">${esc(m.media_type)}</span><span class="flex1 mono fs11" style="word-break:break-all">${esc(m.source_url)}</span><span class="tag ${m.processing_status==='uploaded'||m.processing_status==='ready'?'tag-green':'tag-dim'}">${esc(m.processing_status||'')}</span></div>`).join('')}
+    ` : '<div class="text-muted fs12">media record وجود ندارد</div>';
+    document.getElementById('modal-preview').classList.add('open');
+  } catch(e) { toast(e.message,'err'); }
 }
 
 // ══ Runs ═══════════════════════════════════════════════════════
@@ -948,6 +1178,8 @@ async function renderCategories(c) {
         <button class="btn-sm" onclick="openCatEdit('${cat.id}')">ویرایش</button>
       </div>
       <div class="fs12 text-muted mono mb8">profile: ${cat.prompt_profile}${cat.custom_prompt?' · custom prompt':''} · threshold: ${cat.score_threshold} · freshness: ${cat.freshness_hours}h · media: ${cat.media_mode}</div>
+      <div class="fs11 text-muted mb8">${cat.editorial_guidelines?'📝 editorial guidelines · ':''}${cat.selection_criteria?'🎯 selection criteria · ':''}${cat.rejection_criteria?'🚫 rejection criteria · ':''}${cat.required_context?'📌 required context · ':''}${cat.avoid_duplicate_people_stories!==0?'dedupe reminder on':'dedupe reminder off'}</div>
+      <div class="fs11 text-muted mb8">reply: ${cat.allow_replies?'allow':'reject'} · retweet: ${cat.allow_retweets!==0?'allow':'reject'} · quote: ${cat.allow_quotes!==0?'allow':'reject'} · text-only: ${cat.text_only_policy||'allow'}${cat.min_score_for_text_only!=null?' · text score ≥ '+cat.min_score_for_text_only:''}${cat.min_score_for_media!=null?' · media score ≥ '+cat.min_score_for_media:''}</div>
       <div class="flex gap8 mb8" style="flex-wrap:wrap">
         <span class="fs11 text-muted">زبان‌ها:</span>
         ${langs.map(l=>`<span class="tag tag-purple">${l}</span>`).join('')}
@@ -978,9 +1210,9 @@ async function renderChannels(c) {
   <div class="ch-card">
     <div class="ch-card-head">
       <div class="dot ${ch.publish_enabled?'dot-green':'dot-dim'}"></div>
-      <span class="ch-name">${ch.channel_label||ch.id}</span><span class="text-muted fs11 mono">${ch.id}</span>
-      <span class="tag tag-purple">${ch.language}</span>
-      <span class="tag tag-dim">${ch.category_id}</span>
+      <span class="ch-name">${esc(ch.channel_label||ch.id)}</span><span class="text-muted fs11 mono">${esc(ch.id)}</span>
+      <span class="tag tag-purple">${esc(ch.language)}</span>
+      <span class="tag tag-dim">${esc(ch.category_id)}</span>
       <span class="tag ${ch.publish_enabled?'tag-green':'tag-dim'}" style="margin-right:auto">${ch.publish_enabled?'publishing':'paused'}</span>
       <div class="ch-actions">
         <button class="btn-sm ${ch.publish_enabled?'btn-red':'btn-green'}" onclick="toggleChannelPub('${ch.id}',${ch.publish_enabled?0:1})">${ch.publish_enabled?'⏸ pause':'▶ start'}</button>
@@ -988,17 +1220,28 @@ async function renderChannels(c) {
       </div>
     </div>
     <div class="ch-meta">
-      <span>📡 ${ch.telegram_chat_id}</span>
-      <span>🌍 ${ch.timezone}</span>
+      <span>📡 ${esc(ch.telegram_chat_id)}</span>
+      <span>🌍 ${esc(ch.timezone)}</span>
       <span>📅 max ${ch.max_per_day}/day</span>
       <span>⏱ max ${ch.max_per_hour}/hr</span>
       <span>⏳ gap ${ch.min_gap_minutes}min</span>
-      <span>🎙 ${ch.tone_profile||'neutral'}</span>
+      <span>🎙 ${esc(ch.tone_profile||'neutral')}</span>
+      <span>🧭 ${esc(ch.editorial_mode||'news')}</span>
+      <span>👥 ${esc(ch.audience_level||'intermediate')}</span>
+      <span>✍️ ${esc(ch.caption_style||'contextual')}</span>
     </div>
     <div class="ch-meta mt8">
-      <span>✅ allowed: ${ch.allowed_windows}</span>
-      <span>🚫 blocked: ${ch.blocked_windows}</span>
+      <span>✅ allowed: ${esc(ch.allowed_windows)}</span>
+      <span>🚫 blocked: ${esc(ch.blocked_windows)}</span>
       ${ch.custom_instructions?'<span>🧠 custom AI instructions</span>':''}
+    </div>
+    <div class="ch-meta mt8">
+      <span class="tag ${ch.source_enabled!==0?'tag-green':'tag-dim'}">source ${ch.source_enabled!==0?'on':'off'}</span>
+      <span class="tag ${ch.disable_link_preview!==0?'tag-green':'tag-red'}">preview ${ch.disable_link_preview!==0?'off':'on'}</span>
+      <span class="tag ${ch.signature_enabled?'tag-green':'tag-dim'}">signature ${ch.signature_enabled?'on':'off'}</span>
+      <span class="tag ${ch.channel_id_footer_enabled?'tag-green':'tag-dim'}">footer ${ch.channel_id_footer_enabled?'on':'off'}</span>
+      <span class="tag ${ch.semantic_dedupe_enabled!==0?'tag-blue':'tag-dim'}">dedupe ${ch.semantic_dedupe_window_hours||24}h</span>
+      ${ch.source_label_override?`<span class="text-muted fs11">source label: ${esc(ch.source_label_override)}</span>`:''}
     </div>
   </div>`).join('')}`;
 }
@@ -1412,6 +1655,8 @@ let editingCategoryId = null;
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); }));
 
+function formatForbiddenPhrases(value) { try { const parsed = JSON.parse(value||'[]'); return Array.isArray(parsed) ? parsed.join('\n') : (value||''); } catch { return value||''; } }
+
 async function openChModal(categoryId) {
   const cats = await api('/internal/categories');
   fillSelect('ch-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label, categoryId);
@@ -1422,6 +1667,32 @@ async function openChModal(categoryId) {
   document.getElementById('ch-label').value = '';
   document.getElementById('ch-tone').value = 'neutral';
   document.getElementById('ch-instructions').value = '';
+  document.getElementById('ch-editorial-mode').value = 'news';
+  document.getElementById('ch-audience-level').value = 'intermediate';
+  document.getElementById('ch-caption-style').value = 'contextual';
+  document.getElementById('ch-creativity').value = 0.2;
+  document.getElementById('ch-caption-max').value = 1200;
+  document.getElementById('ch-caption-short-max').value = 280;
+  document.getElementById('ch-language-prompt').value = '';
+  document.getElementById('ch-terminology-notes').value = '';
+  document.getElementById('ch-forbidden-phrases').value = '';
+  document.getElementById('ch-lang').value = 'fa';
+  document.getElementById('ch-tz').value = 'Asia/Tehran';
+  document.getElementById('ch-day').value = 10;
+  document.getElementById('ch-hour').value = 2;
+  document.getElementById('ch-gap').value = 30;
+  document.getElementById('ch-allowed').value = '["08:00-23:59"]';
+  document.getElementById('ch-blocked').value = '["00:00-08:00"]';
+  setChecked('ch-source-enabled', true);
+  document.getElementById('ch-source-label').value = '';
+  setChecked('ch-disable-preview', true);
+  setChecked('ch-signature-enabled', false);
+  document.getElementById('ch-signature-text').value = '';
+  setChecked('ch-footer-enabled', false);
+  document.getElementById('ch-footer-text').value = '';
+  setChecked('ch-semantic-enabled', true);
+  document.getElementById('ch-semantic-window').value = 24;
+  document.getElementById('ch-max-source-day').value = '';
   document.getElementById('modal-ch-title').textContent = 'افزودن کانال';
   document.getElementById('modal-channel').classList.add('open');
 }
@@ -1442,10 +1713,30 @@ async function openChEdit(ch) {
   document.getElementById('ch-label').value = ch.channel_label || '';
   document.getElementById('ch-tone').value = ch.tone_profile || 'neutral';
   document.getElementById('ch-instructions').value = ch.custom_instructions || '';
+  document.getElementById('ch-editorial-mode').value = ch.editorial_mode || 'news';
+  document.getElementById('ch-audience-level').value = ch.audience_level || 'intermediate';
+  document.getElementById('ch-caption-style').value = ch.caption_style || 'contextual';
+  document.getElementById('ch-creativity').value = ch.creativity_level ?? 0.2;
+  document.getElementById('ch-caption-max').value = ch.caption_max_chars || 1200;
+  document.getElementById('ch-caption-short-max').value = ch.caption_short_max_chars || 280;
+  document.getElementById('ch-language-prompt').value = ch.language_prompt || '';
+  document.getElementById('ch-terminology-notes').value = ch.terminology_notes || '';
+  document.getElementById('ch-forbidden-phrases').value = formatForbiddenPhrases(ch.forbidden_phrases);
+  setChecked('ch-source-enabled', ch.source_enabled !== 0);
+  document.getElementById('ch-source-label').value = ch.source_label_override || '';
+  setChecked('ch-disable-preview', ch.disable_link_preview !== 0);
+  setChecked('ch-signature-enabled', !!ch.signature_enabled);
+  document.getElementById('ch-signature-text').value = ch.signature_text || '';
+  setChecked('ch-footer-enabled', !!ch.channel_id_footer_enabled);
+  document.getElementById('ch-footer-text').value = ch.channel_id_footer_text || '';
+  setChecked('ch-semantic-enabled', ch.semantic_dedupe_enabled !== 0);
+  document.getElementById('ch-semantic-window').value = ch.semantic_dedupe_window_hours || 24;
+  document.getElementById('ch-max-source-day').value = ch.max_posts_per_source_per_day ?? '';
   document.getElementById('modal-ch-title').textContent = 'ویرایش کانال: ' + ch.id;
   document.getElementById('modal-channel').classList.add('open');
 }
 async function saveChannel() {
+  const maxSourceDayRaw = document.getElementById('ch-max-source-day').value;
   const body = {
     id:document.getElementById('ch-id').value.trim(),
     category_id:document.getElementById('ch-cat').value,
@@ -1460,6 +1751,25 @@ async function saveChannel() {
     channel_label:document.getElementById('ch-label').value.trim(),
     tone_profile:document.getElementById('ch-tone').value,
     custom_instructions:document.getElementById('ch-instructions').value.trim(),
+    editorial_mode:document.getElementById('ch-editorial-mode').value,
+    audience_level:document.getElementById('ch-audience-level').value,
+    caption_style:document.getElementById('ch-caption-style').value,
+    creativity_level:+document.getElementById('ch-creativity').value,
+    caption_max_chars:+document.getElementById('ch-caption-max').value,
+    caption_short_max_chars:+document.getElementById('ch-caption-short-max').value,
+    language_prompt:document.getElementById('ch-language-prompt').value.trim(),
+    terminology_notes:document.getElementById('ch-terminology-notes').value.trim(),
+    forbidden_phrases:document.getElementById('ch-forbidden-phrases').value.trim(),
+    source_enabled:isChecked('ch-source-enabled'),
+    source_label_override:document.getElementById('ch-source-label').value.trim(),
+    disable_link_preview:isChecked('ch-disable-preview'),
+    signature_enabled:isChecked('ch-signature-enabled'),
+    signature_text:document.getElementById('ch-signature-text').value.trim(),
+    channel_id_footer_enabled:isChecked('ch-footer-enabled'),
+    channel_id_footer_text:document.getElementById('ch-footer-text').value.trim(),
+    semantic_dedupe_enabled:isChecked('ch-semantic-enabled'),
+    semantic_dedupe_window_hours:+document.getElementById('ch-semantic-window').value,
+    max_posts_per_source_per_day:maxSourceDayRaw ? +maxSourceDayRaw : null,
   };
   if (!body.id||!body.telegram_chat_id) { toast('ID و Chat ID اجباری است','err'); return; }
   try {
@@ -1468,7 +1778,7 @@ async function saveChannel() {
     } else {
       await api('/internal/channels', {method:'POST', body:JSON.stringify(body)});
     }
-    toast('✓ کانال ذخیره شد'); closeModal('modal-channel'); editingChannelId=null; loadPage('channels');
+    toast('✓ کانال ذخیره شد'); closeModal('modal-channel'); editingChannelId=null; loadPage('channels'); loadPills();
   } catch(e) { toast(e.message,'err'); }
 }
 
@@ -1477,6 +1787,17 @@ async function openCatModal() {
   document.getElementById('cat-id').disabled = false;
   document.getElementById('cat-id').value=''; document.getElementById('cat-label').value='';
   document.getElementById('cat-custom-prompt').value='';
+  document.getElementById('cat-editorial-guidelines').value='';
+  document.getElementById('cat-selection-criteria').value='';
+  document.getElementById('cat-rejection-criteria').value='';
+  document.getElementById('cat-required-context').value='';
+  setChecked('cat-avoid-duplicate-people', true);
+  setChecked('cat-allow-replies', false);
+  setChecked('cat-allow-retweets', true);
+  setChecked('cat-allow-quotes', true);
+  document.getElementById('cat-text-only-policy').value='allow';
+  document.getElementById('cat-min-score-text-only').value='';
+  document.getElementById('cat-min-score-media').value='';
   document.getElementById('modal-cat-title').textContent='افزودن Category';
   document.querySelectorAll('#lang-checkboxes input').forEach(cb => cb.checked = cb.value==='fa');
   document.getElementById('modal-cat').classList.add('open');
@@ -1494,6 +1815,17 @@ async function openCatEdit(id) {
   document.getElementById('cat-fresh').value=cat.freshness_hours;
   document.getElementById('cat-media').value=cat.media_mode;
   document.getElementById('cat-custom-prompt').value=cat.custom_prompt||'';
+  document.getElementById('cat-editorial-guidelines').value=cat.editorial_guidelines||'';
+  document.getElementById('cat-selection-criteria').value=cat.selection_criteria||'';
+  document.getElementById('cat-rejection-criteria').value=cat.rejection_criteria||'';
+  document.getElementById('cat-required-context').value=cat.required_context||'';
+  setChecked('cat-avoid-duplicate-people', cat.avoid_duplicate_people_stories !== 0);
+  setChecked('cat-allow-replies', cat.allow_replies !== 0);
+  setChecked('cat-allow-retweets', cat.allow_retweets !== 0);
+  setChecked('cat-allow-quotes', cat.allow_quotes !== 0);
+  document.getElementById('cat-text-only-policy').value=cat.text_only_policy||'allow';
+  document.getElementById('cat-min-score-text-only').value=cat.min_score_for_text_only??'';
+  document.getElementById('cat-min-score-media').value=cat.min_score_for_media??'';
   const langs = JSON.parse(cat.language_targets||'[]');
   document.querySelectorAll('#lang-checkboxes input').forEach(cb => cb.checked=langs.includes(cb.value));
   document.getElementById('modal-cat-title').textContent='ویرایش: '+cat.id;
@@ -1509,6 +1841,17 @@ async function saveCat() {
     freshness_hours:+document.getElementById('cat-fresh').value,
     media_mode:document.getElementById('cat-media').value,
     custom_prompt:document.getElementById('cat-custom-prompt').value.trim(),
+    editorial_guidelines:document.getElementById('cat-editorial-guidelines').value.trim(),
+    selection_criteria:document.getElementById('cat-selection-criteria').value.trim(),
+    rejection_criteria:document.getElementById('cat-rejection-criteria').value.trim(),
+    required_context:document.getElementById('cat-required-context').value.trim(),
+    avoid_duplicate_people_stories:isChecked('cat-avoid-duplicate-people'),
+    allow_replies:isChecked('cat-allow-replies'),
+    allow_retweets:isChecked('cat-allow-retweets'),
+    allow_quotes:isChecked('cat-allow-quotes'),
+    text_only_policy:document.getElementById('cat-text-only-policy').value,
+    min_score_for_text_only:document.getElementById('cat-min-score-text-only').value||null,
+    min_score_for_media:document.getElementById('cat-min-score-media').value||null,
     language_targets:JSON.stringify(langs),
   };
   if (!body.id||!body.label) { toast('ID و نام اجباری است','err'); return; }
@@ -1844,12 +2187,15 @@ async function wizSaveSources() {
 }
 
 // ══ Helpers ════════════════════════════════════════════════════
+function setChecked(id, value) { const el = document.getElementById(id); if (el) el.checked = !!value; }
+function isChecked(id) { const el = document.getElementById(id); return !!(el && el.checked); }
+function safeHref(url) { try { const u = new URL(String(url||'')); return ['http:','https:'].includes(u.protocol) ? u.toString() : ''; } catch { return ''; } }
 function fillSelect(id, items, valKey, labelFn, selectedVal) {
   const el = document.getElementById(id);
   if (!el) return;
   el.innerHTML = items.map(i=>`<option value="${i[valKey]}" ${i[valKey]===selectedVal?'selected':''}>${labelFn(i)}</option>`).join('');
 }
-function statusTag(s) { return {completed:'tag-green',dry_run:'tag-blue',failed:'tag-red',processing:'tag-amber',published:'tag-green',scheduled:'tag-blue',cancelled:'tag-dim'}[s]||'tag-dim'; }
+function statusTag(s) { return {completed:'tag-green',dry_run:'tag-blue',failed:'tag-red',processing:'tag-amber',publishing:'tag-amber',published:'tag-green',scheduled:'tag-blue',retry:'tag-amber',cancelled:'tag-dim'}[s]||'tag-dim'; }
 function fmtTime(ts) { if(!ts) return '—'; return new Date(Number(ts)*1000).toLocaleTimeString('fa',{hour:'2-digit',minute:'2-digit'}); }
 function fmtDate(s) { if(!s) return '—'; return new Date(typeof s==='number'?s*1000:s).toLocaleString('fa',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
