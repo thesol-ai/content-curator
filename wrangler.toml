@@ -6,8 +6,8 @@ workers_dev = true
 # ── D1 Database ───────────────────────────────────────────────
 [[d1_databases]]
 binding = "DB"
-database_name = "content-curator-db"
-database_id = "00000000-0000-0000-0000-000000000000"  # ← با wrangler d1 create جایگزین کنید
+database_name = "content-curator-db-v2"
+database_id = "e0089316-ca39-45ce-b53f-21fa59a921f6"  # ← با wrangler d1 create جایگزین کنید
 migrations_dir = "migrations"
 
 # ── R2 Bucket (اختیاری — برای MEDIA_PROCESSING_MODE=r2_storage) ──────────
@@ -40,7 +40,7 @@ AI_MAX_CALLS_PER_DAY          = "10"
 AI_DAILY_TOKEN_BUDGET         = "50000"
 AI_MAX_CANDIDATES_PER_RUN     = "50"
 AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
-AI_MAX_OUTPUT_TOKENS          = "2048"
+AI_MAX_OUTPUT_TOKENS          = "4096"
 AI_MAX_RETRIES                = "1"
 
 # ── AI Translation ────────────────────────────────────────────
@@ -51,7 +51,7 @@ TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 
 # ── Telegram ──────────────────────────────────────────────────
-TELEGRAM_FINAL_PUBLISH_ENABLED     = "false"
+TELEGRAM_FINAL_PUBLISH_ENABLED     = "true"
 TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "false"
 TELEGRAM_PUBLISH_DUE_LIMIT         = "5"
 
@@ -85,8 +85,8 @@ workers_dev = true
 ENVIRONMENT   = "production"
 LOG_LEVEL     = "info"
 
-APIFY_CURATION_ENABLED      = "true"
-APIFY_CURATION_DRY_RUN      = "false"
+APIFY_CURATION_ENABLED      = "false"
+APIFY_CURATION_DRY_RUN      = "true"
 APIFY_MAX_ITEMS_PER_SOURCE  = "100"
 
 AI_SCORING_MODEL              = "claude-haiku-4-5-20251001"
@@ -95,15 +95,17 @@ AI_MAX_CALLS_PER_DAY          = "100"
 AI_DAILY_TOKEN_BUDGET         = "200000"
 AI_MAX_CANDIDATES_PER_RUN     = "50"
 AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
-AI_MAX_OUTPUT_TOKENS          = "2048"
+AI_MAX_OUTPUT_TOKENS          = "4096"
 AI_MAX_RETRIES                = "2"
 
 TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
+TRANSLATION_BATCH_SIZE = "5"
+TRANSLATION_DEBUG_ENABLED = "false"
 
 TELEGRAM_FINAL_PUBLISH_ENABLED     = "true"
-TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
-TELEGRAM_PUBLISH_DUE_LIMIT         = "10"
+TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "false"
+TELEGRAM_PUBLISH_DUE_LIMIT         = "5"
 
 # در production از binary_upload استفاده کنید
 MEDIA_PROCESSING_MODE      = "binary_upload"
@@ -118,8 +120,8 @@ STREAM_TRANSCODE_ENABLED = "false"
 
 [[env.production.d1_databases]]
 binding = "DB"
-database_name = "content-curator-db"
-database_id = "00000000-0000-0000-0000-000000000000"  # ← جایگزین کنید
+database_name = "content-curator-db-v2"
+database_id = "e0089316-ca39-45ce-b53f-21fa59a921f6"  # ← جایگزین کنید
 
 # [[env.production.r2_buckets]]
 # binding = "MEDIA_BUCKET"
