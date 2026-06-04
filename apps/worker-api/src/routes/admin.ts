@@ -6,9 +6,11 @@
 // - SQL همیشه parameterized است
 // ══════════════════════════════════════════════════════════════
 
-import type { Env } from '../types';
-import { runCuration } from '../services/curation-orchestrator';
+import type { Env, ChannelRow } from '../types';
+import { publishDueItems, publishQueueItem, runCuration } from '../services/curation-orchestrator';
 import { getStreamTranscodeState } from '../services/stream-config';
+import { getRuntimeConfig } from '../services/runtime-config';
+import { prepareTelegramCaptions } from '../services/telegram-publisher';
 
 // ID validation — فقط alphanumeric و underscore و dash
 function isValidId(id: string | undefined): id is string {
@@ -44,6 +46,25 @@ export async function handleAdmin(
     // ── Publish queue list ────────────────────────────────────
     if (path === '/internal/queue' && m === 'GET') {
       return listQueue(env, url);
+    }
+
+    // ── Manual publish due queue items ────────────────────────
+    if (path === '/internal/publish/due' && m === 'POST') {
+      return triggerPublishDue(req, env);
+    }
+
+    // ── Preview one queue item with the real Telegram formatter ─
+    if (path.startsWith('/internal/queue/') && path.endsWith('/preview') && m === 'GET') {
+      const queueId = pathSegment(path, 2);
+      if (!isValidId(queueId)) return err('invalid queue id', 400);
+      return previewQueueItem(env, queueId);
+    }
+
+    // ── Publish one queue item immediately ────────────────────
+    if (path.startsWith('/internal/queue/') && path.endsWith('/publish-now') && m === 'POST') {
+      const queueId = pathSegment(path, 2);
+      if (!isValidId(queueId)) return err('invalid queue id', 400);
+      return publishQueueItemNow(env, queueId);
     }
 
     // ── Media diagnostics ────────────────────────────────────
@@ -171,6 +192,12 @@ export async function handleAdmin(
       return createApifySource(req, env);
     }
 
+    if (path.startsWith('/internal/apify-sources/') && m === 'PATCH') {
+      const id = pathSegment(path, 2);
+      if (!isValidId(id)) return err('invalid id', 400);
+      return updateApifySource(req, env, id);
+    }
+
     if (path.startsWith('/internal/apify-sources/') && m === 'DELETE') {
       const id = pathSegment(path, 2);
       if (!isValidId(id)) return err('invalid id', 400);
@@ -207,7 +234,7 @@ async function listItems(env: Env, url: URL): Promise<Response> {
   const platform = url.searchParams.get('platform');
   const limit = clamp(num(url.searchParams.get('limit'), 50), 1, 200);
 
-  let q = 'SELECT id,run_id,category_id,platform,source_account,source_url,ai_score,ai_risk,ai_priority,risk_flags,status,created_at,text,media_count,media_expected_count,media_extracted_count,media_extraction_warnings FROM discovery_items WHERE status=?';
+  let q = 'SELECT id,run_id,category_id,platform,source_account,source_url,ai_score,ai_risk,ai_priority,risk_flags,status,reject_reason,created_at,text,media_count,media_expected_count,media_extracted_count,media_extraction_warnings,is_reply,is_retweet,is_quote FROM discovery_items WHERE status=?';
   const params: any[] = [status];
 
   if (category && isValidId(category)) { q += ' AND category_id=?'; params.push(category); }
@@ -239,6 +266,99 @@ async function listQueue(env: Env, url: URL): Promise<Response> {
 }
 
 
+async function previewQueueItem(env: Env, queueId: string): Promise<Response> {
+  const row = await env.DB
+    .prepare('SELECT * FROM publish_queue WHERE id=?')
+    .bind(queueId)
+    .first<any>();
+
+  if (!row) return err('queue_item_not_found', 404);
+
+  // Preview should work for paused channels too. Publish still enforces enabled/publish_enabled.
+  const channel = await env.DB
+    .prepare('SELECT * FROM channels WHERE id=?')
+    .bind(row.channel_id)
+    .first<ChannelRow>();
+
+  if (!channel) return err('channel_not_found', 404);
+
+  const mediaUrls: string[] = safeJsonParse(row.media_urls, []);
+  const thumbnailUrls: string[] = safeJsonParse(row.thumbnail_urls, []);
+  const mediaTypes: Array<'image' | 'video'> = safeJsonParse(row.media_types, []);
+
+  const captions = prepareTelegramCaptions({
+    chatId: channel.telegram_chat_id,
+    captionShort: row.caption_short ?? '',
+    captionFull: row.caption_full ?? '',
+    sourceUrl: row.source_url ?? '',
+    method: row.telegram_method ?? 'sendMessage',
+    language: row.language ?? channel.language,
+    channel,
+    mediaUrls,
+    thumbnailUrls,
+    mediaTypes,
+  });
+
+  const warnings: string[] = [];
+  if (captions.fullHtml.length > 4096) warnings.push('full_caption_exceeds_telegram_message_limit');
+  if (captions.mediaHtml.length > 1024) warnings.push('media_caption_exceeds_telegram_caption_limit');
+  if (captions.sendFullFollowUp) warnings.push('full_caption_will_be_sent_as_follow_up_message');
+
+  const rawSourceVisible = isRawSourceVisible(captions.fullHtml, row.source_url ?? '')
+    || isRawSourceVisible(captions.mediaHtml, row.source_url ?? '');
+  if (rawSourceVisible) warnings.push('raw_source_url_visible');
+
+  return ok({
+    queueId,
+    itemId: row.item_id,
+    channelId: row.channel_id,
+    status: row.status,
+    method: row.telegram_method ?? 'sendMessage',
+    language: row.language ?? channel.language,
+    sourceUrl: row.source_url ?? '',
+    channel: {
+      id: channel.id,
+      label: channel.channel_label ?? null,
+      telegram_chat_id: channel.telegram_chat_id,
+      publish_enabled: channel.publish_enabled,
+      enabled: channel.enabled,
+      source_enabled: channel.source_enabled,
+      signature_enabled: channel.signature_enabled,
+      channel_id_footer_enabled: channel.channel_id_footer_enabled,
+      disable_link_preview: channel.disable_link_preview,
+    },
+    formatting: {
+      source_visible: /<a\s+href=/i.test(captions.fullHtml),
+      signature_configured: isTruthy(channel.signature_enabled) && Boolean(String(channel.signature_text ?? '').trim()),
+      channel_footer_configured: isTruthy(channel.channel_id_footer_enabled),
+      disable_link_preview: channel.disable_link_preview !== 0,
+      full_truncated: captions.fullTruncated ?? false,
+      short_truncated: captions.shortTruncated ?? false,
+      full_footer_included: captions.fullFooterIncluded ?? false,
+      short_footer_included: captions.shortFooterIncluded ?? false,
+      full_footer_omitted: captions.fullFooterOmitted ?? false,
+      short_footer_omitted: captions.shortFooterOmitted ?? false,
+    },
+    captions: {
+      full_html: captions.fullHtml,
+      short_html: captions.shortHtml,
+      media_html: captions.mediaHtml,
+      send_full_follow_up: captions.sendFullFollowUp,
+      full_length: captions.fullHtml.length,
+      short_length: captions.shortHtml.length,
+      media_length: captions.mediaHtml.length,
+    },
+    telegram_preview: buildTelegramPreviewPayload(row.telegram_method ?? 'sendMessage', channel.telegram_chat_id, captions, mediaUrls, mediaTypes),
+    media: {
+      count: mediaUrls.length,
+      urls: mediaUrls,
+      thumbnail_urls: thumbnailUrls,
+      types: mediaTypes,
+    },
+    warnings,
+  });
+}
+
 async function listMedia(env: Env, url: URL): Promise<Response> {
   const itemId = url.searchParams.get('item');
   const status = url.searchParams.get('status');
@@ -266,14 +386,41 @@ async function triggerCuration(req: Request, env: Env): Promise<Response> {
   let body: any = {};
   try { body = await req.json(); } catch { /* no body */ }
 
-  // Override در runtime env برای این request
-  const overriddenEnv = Object.create(env) as Env;
-  if (body.dryRun === true)  (overriddenEnv as any).APIFY_CURATION_DRY_RUN  = 'true';
-  if (body.dryRun === false) (overriddenEnv as any).APIFY_CURATION_DRY_RUN  = 'false';
-  if (body.force  === true)  (overriddenEnv as any).APIFY_CURATION_ENABLED   = 'true';
-
-  const results = await runCuration(overriddenEnv);
+  const results = await runCuration(env, undefined, {
+    forceCurationEnabled: body.force === true,
+    curationDryRun: typeof body.dryRun === 'boolean' ? body.dryRun : undefined,
+  });
   return ok({ triggered: true, runs: results });
+}
+
+async function triggerPublishDue(req: Request, env: Env): Promise<Response> {
+  const body: any = await req.json().catch(() => ({}));
+  const limit = body?.limit === undefined
+    ? undefined
+    : clamp(num(String(body.limit), 3), 1, 100);
+
+  // Manual QA endpoint bypasses only the scheduler flag. It still uses the same
+  // queue/publisher path and Telegram publish remains protected by the env+DB
+  // kill switches in publishToTelegram/runtime-config.
+  const result = await publishDueItems(env, { limit, requireScheduler: false });
+  return ok(result);
+}
+
+async function publishQueueItemNow(env: Env, queueId: string): Promise<Response> {
+  const result = await publishQueueItem(env, queueId, {
+    allowedStatuses: ['scheduled', 'retry', 'failed'],
+    bypassSchedule: true,
+    respectRateLimits: true,
+  });
+  return ok({
+    queueId,
+    published: result.status === 'published',
+    status: result.status,
+    reason: result.reason ?? null,
+    telegramMessageId: result.telegramMessageId ?? null,
+    allMessageIds: result.allMessageIds ?? [],
+    error: result.error ?? null,
+  });
 }
 
 async function toggleSetting(req: Request, env: Env): Promise<Response> {
@@ -320,10 +467,16 @@ async function createCategory(req: Request, env: Env): Promise<Response> {
     try { langTargets = JSON.stringify(JSON.parse(body.language_targets)); } catch { /* use default */ }
   }
 
+  const categoryValidationError = validateCategoryEditorialInput(body);
+  if (categoryValidationError) return err(categoryValidationError, 400);
+
   await env.DB.prepare(`
     INSERT OR IGNORE INTO categories
-    (id, label, prompt_profile, custom_prompt, score_threshold, freshness_hours, media_mode, language_targets, enabled)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+    (id, label, prompt_profile, custom_prompt, score_threshold, freshness_hours, media_mode, language_targets,
+     editorial_guidelines, selection_criteria, rejection_criteria, required_context, avoid_duplicate_people_stories,
+     allow_replies, allow_retweets, allow_quotes, text_only_policy, min_score_for_text_only, min_score_for_media,
+     enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `).bind(
     body.id,
     String(body.label).slice(0, 100),
@@ -333,6 +486,17 @@ async function createCategory(req: Request, env: Env): Promise<Response> {
     Math.max(1, Number(body.freshness_hours) || 48),
     mediaMode,
     langTargets,
+    sanitizeLongText(body.editorial_guidelines, 3000),
+    sanitizeLongText(body.selection_criteria, 2000),
+    sanitizeLongText(body.rejection_criteria, 2000),
+    sanitizeLongText(body.required_context, 2000),
+    boolToInt(body.avoid_duplicate_people_stories, 1),
+    boolToInt(body.allow_replies, 0),
+    boolToInt(body.allow_retweets, 1),
+    boolToInt(body.allow_quotes, 1),
+    sanitizeTextOnlyPolicy(body.text_only_policy),
+    nullableScore(body.min_score_for_text_only),
+    nullableScore(body.min_score_for_media),
   ).run();
   return ok({ created: body.id });
 }
@@ -340,6 +504,9 @@ async function createCategory(req: Request, env: Env): Promise<Response> {
 async function updateCategory(req: Request, env: Env, id: string): Promise<Response> {
   const body: any = await req.json().catch(() => null);
   if (!body) return err('invalid json', 400);
+
+  const categoryValidationError = validateCategoryEditorialInput(body);
+  if (categoryValidationError) return err(categoryValidationError, 400);
 
   const fields: string[] = [];
   const vals: any[] = [];
@@ -367,6 +534,39 @@ async function updateCategory(req: Request, env: Env, id: string): Promise<Respo
   }
   if (body.custom_prompt !== undefined) {
     fields.push('custom_prompt=?'); vals.push(sanitizeLongText(body.custom_prompt, 4000));
+  }
+  if (body.editorial_guidelines !== undefined) {
+    fields.push('editorial_guidelines=?'); vals.push(sanitizeLongText(body.editorial_guidelines, 3000));
+  }
+  if (body.selection_criteria !== undefined) {
+    fields.push('selection_criteria=?'); vals.push(sanitizeLongText(body.selection_criteria, 2000));
+  }
+  if (body.rejection_criteria !== undefined) {
+    fields.push('rejection_criteria=?'); vals.push(sanitizeLongText(body.rejection_criteria, 2000));
+  }
+  if (body.required_context !== undefined) {
+    fields.push('required_context=?'); vals.push(sanitizeLongText(body.required_context, 2000));
+  }
+  if (body.avoid_duplicate_people_stories !== undefined) {
+    fields.push('avoid_duplicate_people_stories=?'); vals.push(boolToInt(body.avoid_duplicate_people_stories, 1));
+  }
+  if (body.allow_replies !== undefined) {
+    fields.push('allow_replies=?'); vals.push(boolToInt(body.allow_replies, 0));
+  }
+  if (body.allow_retweets !== undefined) {
+    fields.push('allow_retweets=?'); vals.push(boolToInt(body.allow_retweets, 1));
+  }
+  if (body.allow_quotes !== undefined) {
+    fields.push('allow_quotes=?'); vals.push(boolToInt(body.allow_quotes, 1));
+  }
+  if (body.text_only_policy !== undefined) {
+    fields.push('text_only_policy=?'); vals.push(sanitizeTextOnlyPolicy(body.text_only_policy));
+  }
+  if (body.min_score_for_text_only !== undefined) {
+    fields.push('min_score_for_text_only=?'); vals.push(nullableScore(body.min_score_for_text_only));
+  }
+  if (body.min_score_for_media !== undefined) {
+    fields.push('min_score_for_media=?'); vals.push(nullableScore(body.min_score_for_media));
   }
 
   if (fields.length === 0) return err('no valid fields to update', 400);
@@ -396,13 +596,37 @@ async function createChannel(req: Request, env: Env): Promise<Response> {
   const allowedWindows = validateWindowsJson(body.allowed_windows, '["08:00-23:59"]');
   const blockedWindows = validateWindowsJson(body.blocked_windows, '["00:00-08:00"]');
 
+  const formatValidationError = validateChannelFormattingInput(body);
+  if (formatValidationError) return err(formatValidationError, 400);
+  const editorialValidationError = validateChannelEditorialInput(body);
+  if (editorialValidationError) return err(editorialValidationError, 400);
+
+  const sourceLabelOverride = sanitizeLongText(body.source_label_override, 32);
+  const signatureText = sanitizeLongText(body.signature_text, 300);
+  const channelFooterText = sanitizeLongText(body.channel_id_footer_text, 80);
+  const semanticWindowHours = clamp(Number(body.semantic_dedupe_window_hours) || 24, 1, 168);
+  const maxPostsPerSourcePerDay = nullableBoundedInt(body.max_posts_per_source_per_day, 1, 50);
+  const editorialMode = sanitizeEditorialMode(body.editorial_mode);
+  const audienceLevel = sanitizeAudienceLevel(body.audience_level);
+  const captionStyle = sanitizeCaptionStyle(body.caption_style);
+  const creativityLevel = clampFloat(Number(body.creativity_level ?? 0.2), 0, 1);
+  const captionMaxChars = clamp(Number(body.caption_max_chars) || 1200, 280, 3500);
+  const captionShortMaxChars = clamp(Number(body.caption_short_max_chars) || 280, 80, 900);
+
   await env.DB.prepare(`
     INSERT OR IGNORE INTO channels
     (id, category_id, telegram_chat_id, language, timezone,
      allowed_windows, blocked_windows, max_per_day, max_per_hour, min_gap_minutes,
      custom_instructions, tone_profile, channel_label,
+     source_enabled, source_label_override,
+     signature_enabled, signature_text,
+     channel_id_footer_enabled, channel_id_footer_text,
+     disable_link_preview,
+     semantic_dedupe_enabled, semantic_dedupe_window_hours, max_posts_per_source_per_day,
+     editorial_mode, audience_level, caption_style, creativity_level,
+     caption_max_chars, caption_short_max_chars, language_prompt, terminology_notes, forbidden_phrases,
      publish_enabled, enabled)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
   `).bind(
     body.id, body.category_id, chatId, body.language,
     /^[\w/]{1,50}$/.test(body.timezone ?? '') ? body.timezone : 'Asia/Tehran',
@@ -414,6 +638,25 @@ async function createChannel(req: Request, env: Env): Promise<Response> {
     sanitizeLongText(body.custom_instructions, 2000),
     sanitizeToneProfile(body.tone_profile),
     sanitizeLongText(body.channel_label, 120),
+    boolToInt(body.source_enabled, 1),
+    sourceLabelOverride,
+    boolToInt(body.signature_enabled, 0),
+    signatureText,
+    boolToInt(body.channel_id_footer_enabled, 0),
+    channelFooterText,
+    boolToInt(body.disable_link_preview, 1),
+    boolToInt(body.semantic_dedupe_enabled, 1),
+    semanticWindowHours,
+    maxPostsPerSourcePerDay,
+    editorialMode,
+    audienceLevel,
+    captionStyle,
+    creativityLevel,
+    captionMaxChars,
+    captionShortMaxChars,
+    sanitizeLongText(body.language_prompt, 2000),
+    sanitizeLongText(body.terminology_notes, 2000),
+    sanitizeForbiddenPhrases(body.forbidden_phrases),
   ).run();
   return ok({ created: body.id });
 }
@@ -421,6 +664,11 @@ async function createChannel(req: Request, env: Env): Promise<Response> {
 async function updateChannel(req: Request, env: Env, id: string): Promise<Response> {
   const body: any = await req.json().catch(() => null);
   if (!body) return err('invalid json', 400);
+
+  const formatValidationError = validateChannelFormattingInput(body);
+  if (formatValidationError) return err(formatValidationError, 400);
+  const editorialValidationError = validateChannelEditorialInput(body);
+  if (editorialValidationError) return err(editorialValidationError, 400);
 
   const fields: string[] = [];
   const vals: any[] = [];
@@ -462,6 +710,63 @@ async function updateChannel(req: Request, env: Env, id: string): Promise<Respon
   if (body.channel_label !== undefined) {
     fields.push('channel_label=?'); vals.push(sanitizeLongText(body.channel_label, 120));
   }
+  if (body.source_enabled !== undefined) {
+    fields.push('source_enabled=?'); vals.push(boolToInt(body.source_enabled, 1));
+  }
+  if (body.source_label_override !== undefined) {
+    fields.push('source_label_override=?'); vals.push(sanitizeLongText(body.source_label_override, 32));
+  }
+  if (body.signature_enabled !== undefined) {
+    fields.push('signature_enabled=?'); vals.push(boolToInt(body.signature_enabled, 0));
+  }
+  if (body.signature_text !== undefined) {
+    fields.push('signature_text=?'); vals.push(sanitizeLongText(body.signature_text, 300));
+  }
+  if (body.channel_id_footer_enabled !== undefined) {
+    fields.push('channel_id_footer_enabled=?'); vals.push(boolToInt(body.channel_id_footer_enabled, 0));
+  }
+  if (body.channel_id_footer_text !== undefined) {
+    fields.push('channel_id_footer_text=?'); vals.push(sanitizeLongText(body.channel_id_footer_text, 80));
+  }
+  if (body.disable_link_preview !== undefined) {
+    fields.push('disable_link_preview=?'); vals.push(boolToInt(body.disable_link_preview, 1));
+  }
+  if (body.semantic_dedupe_enabled !== undefined) {
+    fields.push('semantic_dedupe_enabled=?'); vals.push(boolToInt(body.semantic_dedupe_enabled, 1));
+  }
+  if (body.semantic_dedupe_window_hours !== undefined) {
+    fields.push('semantic_dedupe_window_hours=?'); vals.push(clamp(Number(body.semantic_dedupe_window_hours) || 24, 1, 168));
+  }
+  if (body.max_posts_per_source_per_day !== undefined) {
+    fields.push('max_posts_per_source_per_day=?'); vals.push(nullableBoundedInt(body.max_posts_per_source_per_day, 1, 50));
+  }
+  if (body.editorial_mode !== undefined) {
+    fields.push('editorial_mode=?'); vals.push(sanitizeEditorialMode(body.editorial_mode));
+  }
+  if (body.audience_level !== undefined) {
+    fields.push('audience_level=?'); vals.push(sanitizeAudienceLevel(body.audience_level));
+  }
+  if (body.caption_style !== undefined) {
+    fields.push('caption_style=?'); vals.push(sanitizeCaptionStyle(body.caption_style));
+  }
+  if (body.creativity_level !== undefined) {
+    fields.push('creativity_level=?'); vals.push(clampFloat(Number(body.creativity_level), 0, 1));
+  }
+  if (body.caption_max_chars !== undefined) {
+    fields.push('caption_max_chars=?'); vals.push(clamp(Number(body.caption_max_chars) || 1200, 280, 3500));
+  }
+  if (body.caption_short_max_chars !== undefined) {
+    fields.push('caption_short_max_chars=?'); vals.push(clamp(Number(body.caption_short_max_chars) || 280, 80, 900));
+  }
+  if (body.language_prompt !== undefined) {
+    fields.push('language_prompt=?'); vals.push(sanitizeLongText(body.language_prompt, 2000));
+  }
+  if (body.terminology_notes !== undefined) {
+    fields.push('terminology_notes=?'); vals.push(sanitizeLongText(body.terminology_notes, 2000));
+  }
+  if (body.forbidden_phrases !== undefined) {
+    fields.push('forbidden_phrases=?'); vals.push(sanitizeForbiddenPhrases(body.forbidden_phrases));
+  }
 
   if (fields.length === 0) return err('no valid fields', 400);
   vals.push(id);
@@ -500,18 +805,95 @@ async function createApifySource(req: Request, env: Env): Promise<Response> {
   }
 
   if (!isValidId(body.category_id)) return err('invalid category_id', 400);
-  // Dataset ID فرمت Apify: حروف و اعداد
-  if (!/^[A-Za-z0-9]{8,30}$/.test(body.apify_dataset_id)) {
-    return err('invalid apify_dataset_id format', 400);
-  }
+  if (!isValidPlatform(body.platform)) return err('invalid platform', 400);
+
+  const datasetId = sanitizeApifyDatasetId(body.apify_dataset_id);
+  if (!datasetId) return err('invalid apify_dataset_id format', 400);
+
+  const actorId = body.apify_actor_id === undefined ? null : sanitizeApifyExternalId(body.apify_actor_id);
+  if (body.apify_actor_id !== undefined && body.apify_actor_id !== null && !actorId) return err('invalid apify_actor_id', 400);
+
+  const taskId = body.apify_task_id === undefined ? null : sanitizeApifyExternalId(body.apify_task_id);
+  if (body.apify_task_id !== undefined && body.apify_task_id !== null && !taskId) return err('invalid apify_task_id', 400);
+
+  const lastDatasetId = body.last_dataset_id === undefined || body.last_dataset_id === null
+    ? null
+    : sanitizeApifyDatasetId(body.last_dataset_id);
+  if (body.last_dataset_id !== undefined && body.last_dataset_id !== null && !lastDatasetId) return err('invalid last_dataset_id', 400);
+
+  const sourceConfig = sanitizeJsonObject(body.source_config, 4000);
+  if (sourceConfig === null) return err('invalid source_config', 400);
 
   const id = `src_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   await env.DB.prepare(`
-    INSERT INTO apify_sources (id, category_id, platform, apify_dataset_id, label, enabled)
-    VALUES (?, ?, ?, ?, ?, 1)
-  `).bind(id, body.category_id, body.platform, body.apify_dataset_id,
-    body.label ? String(body.label).slice(0, 100) : null).run();
+    INSERT INTO apify_sources
+    (id, category_id, platform, apify_dataset_id, label, enabled, apify_actor_id, apify_task_id, last_dataset_id, source_config)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+  `).bind(
+    id,
+    body.category_id,
+    body.platform,
+    datasetId,
+    sanitizeLongText(body.label, 100),
+    actorId,
+    taskId,
+    lastDatasetId,
+    sourceConfig,
+  ).run();
   return ok({ created: id });
+}
+
+async function updateApifySource(req: Request, env: Env, id: string): Promise<Response> {
+  const body: any = await req.json().catch(() => null);
+  if (!body) return err('invalid json', 400);
+
+  const fields: string[] = [];
+  const vals: any[] = [];
+
+  if (body.category_id !== undefined) {
+    if (!isValidId(body.category_id)) return err('invalid category_id', 400);
+    fields.push('category_id=?'); vals.push(body.category_id);
+  }
+  if (body.platform !== undefined) {
+    if (!isValidPlatform(body.platform)) return err('invalid platform', 400);
+    fields.push('platform=?'); vals.push(body.platform);
+  }
+  if (body.apify_dataset_id !== undefined) {
+    const datasetId = sanitizeApifyDatasetId(body.apify_dataset_id);
+    if (!datasetId) return err('invalid apify_dataset_id', 400);
+    fields.push('apify_dataset_id=?'); vals.push(datasetId);
+  }
+  if (body.label !== undefined) {
+    fields.push('label=?'); vals.push(sanitizeLongText(body.label, 100));
+  }
+  if (body.enabled !== undefined) {
+    fields.push('enabled=?'); vals.push(toBoolInt(body.enabled, 1));
+  }
+  if (body.apify_actor_id !== undefined) {
+    const actorId = body.apify_actor_id === null ? null : sanitizeApifyExternalId(body.apify_actor_id);
+    if (body.apify_actor_id !== null && !actorId) return err('invalid apify_actor_id', 400);
+    fields.push('apify_actor_id=?'); vals.push(actorId);
+  }
+  if (body.apify_task_id !== undefined) {
+    const taskId = body.apify_task_id === null ? null : sanitizeApifyExternalId(body.apify_task_id);
+    if (body.apify_task_id !== null && !taskId) return err('invalid apify_task_id', 400);
+    fields.push('apify_task_id=?'); vals.push(taskId);
+  }
+  if (body.last_dataset_id !== undefined) {
+    const lastDatasetId = body.last_dataset_id === null ? null : sanitizeApifyDatasetId(body.last_dataset_id);
+    if (body.last_dataset_id !== null && !lastDatasetId) return err('invalid last_dataset_id', 400);
+    fields.push('last_dataset_id=?'); vals.push(lastDatasetId);
+  }
+  if (body.source_config !== undefined) {
+    const sourceConfig = sanitizeJsonObject(body.source_config, 4000);
+    if (sourceConfig === null) return err('invalid source_config', 400);
+    fields.push('source_config=?'); vals.push(sourceConfig);
+  }
+
+  if (fields.length === 0) return err('no valid fields', 400);
+  vals.push(id);
+  await env.DB.prepare(`UPDATE apify_sources SET ${fields.join(',')} WHERE id=?`).bind(...vals).run();
+  return ok({ updated: id });
 }
 
 async function getStats(env: Env): Promise<Response> {
@@ -533,13 +915,7 @@ async function getStats(env: Env): Promise<Response> {
     safeFirst<{ calls: number; tokens: number }>(env, "SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens FROM ai_usage WHERE purpose='translation' AND status='success' AND created_at > datetime('now','-1 day')", { calls: 0, tokens: 0 }),
   ]);
 
-  const settings: Record<string, string> = {};
-  for (const row of settingsRows.results ?? []) settings[row.key] = row.value;
-
-  const curationEnabled = env.APIFY_CURATION_ENABLED === 'true' || settings.apify_curation_enabled === 'true';
-  const dryRunEnabled = env.APIFY_CURATION_DRY_RUN === 'true' || settings.apify_curation_dry_run === 'true';
-  const publishEnabled = env.TELEGRAM_FINAL_PUBLISH_ENABLED === 'true' || settings.telegram_publish_enabled === 'true';
-  const schedulerEnabled = env.TELEGRAM_PUBLISH_SCHEDULER_ENABLED === 'true';
+  const runtime = await getRuntimeConfig(env);
   const stream = getStreamTranscodeState(env);
 
   return ok({
@@ -564,10 +940,11 @@ async function getStats(env: Env): Promise<Response> {
       environment: env.ENVIRONMENT ?? 'unknown',
       media_processing_mode: env.MEDIA_PROCESSING_MODE ?? 'direct_url',
       media_group_partial_publish_enabled: env.MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED !== 'false',
-      curation_enabled: curationEnabled,
-      dry_run_enabled: dryRunEnabled,
-      telegram_publish_enabled: publishEnabled,
-      telegram_scheduler_enabled: schedulerEnabled,
+      maintenance_mode: runtime.maintenanceMode,
+      curation_enabled: runtime.curationEnabled,
+      dry_run_enabled: runtime.curationDryRun,
+      telegram_publish_enabled: runtime.telegramPublishEnabled,
+      telegram_scheduler_enabled: runtime.telegramSchedulerEnabled,
       ai_max_scoring_calls_per_day: parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0,
       ai_daily_token_budget: parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0,
       ai_max_output_tokens: parseInt(env.AI_MAX_OUTPUT_TOKENS || '0', 10) || 0,
@@ -631,6 +1008,265 @@ function sanitizeToneProfile(input: any): string {
   return /^[a-z_ -]{1,40}$/.test(raw) ? raw.slice(0, 40) : 'neutral';
 }
 
+
+function validateCategoryEditorialInput(body: any): string | null {
+  const limits: Array<[string, number]> = [
+    ['editorial_guidelines', 3000],
+    ['selection_criteria', 2000],
+    ['rejection_criteria', 2000],
+    ['required_context', 2000],
+  ];
+  for (const [key, max] of limits) {
+    if (body[key] === undefined || body[key] === null) continue;
+    const value = String(body[key]).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (value.length > max) return `${key}_too_long`;
+  }
+  if (body.text_only_policy !== undefined && !isAllowedTextOnlyPolicy(body.text_only_policy)) return 'invalid_text_only_policy';
+  for (const key of ['min_score_for_text_only', 'min_score_for_media']) {
+    if (body[key] === undefined || body[key] === null || body[key] === '') continue;
+    const n = Number(body[key]);
+    if (!Number.isFinite(n) || n < 0 || n > 100) return `${key}_out_of_range`;
+  }
+  return null;
+}
+
+function validateChannelEditorialInput(body: any): string | null {
+  const textLimits: Array<[string, number]> = [
+    ['language_prompt', 2000],
+    ['terminology_notes', 2000],
+  ];
+  for (const [key, max] of textLimits) {
+    if (body[key] === undefined || body[key] === null) continue;
+    const value = String(body[key]).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (value.length > max) return `${key}_too_long`;
+  }
+  if (body.editorial_mode !== undefined && !isAllowedEditorialMode(body.editorial_mode)) return 'invalid_editorial_mode';
+  if (body.audience_level !== undefined && !isAllowedAudienceLevel(body.audience_level)) return 'invalid_audience_level';
+  if (body.caption_style !== undefined && !isAllowedCaptionStyle(body.caption_style)) return 'invalid_caption_style';
+  if (body.creativity_level !== undefined && body.creativity_level !== null && body.creativity_level !== '') {
+    const n = Number(body.creativity_level);
+    if (!Number.isFinite(n) || n < 0 || n > 1) return 'creativity_level_out_of_range';
+  }
+  if (body.caption_max_chars !== undefined && body.caption_max_chars !== null && body.caption_max_chars !== '') {
+    const n = Number(body.caption_max_chars);
+    if (!Number.isFinite(n) || n < 280 || n > 3500) return 'caption_max_chars_out_of_range';
+  }
+  if (body.caption_short_max_chars !== undefined && body.caption_short_max_chars !== null && body.caption_short_max_chars !== '') {
+    const n = Number(body.caption_short_max_chars);
+    if (!Number.isFinite(n) || n < 80 || n > 900) return 'caption_short_max_chars_out_of_range';
+  }
+  if (body.forbidden_phrases !== undefined) {
+    const phrases = normalizeForbiddenPhrases(body.forbidden_phrases);
+    if (phrases.length > 30) return 'forbidden_phrases_too_many';
+    if (phrases.some(p => p.length > 80)) return 'forbidden_phrase_too_long';
+  }
+  return null;
+}
+
+function validateChannelFormattingInput(body: any): string | null {
+  const textLimits: Array<[string, number]> = [
+    ['source_label_override', 32],
+    ['signature_text', 300],
+    ['channel_id_footer_text', 80],
+  ];
+
+  for (const [key, max] of textLimits) {
+    if (body[key] === undefined || body[key] === null) continue;
+    const value = String(body[key]).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (value.length > max) return `${key}_too_long`;
+  }
+
+  if (body.semantic_dedupe_window_hours !== undefined && body.semantic_dedupe_window_hours !== null && body.semantic_dedupe_window_hours !== '') {
+    const n = Number(body.semantic_dedupe_window_hours);
+    if (!Number.isFinite(n) || n < 1 || n > 168) return 'semantic_dedupe_window_hours_out_of_range';
+  }
+
+  if (body.max_posts_per_source_per_day !== undefined && body.max_posts_per_source_per_day !== null && body.max_posts_per_source_per_day !== '') {
+    const n = Number(body.max_posts_per_source_per_day);
+    if (!Number.isFinite(n) || n < 1 || n > 50) return 'max_posts_per_source_per_day_out_of_range';
+  }
+
+  return null;
+}
+
+
+function isAllowedEditorialMode(value: any): boolean {
+  return ['news', 'educational', 'analytical', 'brief', 'explainer'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function sanitizeEditorialMode(input: any): string {
+  const raw = String(input ?? 'news').trim().toLowerCase();
+  return isAllowedEditorialMode(raw) ? raw : 'news';
+}
+
+function isAllowedAudienceLevel(value: any): boolean {
+  return ['beginner', 'intermediate', 'professional'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function sanitizeAudienceLevel(input: any): string {
+  const raw = String(input ?? 'intermediate').trim().toLowerCase();
+  return isAllowedAudienceLevel(raw) ? raw : 'intermediate';
+}
+
+function isAllowedCaptionStyle(value: any): boolean {
+  return ['contextual', 'straight_news', 'educational_summary', 'insight_first'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function sanitizeCaptionStyle(input: any): string {
+  const raw = String(input ?? 'contextual').trim().toLowerCase();
+  return isAllowedCaptionStyle(raw) ? raw : 'contextual';
+}
+
+function clampFloat(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizeForbiddenPhrases(input: any): string[] {
+  if (Array.isArray(input)) {
+    return input.map(x => String(x ?? '').trim()).filter(Boolean);
+  }
+  const raw = String(input ?? '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(x => String(x ?? '').trim()).filter(Boolean);
+  } catch { /* line/newline/comma format below */ }
+  return raw.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
+}
+
+function sanitizeForbiddenPhrases(input: any): string {
+  const phrases = normalizeForbiddenPhrases(input)
+    .map(phrase => phrase.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 30)
+    .map(phrase => phrase.slice(0, 80));
+  return JSON.stringify(phrases);
+}
+
+function isAllowedTextOnlyPolicy(value: any): boolean {
+  return ['allow', 'penalize', 'reject'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function sanitizeTextOnlyPolicy(input: any): 'allow' | 'penalize' | 'reject' {
+  const raw = String(input ?? 'allow').trim().toLowerCase();
+  return isAllowedTextOnlyPolicy(raw) ? raw as 'allow' | 'penalize' | 'reject' : 'allow';
+}
+
+function nullableScore(input: any): number | null {
+  if (input === undefined || input === null || input === '') return null;
+  const n = Number(input);
+  if (!Number.isFinite(n)) return null;
+  return clampFloat(n, 0, 100);
+}
+
+function boolToInt(input: any, defaultValue: 0 | 1): 0 | 1 {
+  if (input === undefined || input === null || input === '') return defaultValue;
+  if (input === true || input === 1 || input === '1') return 1;
+  if (input === false || input === 0 || input === '0') return 0;
+  const normalized = String(input).trim().toLowerCase();
+  if (normalized === 'true' || normalized === 'yes' || normalized === 'on') return 1;
+  if (normalized === 'false' || normalized === 'no' || normalized === 'off') return 0;
+  return defaultValue;
+}
+
+function nullableBoundedInt(input: any, min: number, max: number): number | null {
+  if (input === undefined || input === null || input === '') return null;
+  const n = Number(input);
+  if (!Number.isFinite(n)) return null;
+  return clamp(Math.floor(n), min, max);
+}
+
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback;
+  try { return JSON.parse(json) as T; } catch { return fallback; }
+}
+
+function isTruthy(value: unknown): boolean {
+  if (value === false || value === 0 || value === '0') return false;
+  if (typeof value === 'string' && value.toLowerCase() === 'false') return false;
+  return true;
+}
+
+function isRawSourceVisible(html: string, sourceUrl: string): boolean {
+  const raw = String(sourceUrl ?? '').trim();
+  if (!raw) return false;
+  const withoutHrefValues = String(html ?? '').replace(/href="[^"]*"/gi, '');
+  const candidates = [raw, raw.replace(/\/$/, '')].filter(Boolean);
+  return candidates.some(candidate => withoutHrefValues.includes(candidate));
+}
+
+function buildTelegramPreviewPayload(
+  method: string,
+  chatId: string,
+  captions: ReturnType<typeof prepareTelegramCaptions>,
+  mediaUrls: string[],
+  mediaTypes: Array<'image' | 'video'>,
+): object {
+  if (method === 'sendPhoto') {
+    return {
+      method: 'sendPhoto',
+      payload: {
+        chat_id: chatId,
+        photo: mediaUrls[0] ?? '',
+        caption: captions.mediaHtml,
+        parse_mode: 'HTML',
+      },
+      follow_up: captions.sendFullFollowUp ? buildSendMessagePreview(chatId, captions.fullHtml) : null,
+    };
+  }
+
+  if (method === 'sendVideo') {
+    return {
+      method: 'sendVideo',
+      payload: {
+        chat_id: chatId,
+        video: mediaUrls[0] ?? '',
+        caption: captions.mediaHtml,
+        parse_mode: 'HTML',
+        supports_streaming: true,
+      },
+      follow_up: captions.sendFullFollowUp ? buildSendMessagePreview(chatId, captions.fullHtml) : null,
+    };
+  }
+
+  if (method === 'sendMediaGroup') {
+    const media = mediaUrls.map((url, i) => {
+      const type = mediaTypes[i] === 'video' ? 'video' : 'photo';
+      const entry: any = {
+        type,
+        media: url,
+        ...(type === 'video' ? { supports_streaming: true } : {}),
+      };
+      if (i === 0) {
+        entry.caption = captions.mediaHtml;
+        entry.parse_mode = 'HTML';
+      }
+      return entry;
+    });
+    return {
+      method: 'sendMediaGroup',
+      payload: { chat_id: chatId, media },
+      follow_up: captions.sendFullFollowUp ? buildSendMessagePreview(chatId, captions.fullHtml) : null,
+    };
+  }
+
+  return {
+    method: 'sendMessage',
+    payload: buildSendMessagePreview(chatId, captions.fullHtml),
+    follow_up: null,
+  };
+}
+
+function buildSendMessagePreview(chatId: string, text: string): object {
+  return {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+  };
+}
+
 function ok(data: object): Response {
   return Response.json({ ok: true, ...data });
 }
@@ -646,4 +1282,36 @@ function num(s: string | null, def: number): number {
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+function isValidPlatform(value: any): value is string {
+  return ['x', 'instagram', 'linkedin', 'rss'].includes(String(value));
+}
+
+function sanitizeApifyDatasetId(value: any): string | null {
+  const v = String(value ?? '').trim();
+  return /^[A-Za-z0-9]{8,40}$/.test(v) ? v : null;
+}
+
+function sanitizeApifyExternalId(value: any): string | null {
+  const v = String(value ?? '').trim();
+  return /^[A-Za-z0-9_~./-]{1,120}$/.test(v) ? v : null;
+}
+
+function sanitizeJsonObject(input: any, maxLen: number): string | null {
+  if (input === undefined || input === null || input === '') return '{}';
+  try {
+    const parsed = typeof input === 'string' ? JSON.parse(input) : input;
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return null;
+    const text = JSON.stringify(parsed);
+    return text.length <= maxLen ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function toBoolInt(value: any, defaultValue: 0 | 1 = 0): 0 | 1 {
+  if (value === true || value === 'true' || value === 1 || value === '1') return 1;
+  if (value === false || value === 'false' || value === 0 || value === '0') return 0;
+  return defaultValue;
 }

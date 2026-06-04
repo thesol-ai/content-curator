@@ -14,6 +14,17 @@ interface FetchCall {
   init?: RequestInit;
 }
 
+
+function settingsDb(settings: Record<string, string> = { telegram_publish_enabled: 'true' }): any {
+  return {
+    prepare: vi.fn(() => ({
+      all: vi.fn(async () => ({
+        results: Object.entries(settings).map(([key, value]) => ({ key, value })),
+      })),
+    })),
+  };
+}
+
 function env(overrides: Partial<Env> = {}): Env {
   return {
     TELEGRAM_FINAL_PUBLISH_ENABLED: 'true',
@@ -21,7 +32,7 @@ function env(overrides: Partial<Env> = {}): Env {
     MEDIA_PROCESSING_MODE: 'direct_url',
     MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED: 'true',
     STREAM_TRANSCODE_ENABLED: 'false',
-    DB: {},
+    DB: settingsDb(),
     ...overrides,
   } as Env;
 }

@@ -135,6 +135,12 @@ export interface NormalizedItem {
   engagementShares: number;
   engagementViews: number;
   mediaUrlExpiresSoon: boolean;
+  /** X/Twitter or platform reply marker. Used for deterministic category policy. */
+  isReply?: boolean;
+  /** Retweet/repost marker when exposed by the source platform. */
+  isRetweet?: boolean;
+  /** Quote-post marker when exposed by the source platform. */
+  isQuote?: boolean;
 }
 
 // ── AI Gate output ────────────────────────────────────────────
@@ -167,6 +173,17 @@ export interface CategoryRow {
   freshness_hours: number;
   media_mode: 'preferred' | 'optional' | 'disabled';
   language_targets: string;
+  editorial_guidelines: string | null;
+  selection_criteria: string | null;
+  rejection_criteria: string | null;
+  required_context: string | null;
+  avoid_duplicate_people_stories: number;
+  allow_replies?: number;
+  allow_retweets?: number;
+  allow_quotes?: number;
+  text_only_policy?: 'allow' | 'penalize' | 'reject';
+  min_score_for_text_only?: number | null;
+  min_score_for_media?: number | null;
   enabled: number;
 }
 
@@ -187,6 +204,27 @@ export interface ChannelRow {
   custom_instructions: string | null;
   tone_profile: string;
   channel_label: string | null;
+  /** اگر 0 باشد، source_url فقط برای audit در DB می‌ماند و در Telegram نمایش داده نمی‌شود. */
+  source_enabled: number;
+  source_label_override: string | null;
+  signature_enabled: number;
+  signature_text: string | null;
+  channel_id_footer_enabled: number;
+  channel_id_footer_text: string | null;
+  /** Default 1: Telegram link previews should stay disabled unless explicitly changed later. */
+  disable_link_preview: number;
+  semantic_dedupe_enabled: number;
+  semantic_dedupe_window_hours: number;
+  max_posts_per_source_per_day: number | null;
+  editorial_mode: string;
+  audience_level: string;
+  caption_style: string;
+  creativity_level: number;
+  caption_max_chars: number;
+  caption_short_max_chars: number;
+  language_prompt: string | null;
+  terminology_notes: string | null;
+  forbidden_phrases: string | null;
 }
 
 export interface ApifySourceRow {
@@ -196,6 +234,10 @@ export interface ApifySourceRow {
   apify_dataset_id: string;
   label: string | null;
   enabled: number;
+  apify_actor_id: string | null;
+  apify_task_id: string | null;
+  last_dataset_id: string | null;
+  source_config: string | null;
 }
 
 export interface DiscoveryMediaRow {

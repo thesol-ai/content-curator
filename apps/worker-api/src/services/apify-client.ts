@@ -97,7 +97,42 @@ function normalizeTwitterItem(raw: any): NormalizedItem | null {
     engagementShares: safeInt(raw.retweetCount ?? raw.retweet_count ?? raw.retweets ?? raw.public_metrics?.retweet_count ?? 0),
     engagementViews:  safeInt(raw.viewCount ?? raw.views?.count ?? raw.public_metrics?.impression_count ?? 0),
     mediaUrlExpiresSoon: false,
+    isReply: isTwitterReply(raw),
+    isRetweet: isTwitterRetweet(raw),
+    isQuote: isTwitterQuote(raw),
   });
+}
+
+function isTwitterReply(raw: any): boolean {
+  return boolish(
+    raw.isReply,
+    raw.is_reply,
+    raw.reply,
+    raw.is_reply_status,
+    raw.legacy?.is_reply
+  ) || Boolean(firstString(
+    raw.inReplyToStatusId,
+    raw.in_reply_to_status_id,
+    raw.in_reply_to_status_id_str,
+    raw.inReplyToTweetId,
+    raw.in_reply_to_tweet_id,
+    raw.replyToTweetId,
+    raw.conversation_id && raw.conversation_id !== raw.id_str && raw.conversation_id !== raw.id
+      ? raw.conversation_id
+      : undefined
+  ));
+}
+
+function isTwitterRetweet(raw: any): boolean {
+  const type = String(raw.type ?? raw.tweetType ?? raw.legacy?.retweeted_status_result?.result?.__typename ?? '').toLowerCase();
+  return boolish(raw.isRetweet, raw.is_retweet, raw.retweeted, raw.isRetweeted) ||
+    type.includes('retweet') ||
+    Boolean(raw.retweeted_status ?? raw.retweetedStatus ?? raw.retweeted_tweet ?? raw.retweetedTweet);
+}
+
+function isTwitterQuote(raw: any): boolean {
+  return boolish(raw.isQuote, raw.is_quote, raw.isQuoted, raw.quoted) ||
+    Boolean(raw.quoted_status ?? raw.quotedStatus ?? raw.quoted_tweet ?? raw.quotedTweet ?? raw.quotedTweetId ?? raw.quoted_status_id);
 }
 
 function extractTwitterMedia(raw: any): ExtractionResult {
@@ -500,6 +535,9 @@ function compactNormalized(item: NormalizedItem): NormalizedItem {
     ...item,
     expectedMediaCount: item.expectedMediaCount ?? item.media.length,
     mediaWarnings: warnings,
+    isReply: item.isReply === true,
+    isRetweet: item.isRetweet === true,
+    isQuote: item.isQuote === true,
   };
 }
 
@@ -530,6 +568,18 @@ function firstArray(...values: any[]): any[] {
     if (Array.isArray(value)) return value;
   }
   return [];
+}
+
+function boolish(...values: any[]): boolean {
+  for (const value of values) {
+    if (value === true || value === 1 || value === '1') return true;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', 'yes', 'y', 'on'].includes(normalized)) return true;
+      if (['false', 'no', 'n', 'off', '0'].includes(normalized)) continue;
+    }
+  }
+  return false;
 }
 
 function stripQuery(url: string): string {

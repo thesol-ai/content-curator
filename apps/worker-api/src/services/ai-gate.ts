@@ -198,8 +198,11 @@ async function runScoring(
     }));
   }
 
+  const scoringEditorialPolicy = buildScoringEditorialPolicy(category);
+
   const system = [
     `You are an expert content curator. ${profile}`,
+    scoringEditorialPolicy,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
     '',
@@ -209,6 +212,7 @@ async function runScoring(
     'publish_priority: "breaking"|"high"|"normal"|"low"',
     'risk_level: "low"|"medium"|"high" — set publish=false if high risk',
     'topic_fingerprint: short slug for deduplication (e.g. "btc-etf-approval-sec")',
+    'Use source metadata strictly: replies, retweets/reposts, quotes, and text-only posts should be scored according to the category policy below.',
     'Do NOT include translations here.',
     'Return only the JSON object, nothing else.',
   ].join('\n');
@@ -224,6 +228,10 @@ async function runScoring(
     likes: it.engagementLikes,
     shares: it.engagementShares,
     has_media: it.media.length > 0,
+    media_count: it.media.length,
+    is_reply: it.isReply === true,
+    is_retweet: it.isRetweet === true,
+    is_quote: it.isQuote === true,
   }));
 
   const user = [
@@ -417,7 +425,7 @@ async function runTranslation(
 
   if (items.length === 0) return result;
 
-  const system = buildTranslationSystem(cfg.translationTargets, category.id, category.label);
+  const system = buildTranslationSystem(cfg.translationTargets, category);
   const user = buildTranslationUser(items, cfg.translationTargets, cfg.maxTextChars);
 
   let responseText = '';
@@ -458,8 +466,8 @@ async function runTranslation(
       const t = p.translations?.[target.key];
       if (t && (t.caption_short || t.caption_full)) {
         translations[target.key] = {
-          captionShort: String(t.caption_short ?? '').slice(0, 900),
-          captionFull: String(t.caption_full ?? '').slice(0, 3500),
+          captionShort: String(t.caption_short ?? '').slice(0, target.captionShortMaxChars),
+          captionFull: String(t.caption_full ?? '').slice(0, target.captionMaxChars),
           hashtags: Array.isArray(t.hashtags)
             ? t.hashtags.filter((h: any) => typeof h === 'string').slice(0, 10)
             : [],
@@ -480,13 +488,86 @@ async function runTranslation(
   return result;
 }
 
-interface TranslationTarget {
+export interface TranslationTarget {
   key: string;
   language: string;
   label: string;
   toneProfile: string;
   customInstructions: string;
   channelId?: string;
+  editorialMode: string;
+  audienceLevel: string;
+  captionStyle: string;
+  creativityLevel: number;
+  captionMaxChars: number;
+  captionShortMaxChars: number;
+  languagePrompt: string;
+  terminologyNotes: string;
+  forbiddenPhrases: string[];
+}
+
+
+function buildScoringEditorialPolicy(category: CategoryRow): string {
+  const textOnlyPolicy = sanitizeTextOnlyPolicy(category.text_only_policy);
+  const lines = [
+    sanitizeInstruction(category.selection_criteria, 2000) ? `Selection criteria: ${sanitizeInstruction(category.selection_criteria, 2000)}` : '',
+    sanitizeInstruction(category.rejection_criteria, 2000) ? `Rejection criteria: ${sanitizeInstruction(category.rejection_criteria, 2000)}` : '',
+    sanitizeInstruction(category.required_context, 2000) ? `Standalone context requirement: ${sanitizeInstruction(category.required_context, 2000)}` : '',
+    category.avoid_duplicate_people_stories !== 0
+      ? 'Avoid selecting multiple near-duplicate posts about the same person/topic in the same run unless the later item adds clearly new information.'
+      : '',
+    intSetting(category.allow_replies, 0) === 0 ? 'Reply policy: reject or heavily down-rank replies unless they are independently understandable; deterministic pre-filter may reject replies before AI.' : 'Reply policy: replies may be considered if they are valuable and standalone.',
+    intSetting(category.allow_retweets, 1) === 0 ? 'Retweet/repost policy: do not select retweets/reposts.' : 'Retweet/repost policy: retweets/reposts are allowed if editorially valuable.',
+    intSetting(category.allow_quotes, 1) === 0 ? 'Quote policy: do not select quote posts unless category policy changes.' : 'Quote policy: quote posts are allowed if the quoted context is clear.',
+    `Text-only policy: ${textOnlyPolicy}. ${textOnlyPolicy === 'penalize' ? 'Text-only posts need a stronger news/educational reason than posts with media.' : textOnlyPolicy === 'reject' ? 'Text-only posts are rejected before AI when media is expected.' : 'Text-only posts are allowed when valuable.'}`,
+    category.min_score_for_text_only != null ? `Extra score floor for text-only items: ${category.min_score_for_text_only}.` : '',
+    category.min_score_for_media != null ? `Extra score floor for media items: ${category.min_score_for_media}.` : '',
+  ].filter(Boolean);
+  return lines.length ? lines.join('\n') : '';
+}
+
+function intSetting(value: unknown, defaultValue: 0 | 1): 0 | 1 {
+  return value === 0 || value === '0' || value === false ? 0 : value === 1 || value === '1' || value === true ? 1 : defaultValue;
+}
+
+function sanitizeTextOnlyPolicy(value: string | null | undefined): 'allow' | 'penalize' | 'reject' {
+  const raw = String(value ?? 'allow').trim().toLowerCase();
+  return raw === 'penalize' || raw === 'reject' ? raw : 'allow';
+}
+
+function sanitizeEditorialMode(value: string | null | undefined): string {
+  const raw = String(value ?? 'news').trim().toLowerCase();
+  return ['news', 'educational', 'analytical', 'brief', 'explainer'].includes(raw) ? raw : 'news';
+}
+
+function sanitizeAudienceLevel(value: string | null | undefined): string {
+  const raw = String(value ?? 'intermediate').trim().toLowerCase();
+  return ['beginner', 'intermediate', 'professional'].includes(raw) ? raw : 'intermediate';
+}
+
+function sanitizeCaptionStyle(value: string | null | undefined): string {
+  const raw = String(value ?? 'contextual').trim().toLowerCase();
+  return ['contextual', 'straight_news', 'educational_summary', 'insight_first'].includes(raw) ? raw : 'contextual';
+}
+
+function clampNumber(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function parseForbiddenPhrases(value: string | null | undefined): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(x => String(x ?? '').trim()).filter(Boolean).slice(0, 30);
+  } catch { /* comma/newline below */ }
+  return raw.split(/[\n,]/).map(x => x.trim()).filter(Boolean).slice(0, 30);
 }
 
 function buildTranslationTargets(langs: string[], channels: ChannelRow[]): TranslationTarget[] {
@@ -501,6 +582,15 @@ function buildTranslationTargets(langs: string[], channels: ChannelRow[]): Trans
       label: LANG_NAMES[lang] ?? lang,
       toneProfile: 'neutral',
       customInstructions: '',
+      editorialMode: 'news',
+      audienceLevel: 'intermediate',
+      captionStyle: 'contextual',
+      creativityLevel: 0.2,
+      captionMaxChars: 1200,
+      captionShortMaxChars: 280,
+      languagePrompt: '',
+      terminologyNotes: '',
+      forbiddenPhrases: [],
     });
     seen.add(lang);
   }
@@ -512,7 +602,21 @@ function buildTranslationTargets(langs: string[], channels: ChannelRow[]): Trans
     const tone = sanitizeToneProfile(ch.tone_profile);
     const custom = sanitizeInstruction(ch.custom_instructions);
     const label = sanitizeInstruction(ch.channel_label);
-    const isChannelSpecific = Boolean(custom || label || tone !== 'neutral');
+    const editorialMode = sanitizeEditorialMode(ch.editorial_mode);
+    const audienceLevel = sanitizeAudienceLevel(ch.audience_level);
+    const captionStyle = sanitizeCaptionStyle(ch.caption_style);
+    const creativityLevel = clampNumber(Number(ch.creativity_level ?? 0.2), 0, 1);
+    const captionMaxChars = clampInt(Number(ch.caption_max_chars ?? 1200), 280, 3500);
+    const captionShortMaxChars = clampInt(Number(ch.caption_short_max_chars ?? 280), 80, 900);
+    const languagePrompt = sanitizeInstruction(ch.language_prompt, 2000);
+    const terminologyNotes = sanitizeInstruction(ch.terminology_notes, 2000);
+    const forbiddenPhrases = parseForbiddenPhrases(ch.forbidden_phrases);
+    const isChannelSpecific = Boolean(
+      custom || label || tone !== 'neutral' ||
+      editorialMode !== 'news' || audienceLevel !== 'intermediate' || captionStyle !== 'contextual' ||
+      creativityLevel !== 0.2 || captionMaxChars !== 1200 || captionShortMaxChars !== 280 ||
+      languagePrompt || terminologyNotes || forbiddenPhrases.length > 0
+    );
     if (!isChannelSpecific) continue;
 
     const key = channelTranslationKey(ch.id);
@@ -524,6 +628,15 @@ function buildTranslationTargets(langs: string[], channels: ChannelRow[]): Trans
       toneProfile: tone,
       customInstructions: custom,
       channelId: ch.id,
+      editorialMode,
+      audienceLevel,
+      captionStyle,
+      creativityLevel,
+      captionMaxChars,
+      captionShortMaxChars,
+      languagePrompt,
+      terminologyNotes,
+      forbiddenPhrases,
     });
     seen.add(key);
   }
@@ -540,34 +653,52 @@ function sanitizeToneProfile(value: string | null | undefined): string {
   return /^[a-z_ -]{1,40}$/.test(tone) ? tone : 'neutral';
 }
 
-function sanitizeInstruction(value: string | null | undefined): string {
+function sanitizeInstruction(value: string | null | undefined, maxLen = 600): string {
   return String(value ?? '')
     .replace(/[\u0000-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 600);
+    .slice(0, maxLen);
 }
 
-function buildTranslationSystem(targets: TranslationTarget[], categoryId: string, categoryLabel: string): string {
+export function buildTranslationSystem(targets: TranslationTarget[], category: CategoryRow): string {
   const targetLines = targets.map(t => {
     const parts = [
       `key=${JSON.stringify(t.key)}`,
       `language=${LANG_NAMES[t.language] ?? t.language}`,
       `tone=${t.toneProfile}`,
+      `editorial_mode=${t.editorialMode}`,
+      `audience_level=${t.audienceLevel}`,
+      `caption_style=${t.captionStyle}`,
+      `creativity=${t.creativityLevel.toFixed(2)}`,
+      `caption_short_max_chars=${t.captionShortMaxChars}`,
+      `caption_full_max_chars=${t.captionMaxChars}`,
     ];
     if (t.channelId) parts.push(`channel_id=${t.channelId}`);
     if (t.label) parts.push(`channel_label=${JSON.stringify(t.label)}`);
     if (t.customInstructions) parts.push(`instructions=${JSON.stringify(t.customInstructions)}`);
+    if (t.languagePrompt) parts.push(`language_prompt=${JSON.stringify(t.languagePrompt)}`);
+    if (t.terminologyNotes) parts.push(`terminology_notes=${JSON.stringify(t.terminologyNotes)}`);
+    if (t.forbiddenPhrases.length) parts.push(`forbidden_phrases=${JSON.stringify(t.forbiddenPhrases)}`);
     return `- ${parts.join('; ')}`;
   }).join('\n');
 
   const exampleTranslations = targets.slice(0, Math.max(1, Math.min(2, targets.length)))
-    .map(t => `"${t.key}":{"caption_short":"≤900 chars","caption_full":"≤3500 chars","hashtags":[]}`)
+    .map(t => `"${t.key}":{"caption_short":"≤${t.captionShortMaxChars} chars","caption_full":"≤${t.captionMaxChars} chars","hashtags":[]}`)
     .join(',');
 
+  const categoryNotes = [
+    sanitizeInstruction(category.editorial_guidelines, 3000) ? `Category editorial guidelines: ${sanitizeInstruction(category.editorial_guidelines, 3000)}` : '',
+    sanitizeInstruction(category.required_context, 2000) ? `Required context to add when useful: ${sanitizeInstruction(category.required_context, 2000)}` : '',
+  ].filter(Boolean).join('\n');
+
   return [
-    `You are an expert content curator and Telegram channel manager for category "${categoryId}" (${categoryLabel}).`,
+    `You are an expert content curator and Telegram channel editor for category "${category.id}" (${category.label}).`,
     'For each item, write Telegram-ready posts for every translation target below.',
+    'Rewrite for the target audience. Do not produce literal tweet translations.',
+    'Make the post feel like a real channel post: news, educational, or analytical based on the target settings.',
+    'When a person/entity is central and may not be obvious to a general audience, add concise context on first mention (e.g. role or why they matter).',
+    categoryNotes,
     '',
     'Translation targets. The JSON translations object MUST use these exact keys:',
     targetLines,
@@ -576,16 +707,20 @@ function buildTranslationSystem(targets: TranslationTarget[], categoryId: string
     `{"items":[{"url":"...","translations":{${exampleTranslations}}}]}`,
     '',
     'Strict rules:',
-    '- caption_short: engaging 1-2 sentence summary for media caption (max 900 chars)',
-    '- caption_full: complete post with context and source attribution at the end (max 3500 chars)',
+    '- caption_short: concise, engaging 1-2 sentence summary for media captions; respect each target max chars',
+    '- caption_full: complete Telegram post with context; respect each target max chars',
     '- Persian (fa) captions must be in natural, fluent Farsi — NOT a literal translation',
-    '- hashtags: 3-5 relevant hashtags per target, no # prefix needed',
+    '- Arabic (ar) captions must be natural Arabic, not word-for-word translation',
+    '- Avoid dry formulas like "X said in a new post" unless that framing is editorially necessary',
+    '- Do NOT include source URLs or raw links. The publisher adds source attribution separately.',
+    '- Do NOT include HTML tags — plain text only',
     '- Do NOT invent facts not present in the source text',
-    '- Do NOT use HTML tags — plain text only',
-    '- Include source URL at the end of caption_full',
+    '- Do NOT provide financial/investment advice',
+    '- Respect forbidden_phrases for each target',
+    '- hashtags: 3-5 relevant hashtags per target, no # prefix needed',
     '- Every translation target key listed above must be included for every item',
     'Return only the JSON object, nothing else.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarget[], maxChars: number): string {
@@ -596,6 +731,9 @@ function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarge
     text: it.text.slice(0, maxChars),
     has_media: it.media.length > 0,
     media_count: it.media.length,
+    is_reply: it.isReply === true,
+    is_retweet: it.isRetweet === true,
+    is_quote: it.isQuote === true,
   }));
 
   return [
@@ -711,7 +849,7 @@ function mockResult(item: NormalizedItem, category: CategoryRow, targets: Transl
   for (const target of targets) {
     translations[target.key] = {
       captionShort: `[DRY RUN ${target.key}] ${item.text.slice(0, 80)}`,
-      captionFull: `[DRY RUN — ${category.id} — ${target.key}]\n${item.text.slice(0, 400)}\n\nمنبع: ${item.sourceUrl}`,
+      captionFull: `[DRY RUN — ${category.id} — ${target.key}]\n${item.text.slice(0, 400)}`,
       hashtags: ['#dryrun'],
     };
   }

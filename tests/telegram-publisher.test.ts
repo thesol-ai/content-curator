@@ -1,10 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { publishToTelegram } from '../apps/worker-api/src/services/telegram-publisher';
-import type { Env } from '../apps/worker-api/src/types';
+import type { Env, ChannelRow } from '../apps/worker-api/src/types';
 
 interface FetchCall {
   url: string;
   init?: RequestInit;
+}
+
+
+function settingsDb(settings: Record<string, string> = { telegram_publish_enabled: 'true' }): any {
+  return {
+    prepare: vi.fn(() => ({
+      all: vi.fn(async () => ({
+        results: Object.entries(settings).map(([key, value]) => ({ key, value })),
+      })),
+    })),
+  };
 }
 
 function env(overrides: Partial<Env> = {}): Env {
@@ -13,9 +24,40 @@ function env(overrides: Partial<Env> = {}): Env {
     TELEGRAM_BOT_TOKEN: '123:test-token',
     MEDIA_PROCESSING_MODE: 'direct_url',
     MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED: 'true',
-    DB: {},
+    DB: settingsDb(),
     ...overrides,
   } as Env;
+}
+
+function channel(overrides: Partial<ChannelRow> = {}): ChannelRow {
+  return {
+    id: 'channel_fa',
+    category_id: 'crypto',
+    telegram_chat_id: '@channel',
+    language: 'fa',
+    timezone: 'Asia/Tehran',
+    allowed_windows: '[]',
+    blocked_windows: '[]',
+    max_per_day: 10,
+    max_per_hour: 2,
+    min_gap_minutes: 30,
+    publish_enabled: 1,
+    enabled: 1,
+    custom_instructions: null,
+    tone_profile: 'neutral',
+    channel_label: null,
+    source_enabled: 1,
+    source_label_override: null,
+    signature_enabled: 0,
+    signature_text: null,
+    channel_id_footer_enabled: 0,
+    channel_id_footer_text: null,
+    disable_link_preview: 1,
+    semantic_dedupe_enabled: 1,
+    semantic_dedupe_window_hours: 24,
+    max_posts_per_source_per_day: null,
+    ...overrides,
+  };
 }
 
 function jsonBody(call: FetchCall): any {
@@ -49,8 +91,37 @@ describe('telegram-publisher baseline', () => {
       chat_id: '@channel',
       text: 'hello &lt;b&gt;world&lt;/b&gt; &amp; friends',
       parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
     });
   });
+
+  it('formats channel messages with linked source label and no raw visible source URL', async () => {
+    const calls: FetchCall[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return Response.json({ ok: true, result: { message_id: 11 } });
+    }));
+
+    const sourceUrl = 'https://x.com/VitalikButerin/status/123?ref=raw';
+    await publishToTelegram(env(), {
+      chatId: '@channel',
+      captionShort: 'short',
+      captionFull: `یک متن مهم
+
+منبع: ${sourceUrl}`,
+      sourceUrl,
+      method: 'sendMessage',
+      language: 'fa',
+      channel: channel(),
+      mediaUrls: [],
+    });
+
+    const text = jsonBody(calls[0]).text;
+    expect(text).toContain('<a href="https://x.com/VitalikButerin/status/123?ref=raw">منبع</a>');
+    expect(text.replace(/href="[^"]+"/g, '')).not.toContain('https://x.com/VitalikButerin/status/123');
+    expect(jsonBody(calls[0]).link_preview_options).toEqual({ is_disabled: true });
+  });
+
 
   it('sends direct media group and follow-up full caption when caption is longer than Telegram media caption limit', async () => {
     const calls: FetchCall[] = [];
@@ -142,6 +213,8 @@ describe('telegram-publisher baseline', () => {
       captionFull: 'video full',
       sourceUrl: 'https://source.test/video-post?x=1&y=2',
       method: 'sendVideo',
+      language: 'en',
+      channel: channel({ language: 'en' }),
       mediaUrls: ['https://cdn.test/video.mov'],
     });
 
@@ -152,7 +225,10 @@ describe('telegram-publisher baseline', () => {
       expect.stringContaining('/sendDocument'),
       expect.stringContaining('/sendMessage'),
     ]);
-    expect(jsonBody(calls[2]).text).toContain('https://source.test/video-post?x=1&amp;y=2');
+    const fallbackText = jsonBody(calls[2]).text;
+    expect(fallbackText).toContain('<a href="https://source.test/video-post?x=1&amp;y=2">Source</a>');
+    expect(fallbackText.replace(/href="[^"]+"/g, '')).not.toContain('https://source.test/video-post');
+    expect(jsonBody(calls[2]).link_preview_options).toEqual({ is_disabled: true });
   });
 
   it('uses binary upload mode for photos after downloading media', async () => {

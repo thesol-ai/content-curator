@@ -2090,6 +2090,50 @@ Use a private Telegram test channel before enabling public channels:
 
 ---
 
+## Release Hardening & Production Checklist
+
+Before merging or deploying this release, use the dedicated release checklist:
+
+```bash
+npm run validate:release
+```
+
+For a stricter gate that fails when production publish/curation flags are enabled in `wrangler.toml`:
+
+```bash
+RELEASE_STRICT=1 npm run validate:release
+```
+
+The release checklist is documented in:
+
+```text
+RELEASE_CHECKLIST.md
+```
+
+Release notes for the next rollout are documented in:
+
+```text
+RELEASE_NOTES_NEXT.md
+```
+
+The release gate checks the migration chain, required release documents, no obvious committed secrets, runtime safety-switch expectations, Telegram preview safety, prompt source URL rules, and release-owner warnings for risky production flags.
+
+The final manual pre-deploy review must include:
+
+- D1 migrations are applied locally before remote.
+- No real secrets are committed.
+- `TELEGRAM_FINAL_PUBLISH_ENABLED` and `telegram_publish_enabled` are both intentionally reviewed.
+- `TELEGRAM_PUBLISH_SCHEDULER_ENABLED` is not enabled unless final publish is intentionally enabled.
+- Channel quotas, windows, and min-gap settings are reset from test values.
+- Queue preview output matches expected Telegram output.
+- Raw source URLs are not visible in messages.
+- Link preview is disabled in all text fallback paths.
+- Media QA scenarios in `MEDIA_QA.md` are complete for the pilot category.
+
+Dashboard styling and structure are intentionally not changed by release hardening. Dashboard changes should remain additive and use the existing `apps/dashboard/index.html` structure unless a separate refactor PR is explicitly approved.
+
+---
+
 ## Troubleshooting
 
 ### Items not arriving from Apify
