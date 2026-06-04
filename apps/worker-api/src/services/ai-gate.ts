@@ -398,11 +398,27 @@ function urlLookupKeys(raw: string): string[] {
   return Array.from(keys);
 }
 
+function postIdLookupKey(raw: string): string {
+  return `post_id:${String(raw ?? '').trim()}`;
+}
+
+function isDebugEnabled(env: Env): boolean {
+  return env.LOG_LEVEL === 'debug' || (env as any).TRANSLATION_DEBUG_ENABLED === 'true';
+}
+
+function debugPreview(value: string, max = 1000): string {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+
 
 function getTranslationsForItem(
   translationsMap: Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>,
   item: NormalizedItem
 ): Record<string, { captionShort: string; captionFull: string; hashtags: string[] }> | undefined {
+  const byPostId = translationsMap.get(postIdLookupKey(item.postId));
+  if (byPostId) return byPostId;
+
   for (const key of urlLookupKeys(item.sourceUrl)) {
     const t = translationsMap.get(key);
     if (t) return t;
@@ -420,10 +436,30 @@ async function runTranslation(
   items: NormalizedItem[],
   category: CategoryRow
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
+  const result = new Map<string, any>();
+  if (items.length === 0) return result;
+
+  const batchSize = clampInt(Number((env as any).TRANSLATION_BATCH_SIZE ?? 5), 1, 20);
+
+  for (let offset = 0; offset < items.length; offset += batchSize) {
+    const chunk = items.slice(offset, offset + batchSize);
+    const chunkMap = await runTranslationChunk(env, cfg, chunk, category, offset);
+    for (const [key, value] of chunkMap.entries()) result.set(key, value);
+  }
+
+  console.log(`[Translation] Completed chunks for ${items.length} item(s); mapped keys=${result.size}`);
+  return result;
+}
+
+async function runTranslationChunk(
+  env: Env,
+  cfg: Config,
+  items: NormalizedItem[],
+  category: CategoryRow,
+  offset: number
+): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const provider = cfg.translationProvider;
   const result = new Map<string, any>();
-
-  if (items.length === 0) return result;
 
   const system = buildTranslationSystem(cfg.translationTargets, category);
   const user = buildTranslationUser(items, cfg.translationTargets, cfg.maxTextChars);
@@ -442,23 +478,35 @@ async function runTranslation(
         responseText = await callClaude(env, cfg.translationModel || cfg.scoringModel, system, user);
       }
       if (responseText) break;
-    } catch (e) { lastErr = e instanceof Error ? e.message : String(e); }
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+    }
   }
 
   if (!responseText) {
-    console.error('[Translation] All attempts failed:', lastErr);
+    console.error(`[Translation] Chunk offset=${offset} failed: ${lastErr}`);
     return result;
   }
 
-  // parse JSON از response
   const parsed = extractJsonObject(responseText);
   if (!parsed || !Array.isArray(parsed.items)) {
-    console.error('[Translation] Could not parse JSON from response');
+    console.error(`[Translation] Could not parse JSON from chunk offset=${offset}. preview=${debugPreview(responseText)}`);
     return result;
   }
 
+  let usable = 0;
+  let mappedByPostId = 0;
+  let mappedByUrl = 0;
+
   for (const p of parsed.items) {
-    if (typeof p.url !== 'string') continue;
+    const postId = typeof p.post_id === 'string' ? p.post_id.trim() : '';
+    const url = typeof p.url === 'string' ? p.url.trim() : '';
+
+    if (!postId && !url) {
+      console.warn(`[Translation] Parsed item missing both post_id and url at chunk offset=${offset}`);
+      continue;
+    }
+
     const translations: Record<string, any> = {};
     let missingCount = 0;
 
@@ -474,15 +522,39 @@ async function runTranslation(
         };
       } else {
         missingCount++;
-        console.warn(`[Translation] Missing translation for target=${target.key}, url=${p.url}`);
       }
     }
 
-    if (missingCount > 0) {
-      console.warn(`[Translation] ${missingCount}/${cfg.translationTargets.length} targets missing for ${p.url}`);
+    if (Object.keys(translations).length === 0) {
+      console.warn(`[Translation] No usable translations for post_id=${postId || 'n/a'} url=${url || 'n/a'}`);
+      continue;
     }
 
-    for (const key of urlLookupKeys(p.url)) result.set(key, translations);
+    usable++;
+
+    if (missingCount > 0) {
+      console.warn(`[Translation] ${missingCount}/${cfg.translationTargets.length} targets missing for post_id=${postId || 'n/a'} url=${url || 'n/a'}`);
+    }
+
+    if (postId) {
+      result.set(postIdLookupKey(postId), translations);
+      mappedByPostId++;
+    }
+
+    if (url) {
+      for (const key of urlLookupKeys(url)) result.set(key, translations);
+      mappedByUrl++;
+    }
+  }
+
+  if (isDebugEnabled(env)) {
+    console.log(`[Translation][debug] chunk offset=${offset} requested=${items.length} parsed=${parsed.items.length} usable=${usable} mappedByPostId=${mappedByPostId} mappedByUrl=${mappedByUrl} preview=${debugPreview(responseText)}`);
+  } else {
+    console.log(`[Translation] chunk offset=${offset} requested=${items.length} parsed=${parsed.items.length} usable=${usable} mappedByPostId=${mappedByPostId} mappedByUrl=${mappedByUrl}`);
+  }
+
+  if (items.length > 0 && parsed.items.length > 0 && usable === 0) {
+    console.error(`[Translation] Parsed ${parsed.items.length} items but produced 0 usable translations at offset=${offset}`);
   }
 
   return result;
@@ -704,7 +776,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     targetLines,
     '',
     'Return ONLY a JSON object with this exact structure (no markdown, no explanation):',
-    `{"items":[{"url":"...","translations":{${exampleTranslations}}}]}`,
+    `{"items":[{"post_id":"...","url":"...","translations":{${exampleTranslations}}}]}`,
     '',
     'Strict rules:',
     '- caption_short: concise, engaging 1-2 sentence summary for media captions; respect each target max chars',
@@ -725,6 +797,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
 
 function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarget[], maxChars: number): string {
   const data = items.map(it => ({
+    post_id: it.postId,
     url: it.sourceUrl,
     platform: it.platform,
     account: it.sourceAccount,

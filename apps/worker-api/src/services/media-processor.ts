@@ -278,41 +278,100 @@ export interface ThumbnailDownloadResult {
 }
 
 export async function downloadTelegramThumbnail(url: string): Promise<ThumbnailDownloadResult> {
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'TelegramBot/1.0 (compatible; content-curator)' },
-      signal: AbortSignal.timeout(15_000),
-    });
+  const candidates = buildTelegramThumbnailCandidates(url);
+  let lastValidation: ThumbnailValidationResult | undefined;
 
-    if (!res.ok) {
-      return {
-        validation: {
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate, {
+        headers: { 'User-Agent': 'TelegramBot/1.0 (compatible; content-curator)' },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (!res.ok) {
+        lastValidation = {
           ok: false,
           status: 'download_failed',
           error: `thumbnail_http_${res.status}`,
-        },
-      };
-    }
+        };
+        continue;
+      }
 
-    const mimeType = (res.headers.get('content-type') ?? '').split(';')[0]?.toLowerCase() ?? '';
-    const blob = await res.blob();
-    const validation = await validateTelegramThumbnailBlob(blob, mimeType);
+      const mimeType = (res.headers.get('content-type') ?? '').split(';')[0]?.toLowerCase() ?? '';
+      const blob = await res.blob();
+      const validation = await validateTelegramThumbnailBlob(blob, mimeType);
 
-    if (!validation.ok) {
-      console.warn(`[MediaProcessor] Invalid video thumbnail skipped: ${validation.error ?? validation.status}`);
-      return { validation };
-    }
+      if (validation.ok) {
+        if (candidate !== url) {
+          console.info(`[MediaProcessor] Using fallback video thumbnail candidate: ${safeUrlForLog(candidate)}`);
+        }
+        return { blob, validation };
+      }
 
-    return { blob, validation };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      validation: {
+      lastValidation = validation;
+      console.warn(`[MediaProcessor] Invalid video thumbnail candidate skipped: ${validation.error ?? validation.status}`);
+
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastValidation = {
         ok: false,
         status: 'download_failed',
         error: `thumbnail_fetch_error: ${msg.slice(0, 160)}`,
-      },
-    };
+      };
+    }
+  }
+
+  return {
+    validation: lastValidation ?? {
+      ok: false,
+      status: 'download_failed',
+      error: 'thumbnail_no_candidates',
+    },
+  };
+}
+
+function buildTelegramThumbnailCandidates(rawUrl: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (value: string | undefined) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+
+  add(rawUrl);
+
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase();
+
+    // X/Twitter media CDN. Original video thumbnails are often 1200x675,
+    // while Telegram requires JPEG thumbnails <= 320x320 and < 200KB.
+    if (host === 'pbs.twimg.com' || host.endsWith('.twimg.com')) {
+      // Prefer Telegram-safe variants first. X/Twitter video thumbs are often
+      // 1200x675 by default; Telegram requires JPEG thumbnails <= 320x320.
+      // 240x240 usually preserves a useful 16:9-ish frame such as 240x135.
+      for (const name of ['240x240', '120x120', 'small', 'thumb']) {
+        const u = new URL(rawUrl);
+        u.searchParams.set('format', 'jpg');
+        u.searchParams.set('name', name);
+        add(u.toString());
+      }
+    }
+  } catch {
+    // Keep original candidate only.
+  }
+
+  return candidates;
+}
+
+function safeUrlForLog(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    return `${u.origin}${u.pathname}?${u.searchParams.toString()}`.slice(0, 180);
+  } catch {
+    return rawUrl.slice(0, 180);
   }
 }
 
@@ -527,13 +586,25 @@ export function buildVideoForm(
   videoBlob: Blob,
   caption: string,
   thumbnailBlob?: Blob,
-  supportsStreaming = true
+  supportsStreaming = true,
+  videoMeta?: { width?: number; height?: number; durationSec?: number }
 ): FormData {
   const form = new FormData();
   form.append('chat_id', chatId);
   form.append('caption', caption);
   form.append('parse_mode', 'HTML');
   form.append('supports_streaming', supportsStreaming ? 'true' : 'false');
+
+  if (videoMeta?.width && videoMeta.width > 0) {
+    form.append('width', String(Math.floor(videoMeta.width)));
+  }
+  if (videoMeta?.height && videoMeta.height > 0) {
+    form.append('height', String(Math.floor(videoMeta.height)));
+  }
+  if (videoMeta?.durationSec && videoMeta.durationSec > 0) {
+    form.append('duration', String(Math.floor(videoMeta.durationSec)));
+  }
+
   form.append('video', videoBlob, detectVideoFilename(videoBlob));
 
   if (thumbnailBlob) {

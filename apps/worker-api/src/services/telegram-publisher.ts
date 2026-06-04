@@ -50,6 +50,11 @@ export interface PublishInput {
   mediaUrls: string[];
   mediaTypes?: Array<'image' | 'video'>;
   thumbnailUrls?: string[];
+  videoMetadata?: Array<{
+    width?: number;
+    height?: number;
+    durationSec?: number;
+  }>;
   telegramFileIds?: string[];
 }
 
@@ -174,8 +179,9 @@ export async function publishToTelegram(
         if (!videoUrl) return { ok: false, error: 'No video URL', errorType: 'media_error' };
 
         const thumbnailUrl = input.thumbnailUrls?.[0];
+        const videoMeta = input.videoMetadata?.[0];
         return sendVideoWithFallback(env, base, input.chatId, videoUrl, captions,
-          thumbnailUrl, input.telegramFileIds?.[0]);
+          thumbnailUrl, input.telegramFileIds?.[0], videoMeta);
       }
 
       case 'sendMediaGroup': {
@@ -229,7 +235,8 @@ async function sendVideoWithFallback(
   videoUrl: string,
   captions: PreparedCaptions,
   thumbnailUrl?: string,
-  existingFileId?: string
+  existingFileId?: string,
+  videoMeta?: { width?: number; height?: number; durationSec?: number }
 ): Promise<PublishResult> {
   const mode = getProcessingMode(env);
 
@@ -267,7 +274,7 @@ async function sendVideoWithFallback(
 
       if (analysis.looksLikeValidVideo) {
         // ── تلاش اول: sendVideo با binary ────────────────────
-        const form = buildVideoForm(chatId, processed.blob, captions.mediaHtml, processed.thumbnailBlob);
+        const form = buildVideoForm(chatId, processed.blob, captions.mediaHtml, processed.thumbnailBlob, true, videoMeta);
         const result = await callTgForm(base, 'sendVideo', form);
 
         if (result.ok) return withSingleMediaResult(await withCaptionFollowUp(base, chatId, result, captions), 0, processed);
@@ -289,7 +296,7 @@ async function sendVideoWithFallback(
                 thumbBlob = (await downloadTelegramThumbnail(transcoded.thumbnailUrl)).blob;
               }
 
-              const transcodedForm = buildVideoForm(chatId, transcoded.mp4Blob, captions.mediaHtml, thumbBlob);
+              const transcodedForm = buildVideoForm(chatId, transcoded.mp4Blob, captions.mediaHtml, thumbBlob, true, videoMeta);
               const transcodeResult = await callTgForm(base, 'sendVideo', transcodedForm);
 
               if (transcodeResult.ok) {

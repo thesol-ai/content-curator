@@ -545,6 +545,7 @@ export async function publishQueueItem(
   const thumbnailUrls: string[] = safeJsonParse(row.thumbnail_urls, []);
   const mediaTypes: Array<'image'|'video'> = safeJsonParse(row.media_types, []);
   const telegramFileIds = await loadTelegramFileIds(env, row.item_id, mediaUrls.length);
+  const videoMetadata = await loadVideoMetadata(env, row.item_id, mediaUrls.length);
 
   const result = await publishToTelegram(env, {
     chatId:        channel.telegram_chat_id,
@@ -557,6 +558,7 @@ export async function publishQueueItem(
     mediaUrls,
     thumbnailUrls,
     mediaTypes,
+    videoMetadata,
     telegramFileIds,
   });
 
@@ -741,6 +743,41 @@ async function loadTelegramFileIds(env: Env, itemId: string, count: number): Pro
   }
   return ids;
 }
+
+async function loadVideoMetadata(
+  env: Env,
+  itemId: string,
+  count: number
+): Promise<Array<{ width?: number; height?: number; durationSec?: number }>> {
+  if (count <= 0) return [];
+
+  const rows = await env.DB.prepare(`
+    SELECT media_index, width, height, duration_sec
+    FROM discovery_media
+    WHERE item_id=?
+    ORDER BY media_index ASC
+  `).bind(itemId).all<{
+    media_index: number;
+    width: number | null;
+    height: number | null;
+    duration_sec: number | null;
+  }>();
+
+  const metadata = Array.from({ length: count }, () => ({} as { width?: number; height?: number; durationSec?: number }));
+
+  for (const row of rows.results ?? []) {
+    if (row.media_index >= 0 && row.media_index < count) {
+      metadata[row.media_index] = {
+        width: row.width ?? undefined,
+        height: row.height ?? undefined,
+        durationSec: row.duration_sec ?? undefined,
+      };
+    }
+  }
+
+  return metadata;
+}
+
 
 async function syncDiscoveryMediaAfterPublish(
   env: Env,
