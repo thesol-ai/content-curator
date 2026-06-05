@@ -149,6 +149,28 @@ describe('Apify source task bindings and webhook scoping', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('records processing phases before and after fetching a scoped dataset', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
+
+    const { env, calls } = envWithDb({
+      sources: [source({ id: 'src_crypto', apify_dataset_id: 'OLDDATASET123' })],
+    });
+
+    const results = await runCuration(env, { sourceId: 'src_crypto', datasetId: 'PHASEDATA123' }, { forceCurationEnabled: true, curationDryRun: true });
+
+    expect(results).toHaveLength(1);
+
+    const processingUpdates = calls.filter(call =>
+      call.kind === 'run' &&
+      call.sql.includes('UPDATE discovery_runs SET status=') &&
+      call.values[0] === 'processing'
+    );
+
+    expect(processingUpdates.some(call => call.values.includes('processing phase=fetch_dataset'))).toBe(true);
+    expect(processingUpdates.some(call => call.values.includes('processing phase=normalize_items'))).toBe(true);
+    expect(processingUpdates.some(call => call.values.includes('processing phase=dedupe_complete'))).toBe(true);
+  });
+
   it('stores actor/task metadata and source_config when creating an Apify source', async () => {
     const calls: Array<{ sql: string; values: unknown[] }> = [];
     const db = {

@@ -150,21 +150,45 @@ async function processSingleSource(
   const maxItems = parseInt(env.APIFY_MAX_ITEMS_PER_SOURCE || '100', 10);
   const runId = generateId('run');
   const errors: string[] = [];
+  let phase = 'init';
   let itemsFetched = 0, itemsNew = 0, itemsDuplicate = 0;
   let itemsAiSelected = 0, itemsAiRejected = 0, itemsQueued = 0;
+
+  const markPhase = async (nextPhase: string): Promise<void> => {
+    phase = nextPhase;
+    console.log(`[Curation][${category.id}/${source.platform}] run=${runId} dataset=${source.apify_dataset_id} phase=${phase}`);
+    try {
+      await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id, 'processing', {
+        itemsFetched,
+        itemsNew,
+        itemsDuplicate,
+        itemsAiSelected,
+        itemsAiRejected,
+        itemsQueued,
+        errorMessage: `processing phase=${phase}`,
+        durationMs: Date.now() - t0,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Curation][${category.id}/${source.platform}] failed to persist phase ${phase}: ${msg}`);
+    }
+  };
 
   await saveDiscoveryRun(env, runId, category.id, source.platform, source.apify_dataset_id, 'processing');
 
   try {
+    await markPhase('fetch_dataset');
     const raw = await fetchApifyDataset(source.apify_dataset_id, env.APIFY_TOKEN, maxItems);
     itemsFetched = raw.length;
 
+    await markPhase('normalize_items');
     const normalized: NormalizedItem[] = [];
     for (const r of raw) {
       const item = normalizeItem(r, source.platform as any);
       if (item && item.text.length >= 15 && item.sourceUrl) normalized.push(item);
     }
 
+    await markPhase('dedupe_check');
     const fresh: NormalizedItem[] = [];
     const freshKeys: string[][] = [];
     for (const item of normalized) {
@@ -173,6 +197,7 @@ async function processSingleSource(
       else { fresh.push(item); freshKeys.push(keys); }
     }
     itemsNew = fresh.length;
+    await markPhase('dedupe_complete');
 
     if (fresh.length === 0) {
       await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
@@ -181,6 +206,7 @@ async function processSingleSource(
         { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
     }
 
+    await markPhase('prepare_candidates');
     const maxCandidates = parseInt(env.AI_MAX_CANDIDATES_PER_RUN || '50', 10);
     const batch = fresh.slice(0, maxCandidates);
     const batchKeys = freshKeys.slice(0, maxCandidates);
@@ -224,6 +250,7 @@ async function processSingleSource(
 
     const filteredBatch = policyFilteredBatch;
     const filteredBatchKeys = policyFilteredKeys;
+    await markPhase('pre_ai_filters_complete');
 
     if (filteredBatch.length === 0) {
       await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
@@ -232,14 +259,18 @@ async function processSingleSource(
         { itemsFetched, itemsNew, itemsDuplicate, itemsAiRejected, durationMs: Date.now() - t0 });
     }
 
+    await markPhase('load_ai_context');
     const whitelist = await loadWhitelistedAccounts(env, category.id);
     const channels = await loadChannels(env, category.id);
+    await markPhase('ai_gate');
     const aiResults = await runAIGate(env, filteredBatch, category, whitelist, channels);
+    await markPhase('ai_gate_complete');
     const semanticDedupeEnabledForRun = channels.some(channel => channel.semantic_dedupe_enabled !== 0);
     const similarTopicRejects = semanticDedupeEnabledForRun
       ? findSimilarTopicInRunRejections(filteredBatch, aiResults, category.score_threshold)
       : new Set<number>();
 
+    await markPhase('persist_ai_results');
     for (let i = 0; i < filteredBatch.length; i++) {
       const item = filteredBatch[i]!;
       const ai   = aiResults[i]!;
@@ -290,6 +321,7 @@ async function processSingleSource(
       }
     }
 
+    await markPhase('finalize');
     const finalStatus = dryRun ? 'dry_run' : 'completed';
     await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
       finalStatus, { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
@@ -298,10 +330,11 @@ async function processSingleSource(
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    errors.push(msg);
-    console.error(`[Curation][${category.id}/${source.platform}]`, msg);
+    const phaseMsg = `phase=${phase}: ${msg}`;
+    errors.push(phaseMsg);
+    console.error(`[Curation][${category.id}/${source.platform}]`, phaseMsg);
     await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
-      'failed', { itemsFetched, errorMessage: msg, durationMs: Date.now() - t0 });
+      'failed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, errorMessage: phaseMsg, durationMs: Date.now() - t0 });
     return mkResult(runId, category.id, source.platform, false, dryRun, { itemsFetched, errors, durationMs: Date.now() - t0 });
   }
 }
