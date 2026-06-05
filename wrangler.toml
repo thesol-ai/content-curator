@@ -28,8 +28,8 @@ ENVIRONMENT   = "local"
 LOG_LEVEL     = "info"
 
 # ── Apify ─────────────────────────────────────────────────────
-APIFY_CURATION_ENABLED      = "false"
-APIFY_CURATION_DRY_RUN      = "true"
+APIFY_CURATION_ENABLED      = "true"
+APIFY_CURATION_DRY_RUN      = "false"
 APIFY_MAX_ITEMS_PER_SOURCE  = "50"
 
 # ── AI Scoring (Claude) ───────────────────────────────────────
@@ -85,8 +85,8 @@ workers_dev = true
 ENVIRONMENT   = "production"
 LOG_LEVEL     = "info"
 
-APIFY_CURATION_ENABLED      = "false"
-APIFY_CURATION_DRY_RUN      = "true"
+APIFY_CURATION_ENABLED      = "true"
+APIFY_CURATION_DRY_RUN      = "false"
 APIFY_MAX_ITEMS_PER_SOURCE  = "100"
 
 AI_SCORING_MODEL              = "claude-haiku-4-5-20251001"
