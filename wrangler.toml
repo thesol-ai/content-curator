@@ -18,7 +18,7 @@ migrations_dir = "migrations"
 
 # ── Cron ─────────────────────────────────────────────────────
 [triggers]
-crons = ["*/30 * * * *"]
+crons = ["*/10 * * * *"]
 
 # ══════════════════════════════════════════════════════════════
 # Local / Default
@@ -52,8 +52,8 @@ TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 
 # ── Telegram ──────────────────────────────────────────────────
 TELEGRAM_FINAL_PUBLISH_ENABLED     = "true"
-TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "false"
-TELEGRAM_PUBLISH_DUE_LIMIT         = "5"
+TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
+TELEGRAM_PUBLISH_DUE_LIMIT         = "4"
 
 # ── Media Processing ──────────────────────────────────────────
 # direct_url    → URL مستقیم به Telegram (سریع، برای تست)
@@ -104,8 +104,8 @@ TRANSLATION_BATCH_SIZE = "5"
 TRANSLATION_DEBUG_ENABLED = "false"
 
 TELEGRAM_FINAL_PUBLISH_ENABLED     = "true"
-TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "false"
-TELEGRAM_PUBLISH_DUE_LIMIT         = "5"
+TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
+TELEGRAM_PUBLISH_DUE_LIMIT         = "4"
 
 # در production از binary_upload استفاده کنید
 MEDIA_PROCESSING_MODE      = "binary_upload"
