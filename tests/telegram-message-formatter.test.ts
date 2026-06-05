@@ -109,7 +109,7 @@ describe('telegram-message-formatter', () => {
       maxLength: 4096,
     });
 
-    expect(result.html).toContain('متن خبر\n\n<a href="https://example.com/post">منبع</a>\n\n— The &lt;Sol&gt; Crypto\n\n@thesolxcrypto_fa');
+    expect(result.html).toContain('متن خبر\n\n<a href="https://example.com/post">منبع</a>\n\n— The &lt;Sol&gt; Crypto\n@thesolxcrypto_fa');
   });
 
   it('uses custom channel footer and omits numeric chat id without custom text', () => {

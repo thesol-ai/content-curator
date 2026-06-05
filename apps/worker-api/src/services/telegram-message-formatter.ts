@@ -125,25 +125,30 @@ export function removeRawSourceReferences(body: string, sourceUrl?: string): str
 }
 
 function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
-  const parts: string[] = [];
+  const blocks: string[] = [];
 
   if (isEnabled(input.channel.source_enabled)) {
     const label = sourceLabel(input.language, input.channel.source_label_override);
     const link = input.sourceUrl ? buildSourceLink(label, input.sourceUrl) : null;
-    if (link) parts.push(link);
+    if (link) blocks.push(link);
   }
 
+  const signatureParts: string[] = [];
   if (isEnabled(input.channel.signature_enabled)) {
     const signature = sanitizeBlockText(input.channel.signature_text, 300);
-    if (signature) parts.push(escapeHtml(signature));
+    if (signature) signatureParts.push(escapeHtml(signature));
   }
 
   const footer = resolveChannelFooter(input.channel);
-  if (footer) parts.push(escapeHtml(footer));
+  if (footer) signatureParts.push(escapeHtml(footer));
+
+  if (signatureParts.length > 0) {
+    blocks.push(signatureParts.join('\n'));
+  }
 
   return {
-    html: parts.join('\n\n'),
-    visibleParts: parts.length,
+    html: blocks.join('\n\n'),
+    visibleParts: blocks.length,
   };
 }
 
