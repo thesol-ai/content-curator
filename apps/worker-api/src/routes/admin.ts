@@ -17,6 +17,11 @@ function isValidId(id: string | undefined): id is string {
   return typeof id === 'string' && /^[\w-]{1,64}$/.test(id);
 }
 
+function sanitizeDebugId(value: string | null, fallback: string): string {
+  const raw = String(value ?? '').trim();
+  return /^[\w-]{1,64}$/.test(raw) ? raw : fallback;
+}
+
 // Path segment safe extraction
 function pathSegment(path: string, index: number): string | undefined {
   const parts = path.split('/').filter(Boolean);
@@ -107,6 +112,11 @@ export async function handleAdmin(
     if (path === '/internal/admin/settings' && m === 'GET') {
       const rows = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
       return ok({ settings: rows.results ?? [] });
+    }
+
+    // ── Crypto pipeline debug snapshot (read-only) ─────────────
+    if (path === '/internal/debug/crypto-pipeline' && m === 'GET') {
+      return getCryptoPipelineDebug(env, url);
     }
 
     // ── Stats ─────────────────────────────────────────────────
@@ -895,6 +905,153 @@ async function updateApifySource(req: Request, env: Env, id: string): Promise<Re
   await env.DB.prepare(`UPDATE apify_sources SET ${fields.join(',')} WHERE id=?`).bind(...vals).run();
   return ok({ updated: id });
 }
+
+
+async function getCryptoPipelineDebug(env: Env, url: URL): Promise<Response> {
+  const channelId = sanitizeDebugId(url.searchParams.get('channel') ?? 'crypto_fa_pilot', 'crypto_fa_pilot');
+  const categoryId = sanitizeDebugId(url.searchParams.get('category') ?? 'crypto', 'crypto');
+  const stuckMinutes = clamp(num(url.searchParams.get('stuckMinutes'), 15), 1, 1440);
+
+  const runtime = await getRuntimeConfig(env);
+
+  const [
+    settingsRows,
+    channel,
+    queueCounts,
+    recentPublished,
+    scheduledQueue,
+    failedRetryQueue,
+    recentRuns,
+    stuckRuns,
+    sources,
+    aiUsageRecent,
+  ] = await Promise.all([
+    env.DB.prepare('SELECT key, value, updated_at FROM settings ORDER BY key').all(),
+    env.DB.prepare('SELECT * FROM channels WHERE id=?').bind(channelId).first(),
+    env.DB.prepare(`
+      SELECT status, COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id=?
+      GROUP BY status
+      ORDER BY status
+    `).bind(channelId).all(),
+    env.DB.prepare(`
+      SELECT id,item_id,status,telegram_method,scheduled_at,published_at,
+             datetime(scheduled_at, 'unixepoch') AS scheduled_utc,
+             datetime(published_at, 'unixepoch') AS published_utc,
+             caption_short,publish_error,retry_count
+      FROM publish_queue
+      WHERE channel_id=? AND status='published'
+      ORDER BY published_at DESC
+      LIMIT 20
+    `).bind(channelId).all(),
+    env.DB.prepare(`
+      SELECT id,item_id,status,telegram_method,scheduled_at,
+             datetime(scheduled_at, 'unixepoch') AS scheduled_utc,
+             caption_short,publish_error,retry_count
+      FROM publish_queue
+      WHERE channel_id=? AND status='scheduled'
+      ORDER BY scheduled_at ASC
+      LIMIT 50
+    `).bind(channelId).all(),
+    env.DB.prepare(`
+      SELECT id,item_id,status,telegram_method,scheduled_at,
+             datetime(scheduled_at, 'unixepoch') AS scheduled_utc,
+             caption_short,publish_error,retry_count
+      FROM publish_queue
+      WHERE channel_id=? AND status IN ('failed','retry')
+      ORDER BY created_at DESC
+      LIMIT 50
+    `).bind(channelId).all(),
+    env.DB.prepare(`
+      SELECT id,category_id,platform,apify_dataset_id,status,
+             items_fetched,items_new,items_duplicate,items_ai_selected,
+             items_ai_rejected,items_queued,error_message,duration_ms,
+             created_at,completed_at
+      FROM discovery_runs
+      WHERE category_id=?
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).bind(categoryId).all(),
+    env.DB.prepare(`
+      SELECT id,category_id,platform,apify_dataset_id,status,
+             items_fetched,items_new,items_duplicate,items_ai_selected,
+             items_ai_rejected,items_queued,error_message,duration_ms,
+             created_at,completed_at
+      FROM discovery_runs
+      WHERE status='processing'
+        AND created_at < datetime('now', '-' || ? || ' minutes')
+      ORDER BY created_at ASC
+      LIMIT 20
+    `).bind(stuckMinutes).all(),
+    env.DB.prepare(`
+      SELECT id,label,enabled,category_id,platform,apify_actor_id,apify_task_id,
+             apify_dataset_id,last_dataset_id,created_at
+      FROM apify_sources
+      WHERE category_id=?
+      ORDER BY created_at DESC
+    `).bind(categoryId).all(),
+    env.DB.prepare(`
+      SELECT provider,purpose,model,input_tokens,output_tokens,status,error_message,created_at
+      FROM ai_usage
+      ORDER BY created_at DESC
+      LIMIT 30
+    `).all(),
+  ]);
+
+  const queueCountsMap: Record<string, number> = {};
+  for (const row of (queueCounts.results ?? []) as Array<{ status?: string; count?: number }>) {
+    if (row.status) queueCountsMap[row.status] = Number(row.count ?? 0);
+  }
+
+  const settings = Object.fromEntries(
+    ((settingsRows.results ?? []) as Array<{ key: string; value: string }>).map(row => [row.key, row.value])
+  );
+
+  const diagnosis: string[] = [];
+  if (settings.telegram_publish_enabled === 'false') {
+    diagnosis.push('Telegram publishing is disabled by runtime setting.');
+  }
+  if (settings.apify_curation_enabled === 'false') {
+    diagnosis.push('Apify curation is disabled by runtime setting; webhooks will not run AI/queue.');
+  }
+  if ((queueCountsMap.scheduled ?? 0) === 0) {
+    diagnosis.push('No scheduled queue items exist for the selected channel.');
+  }
+  if ((queueCountsMap.failed ?? 0) > 0 || (queueCountsMap.retry ?? 0) > 0) {
+    diagnosis.push('Failed or retry queue items exist and need inspection.');
+  }
+  if ((stuckRuns.results ?? []).length > 0) {
+    diagnosis.push(`There are discovery runs stuck in processing for more than ${stuckMinutes} minutes.`);
+  }
+
+  return ok({
+    ok: true,
+    read_only: true,
+    generated_at: new Date().toISOString(),
+    filters: { category_id: categoryId, channel_id: channelId, stuck_minutes: stuckMinutes },
+    runtime_config: {
+      environment: env.ENVIRONMENT ?? 'unknown',
+      curation_enabled: runtime.curationEnabled,
+      curation_dry_run: runtime.curationDryRun,
+      telegram_publish_enabled: runtime.telegramPublishEnabled,
+      telegram_scheduler_enabled: runtime.telegramSchedulerEnabled,
+      apify_scheduled_curation_enabled: env.APIFY_SCHEDULED_CURATION_ENABLED === 'true',
+    },
+    settings,
+    channel: channel ?? null,
+    queue_counts: queueCountsMap,
+    recent_published: recentPublished.results ?? [],
+    scheduled_queue: scheduledQueue.results ?? [],
+    failed_retry_queue: failedRetryQueue.results ?? [],
+    recent_runs: recentRuns.results ?? [],
+    stuck_runs: stuckRuns.results ?? [],
+    sources: sources.results ?? [],
+    ai_usage_recent: aiUsageRecent.results ?? [],
+    diagnosis,
+  });
+}
+
 
 async function getStats(env: Env): Promise<Response> {
   const [categories, channels, queuePending, queueRetry, queueFailed, queuePublished, lastRun, itemsToday, settingsRows, mediaPending, mediaFailed, mediaUploaded, aiUsage24h, aiScoring24h, aiTranslation24h] = await Promise.all([
