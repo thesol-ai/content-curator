@@ -34,6 +34,7 @@ export interface Env {
   // Apify
   APIFY_CURATION_ENABLED: string;
   APIFY_CURATION_DRY_RUN: string;
+  APIFY_SCHEDULED_CURATION_ENABLED?: string;
   APIFY_MAX_ITEMS_PER_SOURCE: string;
 
   // Telegram

@@ -50,8 +50,10 @@ export default {
           return;
         }
 
-        // 1. Curation
-        if (runtime.curationEnabled) {
+        // 1. Scheduled curation is intentionally opt-in.
+        // Webhooks should drive fresh Apify dataset ingestion; cron should not
+        // repeatedly reprocess old datasets and risk unnecessary AI spend.
+        if (runtime.curationEnabled && env.APIFY_SCHEDULED_CURATION_ENABLED === 'true') {
           const results = await runCuration(env);
           console.log('[Scheduled] Curation:', results.map(r => ({
             category: r.categoryId,
