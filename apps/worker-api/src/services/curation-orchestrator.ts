@@ -11,6 +11,7 @@ import { checkChannelPublishWindowAt, runRuleGate } from './rule-gate';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { publishToTelegram } from './telegram-publisher';
 import { getRuntimeConfig, withEffectiveCurationEnv, type RuntimeConfigOverrides } from './runtime-config';
+import { recordRunEvent } from './run-events';
 
 export interface CurationRunResult {
   runId: string;
@@ -172,14 +173,60 @@ async function processSingleSource(
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[Curation][${category.id}/${source.platform}] failed to persist phase ${phase}: ${msg}`);
     }
+
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'phase.changed',
+      phase,
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: source.apify_dataset_id,
+      durationMs: Date.now() - t0,
+      metadata: {
+        itemsFetched,
+        itemsNew,
+        itemsDuplicate,
+        itemsAiSelected,
+        itemsAiRejected,
+        itemsQueued,
+      },
+    });
   };
 
   await saveDiscoveryRun(env, runId, category.id, source.platform, source.apify_dataset_id, 'processing');
+  await recordRunEvent(env, {
+    runId,
+    eventType: 'curation.run.created',
+    phase: 'init',
+    categoryId: category.id,
+    platform: source.platform,
+    sourceId: source.id,
+    datasetId: source.apify_dataset_id,
+    metadata: {
+      dryRun,
+      maxItems,
+      aiMaxCandidatesPerRun: env.AI_MAX_CANDIDATES_PER_RUN,
+      apifyMaxItemsPerSource: env.APIFY_MAX_ITEMS_PER_SOURCE,
+      translationBatchSize: (env as any).TRANSLATION_BATCH_SIZE,
+    },
+  });
 
   try {
     await markPhase('fetch_dataset');
     const raw = await fetchApifyDataset(source.apify_dataset_id, env.APIFY_TOKEN, maxItems);
     itemsFetched = raw.length;
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'dataset.fetch.success',
+      phase,
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: source.apify_dataset_id,
+      durationMs: Date.now() - t0,
+      metadata: { rawCount: raw.length, maxItems },
+    });
 
     await markPhase('normalize_items');
     const normalized: NormalizedItem[] = [];
@@ -197,6 +244,21 @@ async function processSingleSource(
       else { fresh.push(item); freshKeys.push(keys); }
     }
     itemsNew = fresh.length;
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'dedupe.complete',
+      phase: 'dedupe_check',
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: source.apify_dataset_id,
+      durationMs: Date.now() - t0,
+      metadata: {
+        normalizedCount: normalized.length,
+        freshCount: fresh.length,
+        duplicateCount: itemsDuplicate,
+      },
+    });
     await markPhase('dedupe_complete');
 
     if (fresh.length === 0) {
@@ -264,6 +326,21 @@ async function processSingleSource(
     const channels = await loadChannels(env, category.id);
     await markPhase('ai_gate');
     const aiResults = await runAIGate(env, filteredBatch, category, whitelist, channels);
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'ai.gate.success',
+      phase: 'ai_gate',
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: source.apify_dataset_id,
+      durationMs: Date.now() - t0,
+      metadata: {
+        candidates: filteredBatch.length,
+        results: aiResults.length,
+        publishTrue: aiResults.filter(r => r.publish === true).length,
+      },
+    });
     await markPhase('ai_gate_complete');
     const semanticDedupeEnabledForRun = channels.some(channel => channel.semantic_dedupe_enabled !== 0);
     const similarTopicRejects = semanticDedupeEnabledForRun
@@ -325,6 +402,24 @@ async function processSingleSource(
     const finalStatus = dryRun ? 'dry_run' : 'completed';
     await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
       finalStatus, { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
+    await recordRunEvent(env, {
+      runId,
+      eventType: finalStatus === 'dry_run' ? 'run.dry_run_completed' : 'run.completed',
+      phase: 'finalize',
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: source.apify_dataset_id,
+      durationMs: Date.now() - t0,
+      metadata: {
+        itemsFetched,
+        itemsNew,
+        itemsDuplicate,
+        itemsAiSelected,
+        itemsAiRejected,
+        itemsQueued,
+      },
+    });
     return mkResult(runId, category.id, source.platform, true, dryRun,
       { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
 
@@ -335,6 +430,26 @@ async function processSingleSource(
     console.error(`[Curation][${category.id}/${source.platform}]`, phaseMsg);
     await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
       'failed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, errorMessage: phaseMsg, durationMs: Date.now() - t0 });
+    await recordRunEvent(env, {
+      runId,
+      eventType: itemsQueued > 0 ? 'run.failed_partial' : 'run.failed',
+      phase,
+      severity: 'error',
+      message: phaseMsg,
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: source.apify_dataset_id,
+      durationMs: Date.now() - t0,
+      metadata: {
+        itemsFetched,
+        itemsNew,
+        itemsDuplicate,
+        itemsAiSelected,
+        itemsAiRejected,
+        itemsQueued,
+      },
+    });
     return mkResult(runId, category.id, source.platform, false, dryRun, { itemsFetched, errors, durationMs: Date.now() - t0 });
   }
 }
