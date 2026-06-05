@@ -11,7 +11,7 @@ import { checkChannelPublishWindowAt, runRuleGate } from './rule-gate';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { publishToTelegram } from './telegram-publisher';
 import { getRuntimeConfig, withEffectiveCurationEnv, type RuntimeConfigOverrides } from './runtime-config';
-import { recordRunEvent } from './run-events';
+import { recordRunEvent, recordRunItemEvent } from './run-events';
 
 export interface CurationRunResult {
   runId: string;
@@ -357,6 +357,33 @@ async function processSingleSource(
       const rejected = rejectReason !== null;
       await saveDiscoveryItem(env, itemId, runId, category.id, item, ai,
         rejected ? 'ai_rejected' : 'ai_selected', rejectReason);
+      await recordRunItemEvent(env, {
+        runId,
+        itemId,
+        sourceUrl: item.sourceUrl,
+        postId: item.postId,
+        sourceAccount: item.sourceAccount,
+        phase: 'persist_ai_results',
+        status: rejected ? 'ai_rejected' : 'ai_selected',
+        rejectReason,
+        aiScore: ai.score,
+        aiRisk: ai.riskLevel,
+        mediaCount: item.media.length,
+        metadata: {
+          publish: ai.publish,
+          priority: ai.publishPriority,
+          riskFlags: ai.riskFlags,
+          topicFingerprint: ai.topicFingerprint,
+          textOnlyPolicy: category.text_only_policy,
+          scoreThreshold: category.score_threshold,
+          minScoreForTextOnly: category.min_score_for_text_only,
+          minScoreForMedia: category.min_score_for_media,
+          similarTopicRejected: similarTopicRejects.has(i),
+          mediaMode: category.media_mode,
+          hasMedia: item.media.length > 0,
+          textPreview: item.text.slice(0, 240),
+        },
+      });
 
       if (rejected) {
         itemsAiRejected++;
@@ -376,9 +403,52 @@ async function processSingleSource(
         if (!channel.enabled) continue;
         const translationKey = channelTranslationKey(channel.id);
         const translation = ai.translations[translationKey] ?? ai.translations[channel.language];
-        if (!translation) { console.warn(`[Orchestrator] No translation for ${channel.language}/${translationKey} — item ${itemId}`); continue; }
+        if (!translation) {
+          console.warn(`[Orchestrator] No translation for ${channel.language}/${translationKey} — item ${itemId}`);
+          await recordRunItemEvent(env, {
+            runId,
+            itemId,
+            sourceUrl: item.sourceUrl,
+            postId: item.postId,
+            sourceAccount: item.sourceAccount,
+            phase: 'persist_ai_results',
+            status: 'translation_missing',
+            aiScore: ai.score,
+            aiRisk: ai.riskLevel,
+            mediaCount: item.media.length,
+            metadata: {
+              channelId: channel.id,
+              language: channel.language,
+              translationKey,
+              availableTranslationKeys: Object.keys(ai.translations ?? {}),
+            },
+          });
+          continue;
+        }
         const rule = await runRuleGate(env, ai, channel, item.mediaUrlExpiresSoon);
-        if (!rule.approved || !rule.scheduledAt) { console.log(`[Orchestrator] Rule rejected: ${rule.reason} — channel ${channel.id}`); continue; }
+        if (!rule.approved || !rule.scheduledAt) {
+          console.log(`[Orchestrator] Rule rejected: ${rule.reason} — channel ${channel.id}`);
+          await recordRunItemEvent(env, {
+            runId,
+            itemId,
+            sourceUrl: item.sourceUrl,
+            postId: item.postId,
+            sourceAccount: item.sourceAccount,
+            phase: 'persist_ai_results',
+            status: 'rule_gate_rejected',
+            rejectReason: rule.reason,
+            aiScore: ai.score,
+            aiRisk: ai.riskLevel,
+            mediaCount: item.media.length,
+            metadata: {
+              channelId: channel.id,
+              language: channel.language,
+              mediaUrlExpiresSoon: item.mediaUrlExpiresSoon,
+              method: mediaRes.method,
+            },
+          });
+          continue;
+        }
 
         await saveQueueItem(env, {
           itemId,
@@ -395,6 +465,28 @@ async function processSingleSource(
           scheduledAt: rule.scheduledAt,
         });
         itemsQueued++;
+        await recordRunItemEvent(env, {
+          runId,
+          itemId,
+          sourceUrl: item.sourceUrl,
+          postId: item.postId,
+          sourceAccount: item.sourceAccount,
+          phase: 'persist_ai_results',
+          status: 'queue_created',
+          aiScore: ai.score,
+          aiRisk: ai.riskLevel,
+          mediaCount: item.media.length,
+          metadata: {
+            channelId: channel.id,
+            language: channel.language,
+            method: mediaRes.method,
+            scheduledAt: rule.scheduledAt,
+            mediaTypes,
+            mediaUrlCount: mediaRes.mediaUrls.length,
+            thumbnailUrlCount: mediaRes.thumbnailUrls.length,
+            itemsQueued,
+          },
+        });
       }
     }
 
