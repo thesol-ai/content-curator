@@ -213,6 +213,7 @@ async function runScoring(
     'risk_level: "low"|"medium"|"high" — set publish=false if high risk',
     'topic_fingerprint: short slug for deduplication (e.g. "btc-etf-approval-sec")',
     'Use source metadata strictly: replies, retweets/reposts, quotes, and text-only posts should be scored according to the category policy below.',
+    'Use engagement signals directionally, not blindly: likes, shares/retweets, and views can raise confidence for timely posts from reputable accounts, but never override risk flags, scam signals, missing context, or low editorial value.',
     'Do NOT include translations here.',
     'Return only the JSON object, nothing else.',
   ].join('\n');
@@ -227,6 +228,8 @@ async function runScoring(
     text: it.text.slice(0, cfg.maxTextChars),
     likes: it.engagementLikes,
     shares: it.engagementShares,
+    views: it.engagementViews,
+    engagement_rate: engagementRate(it.engagementLikes, it.engagementShares, it.engagementViews),
     has_media: it.media.length > 0,
     media_count: it.media.length,
     is_reply: it.isReply === true,
@@ -400,6 +403,13 @@ function urlLookupKeys(raw: string): string[] {
 
 function postIdLookupKey(raw: string): string {
   return `post_id:${String(raw ?? '').trim()}`;
+}
+
+function engagementRate(likes: number, shares: number, views: number): number {
+  const safeViews = Number.isFinite(views) && views > 0 ? views : 0;
+  if (safeViews <= 0) return 0;
+  const interactions = Math.max(0, Number(likes) || 0) + Math.max(0, Number(shares) || 0) * 2;
+  return Math.round((interactions / safeViews) * 10000) / 10000;
 }
 
 function isDebugEnabled(env: Env): boolean {
