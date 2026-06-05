@@ -360,6 +360,34 @@ function safeParseWindows(jsonStr: string): TimeWindow[] {
   }
 }
 
+export function checkChannelPublishWindowAt(
+  channel: Pick<ChannelRow, 'timezone' | 'allowed_windows' | 'blocked_windows'>,
+  now: number
+): string | null {
+  const timezone = safeTimezone(channel.timezone);
+  const local = getZonedDateParts(new Date(now * 1000), timezone);
+  const minuteOfDay = local.hour * 60 + local.minute;
+  const allowedWindows = safeParseWindows(channel.allowed_windows);
+  const blockedWindows = safeParseWindows(channel.blocked_windows);
+
+  if (blockedWindows.some(window => isMinuteWithinWindow(minuteOfDay, window))) {
+    return 'publish_window_blocked';
+  }
+
+  if (allowedWindows.length > 0 && !allowedWindows.some(window => isMinuteWithinWindow(minuteOfDay, window))) {
+    return 'publish_window_not_allowed';
+  }
+
+  return null;
+}
+
+function isMinuteWithinWindow(minuteOfDay: number, window: TimeWindow): boolean {
+  if (window.startMin < window.endMin) {
+    return minuteOfDay >= window.startMin && minuteOfDay < window.endMin;
+  }
+  return minuteOfDay >= window.startMin || minuteOfDay < window.endMin;
+}
+
 // Test-only exports. These are pure helpers and do not change runtime behavior.
 export const __ruleGateTest = {
   parseWindow,

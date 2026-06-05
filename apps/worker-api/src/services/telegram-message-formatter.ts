@@ -143,11 +143,11 @@ function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
   if (footer) signatureParts.push(escapeHtml(footer));
 
   if (signatureParts.length > 0) {
-    blocks.push(signatureParts.join('\n'));
+    blocks.push(signatureParts.join(String.fromCharCode(10)));
   }
 
   return {
-    html: blocks.join('\n\n'),
+    html: blocks.join(String.fromCharCode(10, 10)),
     visibleParts: blocks.length,
   };
 }

@@ -7,7 +7,7 @@ import type { Env, CategoryRow, ChannelRow, ApifySourceRow, NormalizedItem, Publ
 import { fetchApifyDataset, normalizeItem } from './apify-client';
 import { computeDedupeKeys, isDuplicate, recordDedupeKeys } from './dedupe';
 import { runAIGate } from './ai-gate';
-import { runRuleGate } from './rule-gate';
+import { checkChannelPublishWindowAt, runRuleGate } from './rule-gate';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { publishToTelegram } from './telegram-publisher';
 import { getRuntimeConfig, withEffectiveCurationEnv, type RuntimeConfigOverrides } from './runtime-config';
@@ -504,7 +504,7 @@ export async function publishQueueItem(
 
   const row = await env.DB.prepare(`
     SELECT q.*, c.telegram_chat_id, c.max_per_hour, c.min_gap_minutes,
-           c.publish_enabled, c.enabled
+           c.publish_enabled, c.enabled, c.timezone, c.allowed_windows, c.blocked_windows
     FROM publish_queue q
     JOIN channels c ON q.channel_id = c.id
     WHERE q.id=?
@@ -520,6 +520,13 @@ export async function publishQueueItem(
   if (row.enabled !== 1 || row.publish_enabled !== 1) {
     return { queueId, ok: false, status: 'skipped', reason: 'channel_disabled' };
   }
+
+  const windowReason = checkChannelPublishWindowAt({
+    timezone: row.timezone ?? 'UTC',
+    allowed_windows: row.allowed_windows ?? '[]',
+    blocked_windows: row.blocked_windows ?? '[]',
+  }, now);
+  if (windowReason) return { queueId, ok: false, status: 'skipped', reason: windowReason };
 
   if (respectRateLimits) {
     const rateLimitReason = await checkChannelPublishRateLimits(env, row.channel_id, row.max_per_hour, row.min_gap_minutes, now);
