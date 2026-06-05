@@ -125,3 +125,114 @@ describe('crypto pipeline debug endpoint', () => {
     expect(body.filters.channel_id).toBe('crypto_fa_pilot');
   });
 });
+
+describe('crypto pipeline debug repair endpoint', () => {
+  it('marks an old processing discovery run as failed without touching queue or AI paths', async () => {
+    let updateCalled = false;
+    let updateArgs: unknown[] = [];
+
+    const env = {
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => ({
+            first: async () => {
+              if (sql.includes('FROM discovery_runs WHERE id=?')) {
+                return {
+                  id: 'run_stuck',
+                  status: 'processing',
+                  created_at: '2000-01-01 00:00:00',
+                  completed_at: null,
+                  error_message: null,
+                };
+              }
+              return null;
+            },
+            run: async () => {
+              if (sql.includes('UPDATE discovery_runs')) {
+                updateCalled = true;
+                updateArgs = args;
+                return { meta: { changes: 1 } };
+              }
+              return { meta: { changes: 0 } };
+            },
+            all: async () => ({ results: [] }),
+          }),
+          first: async () => null,
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+        }),
+      },
+    } as any;
+
+    const res = await handleAdmin(
+      new Request('http://localhost/internal/debug/discovery-runs/run_stuck/mark-failed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'test repair' }),
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBe(true);
+    expect(body.run_id).toBe('run_stuck');
+    expect(body.new_status).toBe('failed');
+    expect(updateCalled).toBe(true);
+    expect(updateArgs[0]).toBe('test repair');
+    expect(updateArgs[1]).toBe('run_stuck');
+  });
+
+  it('refuses to mark a non-processing discovery run as failed', async () => {
+    let updateCalled = false;
+
+    const env = {
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (..._args: unknown[]) => ({
+            first: async () => {
+              if (sql.includes('FROM discovery_runs WHERE id=?')) {
+                return {
+                  id: 'run_done',
+                  status: 'completed',
+                  created_at: '2000-01-01 00:00:00',
+                  completed_at: '2000-01-01 00:01:00',
+                  error_message: null,
+                };
+              }
+              return null;
+            },
+            run: async () => {
+              updateCalled = true;
+              return { meta: { changes: 1 } };
+            },
+            all: async () => ({ results: [] }),
+          }),
+          first: async () => null,
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+        }),
+      },
+    } as any;
+
+    const res = await handleAdmin(
+      new Request('http://localhost/internal/debug/discovery-runs/run_done/mark-failed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'should not update' }),
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(res.status).toBe(409);
+    const body: any = await res.json();
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('discovery_run_not_processing');
+    expect(updateCalled).toBe(false);
+  });
+});

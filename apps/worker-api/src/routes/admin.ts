@@ -119,6 +119,13 @@ export async function handleAdmin(
       return getCryptoPipelineDebug(env, url);
     }
 
+    // ── Debug repair for stale processing discovery runs ───────
+    if (path.startsWith('/internal/debug/discovery-runs/') && path.endsWith('/mark-failed') && m === 'POST') {
+      const runId = pathSegment(path, 3); // /internal/debug/discovery-runs/{id}/mark-failed
+      if (!isValidId(runId)) return err('invalid discovery run id', 400);
+      return markDiscoveryRunFailedForDebug(req, env, runId);
+    }
+
     // ── Stats ─────────────────────────────────────────────────
     if (path === '/internal/stats' && m === 'GET') {
       return getStats(env);
@@ -1049,6 +1056,89 @@ async function getCryptoPipelineDebug(env: Env, url: URL): Promise<Response> {
     sources: sources.results ?? [],
     ai_usage_recent: aiUsageRecent.results ?? [],
     diagnosis,
+  });
+}
+
+
+
+async function markDiscoveryRunFailedForDebug(req: Request, env: Env, runId: string): Promise<Response> {
+  const url = new URL(req.url);
+  const body: any = await req.json().catch(() => ({}));
+
+  const minAgeInput = body?.minAgeMinutes ?? url.searchParams.get('minAgeMinutes');
+  const minAgeMinutes = clamp(
+    num(minAgeInput === undefined || minAgeInput === null ? null : String(minAgeInput), 15),
+    1,
+    1440,
+  );
+
+  const cutoffUtc = new Date(Date.now() - minAgeMinutes * 60_000)
+    .toISOString()
+    .slice(0, 19)
+    .replace('T', ' ');
+
+  const run = await env.DB
+    .prepare('SELECT id,status,created_at,completed_at,error_message FROM discovery_runs WHERE id=?')
+    .bind(runId)
+    .first<any>();
+
+  if (!run) {
+    return Response.json({ ok: false, error: 'discovery_run_not_found', run_id: runId }, { status: 404 });
+  }
+
+  if (run.status !== 'processing') {
+    return Response.json({
+      ok: false,
+      error: 'discovery_run_not_processing',
+      run_id: runId,
+      status: run.status,
+    }, { status: 409 });
+  }
+
+  if (String(run.created_at ?? '') >= cutoffUtc) {
+    return Response.json({
+      ok: false,
+      error: 'discovery_run_too_recent',
+      run_id: runId,
+      created_at: run.created_at,
+      min_age_minutes: minAgeMinutes,
+      cutoff_utc: cutoffUtc,
+    }, { status: 409 });
+  }
+
+  const defaultReason = 'manually marked failed via debug repair endpoint';
+  const reason = sanitizeLongText(body?.reason ?? defaultReason, 500) ?? defaultReason;
+
+  const result = await env.DB.prepare(`
+    UPDATE discovery_runs
+    SET status='failed',
+        error_message=?,
+        completed_at=CURRENT_TIMESTAMP,
+        duration_ms=CAST((julianday(CURRENT_TIMESTAMP) - julianday(created_at)) * 86400000 AS INTEGER)
+    WHERE id=?
+      AND status='processing'
+      AND created_at < ?
+  `).bind(reason, runId, cutoffUtc).run();
+
+  const affected = result.meta.changes ?? 0;
+  if (affected === 0) {
+    return Response.json({
+      ok: false,
+      error: 'discovery_run_not_updated',
+      run_id: runId,
+      min_age_minutes: minAgeMinutes,
+      cutoff_utc: cutoffUtc,
+    }, { status: 409 });
+  }
+
+  return ok({
+    updated: true,
+    run_id: runId,
+    previous_status: run.status,
+    new_status: 'failed',
+    min_age_minutes: minAgeMinutes,
+    cutoff_utc: cutoffUtc,
+    reason,
   });
 }
 
