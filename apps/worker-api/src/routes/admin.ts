@@ -11,6 +11,7 @@ import { publishDueItems, publishQueueItem, runCuration } from '../services/cura
 import { getStreamTranscodeState } from '../services/stream-config';
 import { getRuntimeConfig } from '../services/runtime-config';
 import { prepareTelegramCaptions } from '../services/telegram-publisher';
+import { sanitizeRunDebugId } from '../services/run-events';
 
 // ID validation — فقط alphanumeric و underscore و dash
 function isValidId(id: string | undefined): id is string {
@@ -117,6 +118,19 @@ export async function handleAdmin(
     // ── Crypto pipeline debug snapshot (read-only) ─────────────
     if (path === '/internal/debug/crypto-pipeline' && m === 'GET') {
       return getCryptoPipelineDebug(env, url);
+    }
+
+    // ── Run control event logs (read-only) ─────────────────────
+    if (path.startsWith('/internal/debug/runs/') && path.endsWith('/events') && m === 'GET') {
+      const runId = sanitizeRunDebugId(pathSegment(path, 3)); // /internal/debug/runs/{runId}/events
+      if (!runId) return err('invalid run id', 400);
+      return listRunEvents(env, url, runId);
+    }
+
+    if (path.startsWith('/internal/debug/runs/') && path.endsWith('/items') && m === 'GET') {
+      const runId = sanitizeRunDebugId(pathSegment(path, 3)); // /internal/debug/runs/{runId}/items
+      if (!runId) return err('invalid run id', 400);
+      return listRunItemEvents(env, url, runId);
     }
 
     // ── Debug repair for stale processing discovery runs ───────
@@ -1059,6 +1073,90 @@ async function getCryptoPipelineDebug(env: Env, url: URL): Promise<Response> {
   });
 }
 
+
+
+async function listRunEvents(env: Env, url: URL, runId: string): Promise<Response> {
+  const limit = clamp(num(url.searchParams.get('limit'), 100), 1, 500);
+  const severity = sanitizeOptionalEnum(url.searchParams.get('severity'), ['debug', 'info', 'warn', 'error']);
+  const eventType = sanitizeOptionalDebugText(url.searchParams.get('eventType'), 120);
+
+  const where = ['run_id=?'];
+  const args: unknown[] = [runId];
+
+  if (severity) {
+    where.push('severity=?');
+    args.push(severity);
+  }
+  if (eventType) {
+    where.push('event_type=?');
+    args.push(eventType);
+  }
+
+  args.push(limit);
+
+  const rows = await env.DB.prepare(`
+    SELECT id, run_id, event_type, phase, severity, message,
+           category_id, platform, source_id, dataset_id, actor_run_id,
+           item_id, queue_id, provider, model, input_tokens, output_tokens,
+           duration_ms, metadata_json, created_at
+    FROM run_events
+    WHERE ${where.join(' AND ')}
+    ORDER BY created_at ASC, id ASC
+    LIMIT ?
+  `).bind(...args).all();
+
+  return ok({
+    read_only: true,
+    run_id: runId,
+    filters: { severity, event_type: eventType, limit },
+    events: rows.results ?? [],
+  });
+}
+
+async function listRunItemEvents(env: Env, url: URL, runId: string): Promise<Response> {
+  const limit = clamp(num(url.searchParams.get('limit'), 200), 1, 1000);
+  const status = sanitizeOptionalDebugText(url.searchParams.get('status'), 120);
+
+  const where = ['run_id=?'];
+  const args: unknown[] = [runId];
+
+  if (status) {
+    where.push('status=?');
+    args.push(status);
+  }
+
+  args.push(limit);
+
+  const rows = await env.DB.prepare(`
+    SELECT id, run_id, item_id, source_url, post_id, source_account,
+           phase, status, reject_reason, ai_score, ai_risk, media_count,
+           queue_id, metadata_json, created_at
+    FROM run_item_events
+    WHERE ${where.join(' AND ')}
+    ORDER BY created_at ASC, id ASC
+    LIMIT ?
+  `).bind(...args).all();
+
+  return ok({
+    read_only: true,
+    run_id: runId,
+    filters: { status, limit },
+    items: rows.results ?? [],
+  });
+}
+
+function sanitizeOptionalDebugText(value: string | null, maxLen: number): string | null {
+  if (value === null) return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  return /^[\w.:/-]{1,160}$/.test(raw) ? raw.slice(0, maxLen) : null;
+}
+
+function sanitizeOptionalEnum(value: string | null, allowed: string[]): string | null {
+  if (value === null) return null;
+  const raw = value.trim();
+  return allowed.includes(raw) ? raw : null;
+}
 
 
 async function markDiscoveryRunFailedForDebug(req: Request, env: Env, runId: string): Promise<Response> {
