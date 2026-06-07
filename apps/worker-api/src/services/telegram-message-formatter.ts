@@ -93,6 +93,19 @@ export function buildSourceLink(label: string, url: string): string | null {
   return `<a href="${escapeHtmlAttr(safeUrl)}">${escapeHtml(label)}</a>`;
 }
 
+
+export function buildSourceBlock(label: string, url: string): string | null {
+  const normalized = sanitizeSingleLine(label, 32) ?? sourceLabel('en');
+
+  if (normalized.startsWith('🌏 ')) {
+    const linkText = normalized.slice('🌏 '.length).trim();
+    const link = buildSourceLink(linkText || 'Source', url);
+    return link ? `🌏 ${link}` : null;
+  }
+
+  return buildSourceLink(normalized, url);
+}
+
 export function resolveChannelFooter(channel: ChannelRow): string | null {
   if (!isEnabled(channel.channel_id_footer_enabled)) return null;
   const custom = sanitizeSingleLine(channel.channel_id_footer_text, 80);
@@ -127,10 +140,11 @@ export function removeRawSourceReferences(body: string, sourceUrl?: string): str
 function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
   const blocks: string[] = [];
 
+  const sourceParts: string[] = [];
   if (isEnabled(input.channel.source_enabled)) {
     const label = sourceLabel(input.language, input.channel.source_label_override);
-    const link = input.sourceUrl ? buildSourceLink(label, input.sourceUrl) : null;
-    if (link) blocks.push(link);
+    const link = input.sourceUrl ? buildSourceBlock(label, input.sourceUrl) : null;
+    if (link) sourceParts.push(link);
   }
 
   const signatureParts: string[] = [];
@@ -142,8 +156,8 @@ function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
   const footer = resolveChannelFooter(input.channel);
   if (footer) signatureParts.push(escapeHtml(footer));
 
-  if (signatureParts.length > 0) {
-    blocks.push(signatureParts.join(String.fromCharCode(10)));
+  if (sourceParts.length > 0 || signatureParts.length > 0) {
+    blocks.push([...sourceParts, ...signatureParts].join(String.fromCharCode(10)));
   }
 
   return {
