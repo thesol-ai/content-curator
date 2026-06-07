@@ -21,7 +21,20 @@ const COINS: CoinConfig[] = [
   { symbol: 'BNB', binanceSymbol: 'BNBUSDT' },
   { symbol: 'ADA', binanceSymbol: 'ADAUSDT' },
   { symbol: 'TON', binanceSymbol: 'TONUSDT' },
+  { symbol: 'DOGE', binanceSymbol: 'DOGEUSDT' },
 ];
+
+type TelegramEntity = {
+  type: 'custom_emoji' | 'text_link';
+  offset: number;
+  length: number;
+  custom_emoji_id?: string;
+  url?: string;
+};
+
+const MARKET_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'ADA', 'TON', 'DOGE'] as const;
+type MarketSymbol = typeof MARKET_SYMBOLS[number];
+
 
 const SNAPSHOT_SOURCE_URL = 'https://www.binance.com/en/markets';
 const DEFAULT_CHANNEL_ID = 'crypto_fa_pilot';
@@ -31,21 +44,19 @@ const STALE_CACHE_TTL_SECONDS = 2 * 60 * 60;
 
 export async function buildMarketSnapshotText(env: Env): Promise<string> {
   const data = await getMarketSnapshotData(env);
-  const tehranTime = formatTehranTime(data.generatedAt);
 
   const body = [
-    `📊 نمای بازار کریپتو | ${tehranTime}`,
+    '📊 نمای بازار کریپتو',
     '',
     ...data.lines,
   ];
 
-  if (Number.isFinite(data.totalMarketCapUsd) || Number.isFinite(data.btcDominance)) {
-    body.push('');
-    body.push(`ارزش کل بازار: ${formatUsdCompact(data.totalMarketCapUsd)}`);
-    body.push(`سهم بیت‌کوین: ${formatPercent(data.btcDominance)}`);
-  }
+  body.push('');
+  body.push(`🌐 ارزش کل بازار: ${formatUsdCompact(data.totalMarketCapUsd)}`);
+  body.push(`سهم بیت‌کوین: ${formatPercent(data.btcDominance)}`);
 
-  return body.join('\n').trim();
+  return body.join('
+').trim();
 }
 
 export async function sendMarketSnapshotDirect(
@@ -84,17 +95,7 @@ export async function sendMarketSnapshotDirect(
 
   const text = await buildMarketSnapshotText(env);
 
-  const result = await publishToTelegram(env, {
-    chatId: channel.telegram_chat_id,
-    captionShort: text,
-    captionFull: text,
-    sourceUrl: SNAPSHOT_SOURCE_URL,
-    method: 'sendMessage',
-    language: channel.language || 'fa',
-    channel,
-    mediaUrls: [],
-    mediaTypes: [],
-  });
+  const result = await sendMarketSnapshotTelegram(env, channel, text);
 
   if (!result.ok) {
     return {
@@ -183,6 +184,168 @@ function getMarketSnapshotChannelId(env: Env): string {
   return String(env.MARKET_SNAPSHOT_CHANNEL_ID || DEFAULT_CHANNEL_ID).trim() || DEFAULT_CHANNEL_ID;
 }
 
+async function sendMarketSnapshotTelegram(
+  env: Env,
+  channel: ChannelRow,
+  bodyText: string
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  if (isCustomEmojiEnabled(env)) {
+    return sendMarketSnapshotTelegramWithEntities(env, channel, bodyText);
+  }
+
+  const result = await publishToTelegram(env, {
+    chatId: channel.telegram_chat_id,
+    captionShort: bodyText,
+    captionFull: bodyText,
+    sourceUrl: SNAPSHOT_SOURCE_URL,
+    method: 'sendMessage',
+    language: channel.language || 'fa',
+    channel,
+    mediaUrls: [],
+    mediaTypes: [],
+  });
+
+  return {
+    ok: result.ok,
+    messageId: result.messageId,
+    error: result.error,
+  };
+}
+
+async function sendMarketSnapshotTelegramWithEntities(
+  env: Env,
+  channel: ChannelRow,
+  bodyText: string
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured' };
+
+  const emojiMap = getCustomEmojiMap(env);
+  const built = buildMarketSnapshotTextWithEntities(bodyText, emojiMap, channel);
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: channel.telegram_chat_id,
+      text: built.text,
+      entities: built.entities,
+      link_preview_options: { is_disabled: true },
+    }),
+  });
+
+  const json: any = await res.json().catch(() => null);
+
+  if (!res.ok || json?.ok !== true) {
+    return {
+      ok: false,
+      error: json?.description || `Telegram sendMessage failed: ${res.status}`,
+    };
+  }
+
+  return {
+    ok: true,
+    messageId: String(json?.result?.message_id ?? ''),
+  };
+}
+
+function buildMarketSnapshotTextWithEntities(
+  bodyText: string,
+  emojiMap: Partial<Record<MarketSymbol, { id: string; fallback: string }>>,
+  channel: ChannelRow
+): { text: string; entities: TelegramEntity[] } {
+  const lines = bodyText.split('\n');
+  const outputLines: string[] = [];
+  const entities: TelegramEntity[] = [];
+
+  for (const line of lines) {
+    const symbolMatch = line.match(/^(BTC|ETH|SOL|XRP|BNB|ADA|TON|DOGE):\s/);
+    if (!symbolMatch) {
+      outputLines.push(line);
+      continue;
+    }
+
+    const symbol = symbolMatch[1] as MarketSymbol;
+    const customEmoji = emojiMap[symbol];
+
+    if (!customEmoji) {
+      outputLines.push(line);
+      continue;
+    }
+
+    const placeholder = customEmoji.fallback;
+    const prefix = `${placeholder} `;
+    const lineStartOffset = utf16Length(outputLines.join('\n')) + (outputLines.length > 0 ? 1 : 0);
+
+    outputLines.push(`${prefix}${line}`);
+
+    entities.push({
+      type: 'custom_emoji',
+      offset: lineStartOffset,
+      length: utf16Length(placeholder),
+      custom_emoji_id: customEmoji.id,
+    });
+  }
+
+  if (isEnabled(channel.source_enabled)) {
+    outputLines.push('');
+
+    const sourcePrefix = '🌏 ';
+    const sourceLabel = 'Source';
+    const sourceLine = `${sourcePrefix}${sourceLabel}`;
+    const sourceLineStart = utf16Length(outputLines.join('\n')) + (outputLines.length > 0 ? 1 : 0);
+
+    outputLines.push(sourceLine);
+
+    entities.push({
+      type: 'text_link',
+      offset: sourceLineStart + utf16Length(sourcePrefix),
+      length: utf16Length(sourceLabel),
+      url: SNAPSHOT_SOURCE_URL,
+    });
+  }
+
+  if (isEnabled(channel.channel_id_footer_enabled)) {
+    const footer = String(channel.channel_id_footer_text || '').trim();
+    if (footer) outputLines.push(footer);
+  }
+
+  return {
+    text: outputLines.join('\n').trim(),
+    entities,
+  };
+}
+
+function isCustomEmojiEnabled(env: Env): boolean {
+  return String(env.MARKET_SNAPSHOT_CUSTOM_EMOJIS_ENABLED ?? 'false').toLowerCase() === 'true';
+}
+
+function getCustomEmojiMap(env: Env): Partial<Record<MarketSymbol, { id: string; fallback: string }>> {
+  return {
+    BTC: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_BTC), '🥇'),
+    ETH: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_ETH), '💩'),
+    SOL: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_SOL), '💀'),
+    XRP: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_XRP), '👤'),
+    BNB: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_BNB), '🌧'),
+    ADA: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_ADA), '😭'),
+    TON: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_TON), '🌽'),
+    DOGE: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_DOGE), '🐶'),
+  };
+}
+
+function customEmoji(id: string | undefined, fallback: string): { id: string; fallback: string } | undefined {
+  return id ? { id, fallback } : undefined;
+}
+
+function cleanEmojiId(value: unknown): string | undefined {
+  const text = String(value ?? '').trim();
+  return text || undefined;
+}
+
+function utf16Length(value: string): number {
+  return [...value].reduce((length, char) => length + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+}
+
 async function getMarketSnapshotData(env: Env): Promise<MarketSnapshotData> {
   const now = Math.floor(Date.now() / 1000);
   const cached = await readCachedSnapshot(env);
@@ -237,7 +400,7 @@ async function fetchBinancePrices(): Promise<string[]> {
     const row = bySymbol.get(coin.binanceSymbol);
     const price = Number(row?.lastPrice);
     const change = Number(row?.priceChangePercent);
-    return `${coin.symbol}: ${formatUsd(price)} (${formatSignedPercent(change)})`;
+    return formatMarketLine(coin.symbol, price, change);
   });
 }
 
@@ -330,6 +493,25 @@ function formatUsdCompact(value?: number): string {
   if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   return `$${Math.round(n).toLocaleString('en-US')}`;
+}
+
+function formatMarketLine(symbol: string, price: number, change: number): string {
+  const symbolText = symbol.padEnd(5, ' ');
+  const priceText = formatUsd(price).padEnd(9, ' ');
+
+  if (!Number.isFinite(change)) {
+    return `⚪ ${symbolText}${priceText} (• —)`;
+  }
+
+  if (change < 0) {
+    return `🔴 ${symbolText}${priceText} (▼ ${Math.abs(change).toFixed(1)}%)`;
+  }
+
+  if (change > 0) {
+    return `🟢 ${symbolText}${priceText} (▲ ${change.toFixed(1)}%)`;
+  }
+
+  return `⚪ ${symbolText}${priceText} (• 0.0%)`;
 }
 
 function formatSignedPercent(value: number): string {
