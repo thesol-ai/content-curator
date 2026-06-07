@@ -42,6 +42,11 @@ export interface Env {
   TELEGRAM_PUBLISH_SCHEDULER_ENABLED: string;
   TELEGRAM_PUBLISH_DUE_LIMIT: string;
 
+  // Market Snapshot — direct Telegram posting, independent from publish_queue
+  MARKET_SNAPSHOT_ENABLED?: string;
+  MARKET_SNAPSHOT_INTERVAL_HOURS?: string;
+  MARKET_SNAPSHOT_CHANNEL_ID?: string;
+
   // Publish scheduling delays
   PUBLISH_DELAY_BREAKING_MINUTES?: string;
   PUBLISH_DELAY_HIGH_MINUTES?: string;

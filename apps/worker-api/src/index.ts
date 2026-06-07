@@ -9,6 +9,7 @@ import { handleAdmin } from './routes/admin';
 import { runCuration, publishDueItems } from './services/curation-orchestrator';
 import { cleanupOldDedupeKeys } from './services/dedupe';
 import { getRuntimeConfig } from './services/runtime-config';
+import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
 
 export default {
 
@@ -64,7 +65,16 @@ export default {
           })));
         }
 
-        // 2. Publish due items
+        // 2. Enqueue hourly market snapshot, then publish due items
+        try {
+          const marketSnapshotResult = await maybeSendMarketSnapshotDirect(env);
+          if (marketSnapshotResult.shouldRun) {
+            console.log('[Scheduled] Market snapshot direct:', marketSnapshotResult);
+          }
+        } catch (err) {
+          console.error('[Scheduled] Market snapshot direct failed:', err instanceof Error ? err.message : String(err));
+        }
+
         const publishResult = await publishDueItems(env);
         console.log('[Scheduled] Published:', publishResult);
 
