@@ -36,7 +36,7 @@ const FOOTER_SEPARATOR = '\n\n';
 
 export function formatTelegramMessage(input: TelegramMessageFormatInput): TelegramMessageFormatResult {
   const maxLength = normalizeMaxLength(input.maxLength);
-  const cleanedBody = removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl).trim();
+  const cleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
   const footer = buildFooterHtml(input);
   const escapedBody = escapeHtml(cleanedBody);
 
@@ -132,6 +132,21 @@ export function removeRawSourceReferences(body: string, sourceUrl?: string): str
   }
 
   return result
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+
+export function removeVisibleHashtagLines(body: string): string {
+  return String(body ?? '')
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      return !/^(#[\p{L}\p{N}_\u200c-]+[\s\u200c]*)+$/u.test(trimmed);
+    })
+    .join('\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

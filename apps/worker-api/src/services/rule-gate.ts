@@ -67,6 +67,7 @@ export async function runRuleGate(
     .first<{ last_at: number | null }>();
 
   const scheduledAt = computeScheduledAt(
+    env,
     aiResult.publishPriority,
     channel,
     mediaUrlExpiresSoon,
@@ -105,13 +106,14 @@ export async function runRuleGate(
 }
 
 function computeScheduledAt(
+  env: Env,
   priority: PublishPriority,
   channel: ChannelRow,
   mediaUrlExpiresSoon: boolean,
   lastScheduledAt: number | null
 ): number {
   const now = Math.floor(Date.now() / 1000);
-  let candidateUnix = now + baseDelaySeconds(priority, mediaUrlExpiresSoon);
+  let candidateUnix = now + baseDelaySeconds(env, priority, mediaUrlExpiresSoon);
 
   if (channel.min_gap_minutes > 0 && lastScheduledAt !== null) {
     const minNextAt = lastScheduledAt + channel.min_gap_minutes * 60;
@@ -124,22 +126,35 @@ function computeScheduledAt(
   return normalizeToChannelWindows(candidateUnix, channel.timezone, allowedWindows, blockedWindows);
 }
 
-function baseDelaySeconds(priority: PublishPriority, mediaUrlExpiresSoon: boolean): number {
+function baseDelaySeconds(env: Env, priority: PublishPriority, mediaUrlExpiresSoon: boolean): number {
+  const breakingMinutes = envIntMinutes(env.PUBLISH_DELAY_BREAKING_MINUTES, 5, 1, 240);
+  const highMinutes = envIntMinutes(env.PUBLISH_DELAY_HIGH_MINUTES, 10, 1, 240);
+  const normalMinutes = envIntMinutes(env.PUBLISH_DELAY_NORMAL_MINUTES, 20, 1, 240);
+  const lowMinutes = envIntMinutes(env.PUBLISH_DELAY_LOW_MINUTES, 45, 1, 720);
+  const expiringMediaHighMinutes = envIntMinutes(env.PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES, highMinutes, 1, 240);
+  const expiringMediaDefaultMinutes = envIntMinutes(env.PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES, normalMinutes, 1, 240);
+
   if (mediaUrlExpiresSoon) {
     switch (priority) {
-      case 'breaking': return 5 * 60;
-      case 'high': return 20 * 60;
-      default: return 60 * 60;
+      case 'breaking': return breakingMinutes * 60;
+      case 'high': return expiringMediaHighMinutes * 60;
+      default: return expiringMediaDefaultMinutes * 60;
     }
   }
 
   switch (priority) {
-    case 'breaking': return 5 * 60;
-    case 'high': return 60 * 60;
-    case 'normal': return 2 * 60 * 60;
-    case 'low': return 6 * 60 * 60;
-    default: return 2 * 60 * 60;
+    case 'breaking': return breakingMinutes * 60;
+    case 'high': return highMinutes * 60;
+    case 'normal': return normalMinutes * 60;
+    case 'low': return lowMinutes * 60;
+    default: return normalMinutes * 60;
   }
+}
+
+function envIntMinutes(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
 }
 
 function normalizeToChannelWindows(

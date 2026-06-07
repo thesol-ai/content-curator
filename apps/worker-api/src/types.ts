@@ -42,6 +42,14 @@ export interface Env {
   TELEGRAM_PUBLISH_SCHEDULER_ENABLED: string;
   TELEGRAM_PUBLISH_DUE_LIMIT: string;
 
+  // Publish scheduling delays
+  PUBLISH_DELAY_BREAKING_MINUTES?: string;
+  PUBLISH_DELAY_HIGH_MINUTES?: string;
+  PUBLISH_DELAY_NORMAL_MINUTES?: string;
+  PUBLISH_DELAY_LOW_MINUTES?: string;
+  PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES?: string;
+  PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES?: string;
+
   // Media — سه حالت:
   //   direct_url    → URL مستقیم به Telegram (پیش‌فرض، سریع، بدون ضمانت)
   //   binary_upload → دانلود + آپلود binary به Telegram (توصیه می‌شود)
