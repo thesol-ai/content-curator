@@ -126,6 +126,9 @@ DEDUPE_WINDOW_HOURS = "168"
 # Paid video transcoding fallback. Keep disabled unless explicitly approved.
 STREAM_TRANSCODE_ENABLED = "false"
 
+MARKET_SNAPSHOT_ENABLED = "true"
+MARKET_SNAPSHOT_INTERVAL_HOURS = "1"
+MARKET_SNAPSHOT_CHANNEL_ID = "crypto_fa_pilot"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "content-curator-db-v2"

@@ -171,9 +171,11 @@ function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
   const footer = resolveChannelFooter(input.channel);
   if (footer) signatureParts.push(escapeHtml(footer));
 
-  if (sourceParts.length > 0 || signatureParts.length > 0) {
-    blocks.push([...sourceParts, ...signatureParts].join(String.fromCharCode(10)));
-  }
+  const sourceBlock = sourceParts.join(String.fromCharCode(10));
+  const signatureBlock = signatureParts.join(String.fromCharCode(10));
+
+  if (sourceBlock) blocks.push(sourceBlock);
+  if (signatureBlock) blocks.push(signatureBlock);
 
   return {
     html: blocks.join(String.fromCharCode(10, 10)),

@@ -12,6 +12,7 @@ import { getStreamTranscodeState } from '../services/stream-config';
 import { getRuntimeConfig } from '../services/runtime-config';
 import { prepareTelegramCaptions } from '../services/telegram-publisher';
 import { sanitizeRunDebugId } from '../services/run-events';
+import { buildMarketSnapshotText, sendMarketSnapshotDirect } from '../services/market-snapshot';
 
 // ID validation — فقط alphanumeric و underscore و dash
 function isValidId(id: string | undefined): id is string {
@@ -57,6 +58,32 @@ export async function handleAdmin(
     // ── Manual publish due queue items ────────────────────────
     if (path === '/internal/publish/due' && m === 'POST') {
       return triggerPublishDue(req, env);
+    }
+
+    // ── Market snapshot preview/enqueue ─────────────────────────
+    if (path === '/internal/market-snapshot/preview' && m === 'GET') {
+      try {
+        const text = await buildMarketSnapshotText(env);
+        return ok({ text });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return Response.json({ ok: false, error: 'market_snapshot_preview_failed', message }, { status: 500 });
+      }
+    }
+
+    if (path === '/internal/market-snapshot/enqueue' && m === 'POST') {
+      return Response.json(
+        { ok: false, error: 'market_snapshot_queue_disabled', message: 'Market snapshot is sent directly and no longer uses publish_queue.' },
+        { status: 410 }
+      );
+    }
+
+    if (path === '/internal/market-snapshot/send-now' && m === 'POST') {
+      const body: any = await req.json().catch(() => ({}));
+      const channelId = typeof body.channel_id === 'string' ? body.channel_id : 'crypto_fa_pilot';
+      const force = body.force === true || body.force === 'true';
+      const result = await sendMarketSnapshotDirect(env, channelId, force);
+      return ok(result);
     }
 
     // ── Preview one queue item with the real Telegram formatter ─

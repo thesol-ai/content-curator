@@ -42,6 +42,20 @@ export interface Env {
   TELEGRAM_PUBLISH_SCHEDULER_ENABLED: string;
   TELEGRAM_PUBLISH_DUE_LIMIT: string;
 
+  // Market Snapshot — direct Telegram posting, independent from publish_queue
+  MARKET_SNAPSHOT_ENABLED?: string;
+  MARKET_SNAPSHOT_INTERVAL_HOURS?: string;
+  MARKET_SNAPSHOT_CHANNEL_ID?: string;
+  MARKET_SNAPSHOT_CUSTOM_EMOJIS_ENABLED?: string;
+  MARKET_SNAPSHOT_EMOJI_BTC?: string;
+  MARKET_SNAPSHOT_EMOJI_ETH?: string;
+  MARKET_SNAPSHOT_EMOJI_SOL?: string;
+  MARKET_SNAPSHOT_EMOJI_XRP?: string;
+  MARKET_SNAPSHOT_EMOJI_BNB?: string;
+  MARKET_SNAPSHOT_EMOJI_ADA?: string;
+  MARKET_SNAPSHOT_EMOJI_TON?: string;
+  MARKET_SNAPSHOT_EMOJI_DOGE?: string;
+
   // Publish scheduling delays
   PUBLISH_DELAY_BREAKING_MINUTES?: string;
   PUBLISH_DELAY_HIGH_MINUTES?: string;
