@@ -55,8 +55,7 @@ export async function buildMarketSnapshotText(env: Env): Promise<string> {
   body.push(`🌐 ارزش کل بازار: ${formatUsdCompact(data.totalMarketCapUsd)}`);
   body.push(`سهم بیت‌کوین: ${formatPercent(data.btcDominance)}`);
 
-  return body.join('
-').trim();
+  return body.join('\n').trim();
 }
 
 export async function sendMarketSnapshotDirect(

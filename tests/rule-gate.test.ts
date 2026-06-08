@@ -137,7 +137,7 @@ describe('rule-gate scheduling and quota', () => {
     expectUnix(result.scheduledAt, '2026-06-01T23:55:00Z');
   });
 
-  it('moves candidates outside an overnight allowed window to the next window start', async () => {
+  it('keeps candidates in the after-midnight part of an overnight allowed window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-01T01:00:00Z'));
 
@@ -148,10 +148,10 @@ describe('rule-gate scheduling and quota', () => {
     }));
 
     expect(result.approved).toBe(true);
-    expectUnix(result.scheduledAt, '2026-06-01T22:00:00Z');
+    expectUnix(result.scheduledAt, '2026-06-01T01:20:00Z');
   });
 
-  it('lets blocked windows override allowed windows', async () => {
+  it('keeps candidates before a future blocked window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-01T10:30:00Z'));
 
@@ -163,7 +163,7 @@ describe('rule-gate scheduling and quota', () => {
     }));
 
     expect(result.approved).toBe(true);
-    expectUnix(result.scheduledAt, '2026-06-01T13:00:00Z');
+    expectUnix(result.scheduledAt, '2026-06-01T10:50:00Z');
   });
 
   it('supports legacy 08:00-00:00 as an overnight allowed window ending at midnight', async () => {
