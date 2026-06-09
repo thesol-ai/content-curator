@@ -55,6 +55,7 @@ export interface Env {
   // Market Snapshot — direct Telegram posting, independent from publish_queue
   MARKET_SNAPSHOT_ENABLED?: string;
   MARKET_SNAPSHOT_INTERVAL_HOURS?: string;
+  MARKET_SNAPSHOT_SLOTS?: string;
   MARKET_SNAPSHOT_CHANNEL_ID?: string;
   MARKET_SNAPSHOT_CUSTOM_EMOJIS_ENABLED?: string;
   MARKET_SNAPSHOT_EMOJI_BTC?: string;

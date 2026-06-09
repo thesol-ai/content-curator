@@ -41,6 +41,8 @@ const DEFAULT_CHANNEL_ID = 'crypto_fa_pilot';
 const CACHE_KEY = 'market_snapshot_cache_v2';
 const CACHE_TTL_SECONDS = 15 * 60;
 const STALE_CACHE_TTL_SECONDS = 2 * 60 * 60;
+const DEFAULT_MARKET_SNAPSHOT_SLOTS = '09:00,12:30,15:30,18:30,21:30';
+const MARKET_SNAPSHOT_BLOCKED_WINDOW = '01:00-07:00';
 
 export async function buildMarketSnapshotText(env: Env): Promise<string> {
   const data = await getMarketSnapshotData(env);
@@ -143,14 +145,15 @@ export async function maybeSendMarketSnapshotDirect(env: Env): Promise<{
   const channel = await loadChannel(env, channelId);
   const timezone = channel?.timezone || 'Asia/Tehran';
   const parts = tehranDateParts(new Date(), timezone);
-  const intervalHours = getMarketSnapshotIntervalHours(env);
+  const slot = formatMarketSnapshotSlot(parts.hour, parts.minute);
+  const schedule = getMarketSnapshotSchedule(env);
 
-  if (parts.minute !== 0) {
-    return { shouldRun: false, reason: `not_top_of_hour_minute_${parts.minute}` };
+  if (isTimeInBlockedWindow(slot, MARKET_SNAPSHOT_BLOCKED_WINDOW)) {
+    return { shouldRun: false, reason: `blocked_window_${slot}` };
   }
 
-  if (parts.hour % intervalHours !== 0) {
-    return { shouldRun: false, reason: `not_interval_hour_${parts.hour}_mod_${intervalHours}` };
+  if (!schedule.allowedSlots.includes(slot)) {
+    return { shouldRun: false, reason: `not_market_snapshot_slot_${slot}` };
   }
 
   const result = await sendMarketSnapshotDirect(env, channelId, false);
@@ -170,13 +173,53 @@ function isMarketSnapshotEnabled(env: Env): boolean {
   return String(env.MARKET_SNAPSHOT_ENABLED ?? 'false').toLowerCase() === 'true';
 }
 
-function getMarketSnapshotIntervalHours(env: Env): number {
-  const raw = Number(env.MARKET_SNAPSHOT_INTERVAL_HOURS ?? '1');
-  if (!Number.isFinite(raw)) return 1;
-  const n = Math.floor(raw);
-  if (n < 1) return 1;
-  if (n > 24) return 24;
-  return n;
+function getMarketSnapshotSchedule(env: Env): { allowedSlots: string[] } {
+  const allowedSlots = String(env.MARKET_SNAPSHOT_SLOTS || DEFAULT_MARKET_SNAPSHOT_SLOTS)
+    .split(',')
+    .map(slot => slot.trim())
+    .filter(isValidTimeSlot)
+    .slice(0, 5);
+
+  return {
+    allowedSlots: allowedSlots.length > 0 ? allowedSlots : DEFAULT_MARKET_SNAPSHOT_SLOTS.split(','),
+  };
+}
+
+function formatMarketSnapshotSlot(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function isValidTimeSlot(value: string): boolean {
+  const m = value.match(/^(\d{2}):(\d{2})$/);
+  if (!m) return false;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+}
+
+function isTimeInBlockedWindow(slot: string, window: string): boolean {
+  if (!isValidTimeSlot(slot)) return false;
+  const m = window.match(/^(\d{2}:\d{2})-(\d{2}:\d{2})$/);
+  if (!m) return false;
+
+  const startSlot = m[1];
+  const endSlot = m[2];
+  if (!startSlot || !endSlot) return false;
+
+  const current = minutesSinceMidnight(slot);
+  const start = minutesSinceMidnight(startSlot);
+  const end = minutesSinceMidnight(endSlot);
+
+  if (start === end) return false;
+  if (start < end) return current >= start && current < end;
+  return current >= start || current < end;
+}
+
+function minutesSinceMidnight(slot: string): number {
+  const [hourText = '0', minuteText = '0'] = slot.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  return hour * 60 + minute;
 }
 
 function getMarketSnapshotChannelId(env: Env): string {
@@ -349,7 +392,7 @@ async function getMarketSnapshotData(env: Env): Promise<MarketSnapshotData> {
   const now = Math.floor(Date.now() / 1000);
   const cached = await readCachedSnapshot(env);
 
-  if (cached && now - cached.cachedAt <= CACHE_TTL_SECONDS) {
+  if (cached && now - cached.cachedAt <= CACHE_TTL_SECONDS && hasCompleteMarketSnapshotData(cached.data)) {
     return cached.data;
   }
 
@@ -404,6 +447,16 @@ async function fetchBinancePrices(): Promise<string[]> {
 }
 
 async function fetchCoinGeckoGlobalOptional(): Promise<{ totalMarketCapUsd?: number; btcDominance?: number }> {
+  const coingecko = await fetchCoinGeckoGlobal();
+  if (hasUsableGlobalMarketData(coingecko)) return coingecko;
+
+  const coinlore = await fetchCoinLoreGlobalOptional();
+  if (hasUsableGlobalMarketData(coinlore)) return coinlore;
+
+  return coingecko;
+}
+
+async function fetchCoinGeckoGlobal(): Promise<{ totalMarketCapUsd?: number; btcDominance?: number }> {
   try {
     const res = await fetch('https://api.coingecko.com/api/v3/global', {
       headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
@@ -415,14 +468,59 @@ async function fetchCoinGeckoGlobalOptional(): Promise<{ totalMarketCapUsd?: num
     }
 
     const global = await res.json<any>();
-    return {
-      totalMarketCapUsd: Number(global?.data?.total_market_cap?.usd),
-      btcDominance: Number(global?.data?.market_cap_percentage?.btc),
-    };
+    return normalizeGlobalMarketData({
+      totalMarketCapUsd: global?.data?.total_market_cap?.usd,
+      btcDominance: global?.data?.market_cap_percentage?.btc,
+    });
   } catch (error) {
     console.warn('[MarketSnapshot] CoinGecko global failed:', error instanceof Error ? error.message : String(error));
     return {};
   }
+}
+
+async function fetchCoinLoreGlobalOptional(): Promise<{ totalMarketCapUsd?: number; btcDominance?: number }> {
+  try {
+    const res = await fetch('https://api.coinlore.net/api/global/', {
+      headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+    });
+
+    if (!res.ok) {
+      console.warn(`[MarketSnapshot] CoinLore global skipped: ${res.status}`);
+      return {};
+    }
+
+    const global = await res.json<any>();
+    const row = Array.isArray(global) ? global[0] : global?.data?.[0] ?? global?.data ?? global;
+
+    return normalizeGlobalMarketData({
+      totalMarketCapUsd: row?.total_mcap ?? row?.totalMarketCap ?? row?.total_market_cap,
+      btcDominance: row?.btc_d ?? row?.btcDominance ?? row?.btc_dominance,
+    });
+  } catch (error) {
+    console.warn('[MarketSnapshot] CoinLore global failed:', error instanceof Error ? error.message : String(error));
+    return {};
+  }
+}
+
+function normalizeGlobalMarketData(input: { totalMarketCapUsd?: unknown; btcDominance?: unknown }): { totalMarketCapUsd?: number; btcDominance?: number } {
+  const totalMarketCapUsd = Number(input.totalMarketCapUsd);
+  const btcDominance = Number(input.btcDominance);
+
+  return {
+    totalMarketCapUsd: Number.isFinite(totalMarketCapUsd) && totalMarketCapUsd > 0 ? totalMarketCapUsd : undefined,
+    btcDominance: Number.isFinite(btcDominance) && btcDominance > 0 ? btcDominance : undefined,
+  };
+}
+
+function hasUsableGlobalMarketData(data: { totalMarketCapUsd?: number; btcDominance?: number }): boolean {
+  return Number.isFinite(data.totalMarketCapUsd) && Number.isFinite(data.btcDominance);
+}
+
+function hasCompleteMarketSnapshotData(data: MarketSnapshotData): boolean {
+  return Array.isArray(data.lines)
+    && data.lines.length > 0
+    && Number.isFinite(data.totalMarketCapUsd)
+    && Number.isFinite(data.btcDominance);
 }
 
 async function readCachedSnapshot(env: Env): Promise<{ cachedAt: number; data: MarketSnapshotData } | null> {
@@ -535,7 +633,7 @@ function formatTehranTime(unixSec: number): string {
 
 function currentMarketSlotKey(timezone: string): string {
   const parts = tehranDateParts(new Date(), timezone || 'Asia/Tehran');
-  return `${parts.year}${parts.month}${parts.day}_${String(parts.hour).padStart(2, '0')}00`;
+  return `${parts.year}${parts.month}${parts.day}_${String(parts.hour).padStart(2, '0')}${String(parts.minute).padStart(2, '0')}`;
 }
 
 function tehranDateParts(date: Date, timezone: string): { year: string; month: string; day: string; hour: number; minute: number } {
