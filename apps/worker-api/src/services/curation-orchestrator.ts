@@ -12,6 +12,10 @@ import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { publishToTelegram } from './telegram-publisher';
 import { getRuntimeConfig, withEffectiveCurationEnv, type RuntimeConfigOverrides } from './runtime-config';
 import { recordRunEvent, recordRunItemEvent } from './run-events';
+import { buildPolicyRejectAiResult, findSimilarTopicInRunRejections, getItemRejectReason, getPreAiContentRejectReason } from './content-policy';
+import { drainAICandidateQueue } from './backlog-drain';
+import { enqueueCandidates, isCandidateBacklogEnabled, updateCandidatesStatus } from './candidate-queue';
+export { findSimilarTopicInRunRejections, getItemRejectReason, getPreAiContentRejectReason } from './content-policy';
 
 export interface CurationRunResult {
   runId: string;
@@ -266,6 +270,91 @@ async function processSingleSource(
         dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
       return mkResult(runId, category.id, source.platform, true, dryRun,
         { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
+    }
+
+    if (isCandidateBacklogEnabled(env)) {
+      await markPhase('enqueue_ai_candidates');
+      const enqueueResults = await enqueueCandidates(env, fresh.map((item, i) => ({
+        sourceId: source.id,
+        runId,
+        categoryId: category.id,
+        platform: item.platform,
+        sourceAccount: item.sourceAccount,
+        sourceUrl: item.sourceUrl,
+        postId: item.postId,
+        publishedAt: item.publishedAt,
+        normalizedItem: item,
+        dedupeKeys: freshKeys[i] ?? [],
+        priorityScore: computeCandidatePriorityScore(item),
+      })));
+
+      const insertedIds = enqueueResults.filter(r => r.inserted).map(r => r.id);
+      const enqueueErrors = enqueueResults.filter(r => typeof r.reason === 'string' && r.reason.startsWith('error:'));
+      await recordRunEvent(env, {
+        runId,
+        eventType: 'candidate.enqueue.completed',
+        phase: 'enqueue_ai_candidates',
+        categoryId: category.id,
+        platform: source.platform,
+        sourceId: source.id,
+        datasetId: source.apify_dataset_id,
+        durationMs: Date.now() - t0,
+        metadata: {
+          freshCount: fresh.length,
+          inserted: insertedIds.length,
+          duplicateOrExisting: enqueueResults.filter(r => !r.inserted && r.reason === 'duplicate_source_url').length,
+          errors: enqueueErrors.length,
+        },
+      });
+
+      if (enqueueErrors.length > 0) {
+        if (insertedIds.length > 0) {
+          await updateCandidatesStatus(env, insertedIds, 'failed', { lastError: 'enqueue_partial_failure_fallback_to_legacy' });
+        }
+        await recordRunEvent(env, {
+          runId,
+          eventType: 'candidate.enqueue.fallback_to_legacy',
+          phase: 'enqueue_ai_candidates',
+          severity: 'warn',
+          message: 'AI candidate backlog enqueue failed; falling back to legacy inline scoring for this run.',
+          categoryId: category.id,
+          platform: source.platform,
+          sourceId: source.id,
+          datasetId: source.apify_dataset_id,
+          durationMs: Date.now() - t0,
+          metadata: { errors: enqueueErrors.map(e => e.reason).slice(0, 10) },
+        });
+      } else {
+        await markPhase('drain_ai_candidate_backlog');
+        const drain = await drainAICandidateQueue(env, { categoryId: category.id });
+        itemsAiSelected += drain.candidatesSelected;
+        itemsAiRejected += drain.candidatesRejected + drain.candidatesFailed + drain.candidatesSkipped;
+        itemsQueued += drain.candidatesQueued;
+
+        await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+          dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
+        await recordRunEvent(env, {
+          runId,
+          eventType: dryRun ? 'run.dry_run_completed' : 'run.completed',
+          phase: 'finalize',
+          categoryId: category.id,
+          platform: source.platform,
+          sourceId: source.id,
+          datasetId: source.apify_dataset_id,
+          durationMs: Date.now() - t0,
+          metadata: {
+            itemsFetched,
+            itemsNew,
+            itemsDuplicate,
+            itemsAiSelected,
+            itemsAiRejected,
+            itemsQueued,
+            backlogDrain: drain,
+          },
+        });
+        return mkResult(runId, category.id, source.platform, true, dryRun,
+          { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
+      }
     }
 
     await markPhase('prepare_candidates');
@@ -547,107 +636,17 @@ async function processSingleSource(
 }
 
 
+function computeCandidatePriorityScore(item: NormalizedItem): number {
+  const views = Math.max(0, Number(item.engagementViews) || 0);
+  const likes = Math.max(0, Number(item.engagementLikes) || 0);
+  const shares = Math.max(0, Number(item.engagementShares) || 0);
+  const mediaBoost = item.media.length > 0 ? 5 : 0;
+  return Math.round(Math.log10(views + 10) * 10 + Math.log10(likes + shares * 2 + 10) * 5 + mediaBoost);
+}
+
+
 function channelTranslationKey(channelId: string): string {
   return `channel:${channelId}`;
-}
-
-export function findSimilarTopicInRunRejections(
-  items: Pick<NormalizedItem, 'sourceAccount'>[],
-  aiResults: Pick<AIGateResult, 'publish' | 'riskLevel' | 'score' | 'topicFingerprint'>[],
-  scoreThreshold: number,
-): Set<number> {
-  const groups = new Map<string, Array<{ index: number; score: number }>>();
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const ai = aiResults[i];
-    if (!item || !ai) continue;
-    if (!isAiPublishEligible(ai, scoreThreshold)) continue;
-
-    const fingerprint = normalizeSemanticKeyPart(ai.topicFingerprint);
-    const source = normalizeSemanticKeyPart(item.sourceAccount);
-    if (!fingerprint || !source) continue;
-
-    const key = `${source}::${fingerprint}`;
-    const group = groups.get(key) ?? [];
-    group.push({ index: i, score: Number(ai.score) || 0 });
-    groups.set(key, group);
-  }
-
-  const rejected = new Set<number>();
-  for (const group of groups.values()) {
-    if (group.length <= 1) continue;
-    const [winner, ...rest] = group
-      .slice()
-      .sort((a, b) => (b.score - a.score) || (a.index - b.index));
-    void winner;
-    for (const candidate of rest) rejected.add(candidate.index);
-  }
-  return rejected;
-}
-
-function isAiPublishEligible(
-  ai: Pick<AIGateResult, 'publish' | 'riskLevel' | 'score'>,
-  scoreThreshold: number,
-): boolean {
-  return ai.publish === true && ai.riskLevel !== 'high' && Number(ai.score) >= scoreThreshold;
-}
-
-function normalizeSemanticKeyPart(value: unknown): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/^@+/, '')
-    .replace(/\s+/g, ' ')
-    .slice(0, 140);
-}
-
-export function getPreAiContentRejectReason(item: NormalizedItem, category: CategoryRow): string | null {
-  if (item.isReply === true && intSetting(category.allow_replies, 0) === 0) return 'reply_not_allowed';
-  if (item.isRetweet === true && intSetting(category.allow_retweets, 1) === 0) return 'retweet_not_allowed';
-  if (item.isQuote === true && intSetting(category.allow_quotes, 1) === 0) return 'quote_not_allowed';
-  const textOnlyPolicy = sanitizeTextOnlyPolicy(category.text_only_policy);
-  if (category.media_mode !== 'disabled' && item.media.length === 0 && textOnlyPolicy === 'reject') return 'text_only_rejected';
-  return null;
-}
-
-export function getItemRejectReason(ai: AIGateResult, category: CategoryRow, item: NormalizedItem, similarTopicInRun: boolean): string | null {
-  if (similarTopicInRun) return 'similar_topic_in_run';
-  if (!ai.publish) return 'ai_not_publish';
-  if (ai.riskLevel === 'high') return 'high_risk';
-  if (ai.score < category.score_threshold) return 'below_threshold';
-
-  const textOnlyPolicy = sanitizeTextOnlyPolicy(category.text_only_policy);
-  if (category.media_mode !== 'disabled' && item.media.length === 0) {
-    const minTextOnly = Number(category.min_score_for_text_only);
-    if (textOnlyPolicy === 'penalize' && Number.isFinite(minTextOnly) && ai.score < minTextOnly) return 'text_only_below_min_score';
-  }
-  if (item.media.length > 0) {
-    const minMedia = Number(category.min_score_for_media);
-    if (Number.isFinite(minMedia) && ai.score < minMedia) return 'media_below_min_score';
-  }
-  return null;
-}
-
-function intSetting(value: unknown, defaultValue: 0 | 1): 0 | 1 {
-  return value === 0 || value === '0' || value === false ? 0 : value === 1 || value === '1' || value === true ? 1 : defaultValue;
-}
-
-function sanitizeTextOnlyPolicy(value: unknown): 'allow' | 'penalize' | 'reject' {
-  const raw = String(value ?? 'allow').trim().toLowerCase();
-  return raw === 'penalize' || raw === 'reject' ? raw : 'allow';
-}
-
-function buildPolicyRejectAiResult(item: NormalizedItem, reason: string): AIGateResult {
-  return {
-    publish: false,
-    score: 0,
-    riskLevel: 'medium',
-    riskFlags: [reason],
-    topicFingerprint: `policy-${item.postId}`.slice(0, 100),
-    publishPriority: 'low',
-    translations: {},
-  };
 }
 
 // ── Publish due queue items (cron + manual admin trigger) ─────

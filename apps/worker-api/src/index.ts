@@ -10,6 +10,13 @@ import { runCuration, publishDueItems } from './services/curation-orchestrator';
 import { cleanupOldDedupeKeys } from './services/dedupe';
 import { getRuntimeConfig } from './services/runtime-config';
 import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
+import { drainAICandidateQueue } from './services/backlog-drain';
+import {
+  failMaxAttemptPendingCandidates,
+  isCandidateBacklogEnabled,
+  recoverStaleScoringCandidates,
+  skipStaleCandidates,
+} from './services/candidate-queue';
 
 export default {
 
@@ -78,7 +85,29 @@ export default {
         const publishResult = await publishDueItems(env);
         console.log('[Scheduled] Published:', publishResult);
 
-        // 3. Cleanup old dedupe keys (runs every cron tick)
+        // 3. Controlled AI candidate backlog drain. Runs only when explicitly enabled.
+        // Publishing stays first; backlog errors are isolated so cleanup still runs.
+        if (isCandidateBacklogEnabled(env)) {
+          try {
+            const recovered = await recoverStaleScoringCandidates(env);
+            const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);
+            const skippedStale = await skipStaleCandidates(env);
+            const drainResult = await drainAICandidateQueue(env, {
+              recoverStale: false,
+              skipStale: false,
+            });
+            console.log('[Scheduled] AI candidate backlog:', {
+              recovered,
+              failedMaxAttempts,
+              skippedStale,
+              drainResult,
+            });
+          } catch (err) {
+            console.error('[Scheduled] AI candidate backlog failed:', err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        // 4. Cleanup old dedupe keys (runs every cron tick)
         const cleaned = await cleanupOldDedupeKeys(env);
         if (cleaned > 0) console.log(`[Scheduled] Cleaned ${cleaned} old dedupe keys`);
 

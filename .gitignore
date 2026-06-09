@@ -41,3 +41,6 @@ logs/
 # ── Test coverage ────────────────────────────────────────────
 coverage/
 .nyc_output/
+
+# TypeScript incremental build metadata
+tsconfig.tsbuildinfo

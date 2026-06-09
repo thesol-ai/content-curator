@@ -27,6 +27,16 @@ export interface Env {
   AI_MAX_OUTPUT_TOKENS: string;
   AI_MAX_RETRIES: string;
 
+  // ── AI Candidate Backlog (Phase 1) ─────────────────────────
+  // وقتی false باشد، رفتار pipeline کاملاً تغییر نمی‌کند.
+  AI_CANDIDATE_BACKLOG_ENABLED?: string;    // default: "false"
+  AI_SCORING_BATCH_SIZE?: string;           // default: "10"
+  AI_MAX_SCORING_BATCHES_PER_RUN?: string;  // default: "2"
+  AI_CANDIDATE_BACKLOG_DRAIN_LIMIT?: string;// default: "20"
+  AI_CANDIDATE_MAX_ATTEMPTS?: string;       // default: "2"
+  AI_CANDIDATE_MAX_AGE_HOURS?: string;      // default: "6"
+  AI_FAIR_SOURCE_PICKER_ENABLED?: string;   // default: "false"
+
   // ── AI — Translation ───────────────────────────────────────
   TRANSLATION_PROVIDER: string;
   TRANSLATION_MODEL: string;
@@ -324,4 +334,63 @@ export interface PublishedMediaResult {
   telegramMessageId?: string;
   thumbnailStatus?: ThumbnailStatus;
   thumbnailError?: string;
+}
+
+// ── AI Candidate Backlog (Phase 1) ────────────────────────────
+
+/**
+ * وضعیت‌های ممکن یک candidate در صف AI.
+ *
+ * pending     → منتظر scoring
+ * scoring     → claimed برای یک batch scoring
+ * ai_selected → Claude تأیید کرد
+ * ai_rejected → Claude رد کرد
+ * queued      → حداقل یک publish_queue row ایجاد شده
+ * failed      → بعد از attempt_count حداکثر، شکست خورده
+ * skipped     → به خاطر stale بودن یا policy حذف شده
+ */
+export type AICandidateStatus =
+  | 'pending'
+  | 'scoring'
+  | 'ai_selected'
+  | 'ai_rejected'
+  | 'queued'
+  | 'failed'
+  | 'skipped';
+
+/** Row خوانده‌شده از جدول ai_candidate_queue */
+export interface AICandidateRow {
+  id: string;
+  source_id: string | null;
+  run_id: string | null;
+  category_id: string;
+  platform: string;
+  source_account: string | null;
+  source_url: string;
+  post_id: string | null;
+  published_at: number | null;
+  normalized_item_json: string;
+  dedupe_keys_json: string;
+  priority_score: number;
+  status: AICandidateStatus;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  scored_at: string | null;
+}
+
+/** ورودی enqueue یک candidate جدید */
+export interface AICandidateEnqueueInput {
+  sourceId?: string;
+  runId: string;
+  categoryId: string;
+  platform: string;
+  sourceAccount: string;
+  sourceUrl: string;
+  postId: string;
+  publishedAt: number;
+  normalizedItem: NormalizedItem;
+  dedupeKeys: string[];
+  priorityScore?: number;
 }

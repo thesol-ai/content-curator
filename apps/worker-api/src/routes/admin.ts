@@ -13,6 +13,17 @@ import { getRuntimeConfig } from '../services/runtime-config';
 import { prepareTelegramCaptions } from '../services/telegram-publisher';
 import { sanitizeRunDebugId } from '../services/run-events';
 import { buildMarketSnapshotText, sendMarketSnapshotDirect } from '../services/market-snapshot';
+import { drainAICandidateQueue } from '../services/backlog-drain';
+import {
+  getCandidateBacklogDrainLimit,
+  getCandidateMaxAgeHours,
+  getCandidateQueueStats,
+  getMaxCandidateAttempts,
+  getMaxScoringBatchesPerRun,
+  getScoringBatchSize,
+  isCandidateBacklogEnabled,
+  isFairSourcePickerEnabled,
+} from '../services/candidate-queue';
 
 // ID validation — فقط alphanumeric و underscore و dash
 function isValidId(id: string | undefined): id is string {
@@ -58,6 +69,15 @@ export async function handleAdmin(
     // ── Manual publish due queue items ────────────────────────
     if (path === '/internal/publish/due' && m === 'POST') {
       return triggerPublishDue(req, env);
+    }
+
+    // ── AI candidate backlog controls (feature-flagged) ─────────
+    if (path === '/internal/backlog/stats' && m === 'GET') {
+      return getBacklogStats(env);
+    }
+
+    if (path === '/internal/backlog/drain' && m === 'POST') {
+      return triggerBacklogDrain(req, env);
     }
 
     // ── Market snapshot preview/enqueue ─────────────────────────
@@ -140,6 +160,17 @@ export async function handleAdmin(
     if (path === '/internal/admin/settings' && m === 'GET') {
       const rows = await env.DB.prepare('SELECT key, value, updated_at FROM settings').all();
       return ok({ settings: rows.results ?? [] });
+    }
+
+
+    // ── Daily operational report (read-only) ───────────────────
+    if (path === '/internal/report/daily' && m === 'GET') {
+      return getDailyReport(env, url);
+    }
+
+    // ── Market trending experiment report (read-only) ──────────
+    if (path === '/internal/report/market-trending' && m === 'GET') {
+      return getMarketTrendingReport(env, url);
     }
 
     // ── Crypto pipeline debug snapshot (read-only) ─────────────
@@ -1268,6 +1299,664 @@ async function markDiscoveryRunFailedForDebug(req: Request, env: Env, runId: str
 }
 
 
+async function getBacklogStats(env: Env): Promise<Response> {
+  const enabled = isCandidateBacklogEnabled(env);
+  const [statusCounts, topPendingAccounts, scoringUsage] = await Promise.all([
+    getCandidateQueueStats(env),
+    safeAll<{ source_account: string; count: number }>(env, `
+      SELECT COALESCE(NULLIF(source_account,''), '__unknown__') AS source_account, COUNT(*) AS count
+      FROM ai_candidate_queue
+      WHERE status='pending'
+      GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
+      ORDER BY count DESC
+      LIMIT 20
+    `),
+    safeFirst<{ calls: number; tokens: number }>(env, `
+      SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+      FROM ai_usage
+      WHERE provider='anthropic'
+        AND purpose='scoring'
+        AND status='success'
+        AND created_at > datetime('now','-1 day')
+    `, { calls: 0, tokens: 0 }),
+  ]);
+
+  const maxCalls = parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0;
+  const tokenBudget = parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0;
+
+  return ok({
+    enabled,
+    status_counts: statusCounts,
+    top_pending_accounts: topPendingAccounts.map(row => ({
+      source_account: row.source_account,
+      count: Number(row.count ?? 0),
+    })),
+    config: {
+      scoring_batch_size: getScoringBatchSize(env),
+      max_scoring_batches_per_run: getMaxScoringBatchesPerRun(env),
+      drain_limit: getCandidateBacklogDrainLimit(env),
+      max_attempts: getMaxCandidateAttempts(env),
+      max_age_hours: getCandidateMaxAgeHours(env),
+      fair_source_picker_enabled: isFairSourcePickerEnabled(env),
+    },
+    ai_budget: {
+      calls_today: Number(scoringUsage.calls ?? 0),
+      tokens_today: Number(scoringUsage.tokens ?? 0),
+      max_calls: maxCalls,
+      token_budget: tokenBudget,
+      calls_remaining: maxCalls > 0 ? Math.max(0, maxCalls - Number(scoringUsage.calls ?? 0)) : null,
+      tokens_remaining: tokenBudget > 0 ? Math.max(0, tokenBudget - Number(scoringUsage.tokens ?? 0)) : null,
+    },
+  });
+}
+
+async function triggerBacklogDrain(req: Request, env: Env): Promise<Response> {
+  if (!isCandidateBacklogEnabled(env)) {
+    return Response.json({ ok: false, error: 'backlog_disabled' }, { status: 409 });
+  }
+
+  const body: any = await req.json().catch(() => ({}));
+  const rawCategory = body.category_id ?? body.categoryId;
+  const categoryId = typeof rawCategory === 'string' && isValidId(rawCategory) ? rawCategory : undefined;
+  const hardDrainLimit = getCandidateBacklogDrainLimit(env);
+  const hardMaxBatches = getMaxScoringBatchesPerRun(env);
+  const requestedLimit = body.limit === undefined || body.limit === null ? null : String(body.limit);
+  const requestedMaxBatches = body.maxBatches === undefined || body.maxBatches === null ? null : String(body.maxBatches);
+  const limit = clamp(num(requestedLimit, hardDrainLimit), 1, hardDrainLimit);
+  const maxBatches = clamp(num(requestedMaxBatches, hardMaxBatches), 1, hardMaxBatches);
+  const skipStale = body.skipStale === true || body.skip_stale === true || body.skipStale === 'true' || body.skip_stale === 'true';
+  const recoverStale = body.recoverStale !== false && body.recover_stale !== false && body.recoverStale !== 'false' && body.recover_stale !== 'false';
+
+  const drain = await drainAICandidateQueue(env, {
+    categoryId,
+    limit,
+    maxBatches,
+    skipStale,
+    recoverStale,
+  });
+
+  return ok({
+    category_id: categoryId ?? null,
+    requested: { limit, maxBatches, skipStale, recoverStale },
+    drain,
+  });
+}
+
+
+async function getDailyReport(env: Env, url: URL): Promise<Response> {
+  const hours = clamp(num(url.searchParams.get('hours'), 24), 1, 168);
+  const rawCategory = url.searchParams.get('category') ?? url.searchParams.get('category_id');
+  const categoryId = rawCategory && isValidId(rawCategory) ? rawCategory : undefined;
+  const modifier = `-${hours} hours`;
+
+  const categoryFilter = categoryId ? ' AND category_id=?' : '';
+  const categoryParams = categoryId ? [categoryId] : [];
+  const queueCategoryJoin = categoryId ? 'JOIN discovery_items di ON di.id = pq.item_id' : '';
+  const queueCategoryFilter = categoryId ? ' AND di.category_id=?' : '';
+  const queueCategoryParams = categoryId ? [categoryId] : [];
+
+  const [
+    runs,
+    runStatuses,
+    itemStatuses,
+    rejectReasons,
+    sourceAccounts,
+    queueWindowStatuses,
+    queueCurrentStatuses,
+    backlogStatuses,
+    backlogTopAccounts,
+    aiUsage,
+    recentRuns,
+    stuckRuns,
+    runEventSeverities,
+  ] = await Promise.all([
+    safeFirst<any>(env, `
+      SELECT
+        COUNT(*) AS runs,
+        COALESCE(SUM(items_fetched), 0) AS fetched,
+        COALESCE(SUM(items_duplicate), 0) AS duplicate,
+        COALESCE(SUM(items_new), 0) AS fresh,
+        COALESCE(SUM(items_ai_selected), 0) AS ai_selected,
+        COALESCE(SUM(items_ai_rejected), 0) AS ai_rejected,
+        COALESCE(SUM(items_queued), 0) AS queued,
+        COALESCE(SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END), 0) AS processing,
+        COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0) AS failed,
+        MAX(created_at) AS last_run_at
+      FROM discovery_runs
+      WHERE created_at >= datetime('now', ?)
+      ${categoryFilter}
+    `, [modifier, ...categoryParams], {
+      runs: 0, fetched: 0, duplicate: 0, fresh: 0, ai_selected: 0, ai_rejected: 0, queued: 0,
+      processing: 0, failed: 0, last_run_at: null,
+    }),
+
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT status, COUNT(*) AS count
+      FROM discovery_runs
+      WHERE created_at >= datetime('now', ?)
+      ${categoryFilter}
+      GROUP BY status
+      ORDER BY count DESC, status
+    `, [modifier, ...categoryParams]),
+
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT status, COUNT(*) AS count
+      FROM discovery_items
+      WHERE created_at >= datetime('now', ?)
+      ${categoryFilter}
+      GROUP BY status
+      ORDER BY count DESC, status
+    `, [modifier, ...categoryParams]),
+
+    safeAll<{ reject_reason: string; count: number }>(env, `
+      SELECT COALESCE(NULLIF(reject_reason,''), '__none__') AS reject_reason, COUNT(*) AS count
+      FROM discovery_items
+      WHERE created_at >= datetime('now', ?)
+        AND status='ai_rejected'
+        ${categoryFilter}
+      GROUP BY COALESCE(NULLIF(reject_reason,''), '__none__')
+      ORDER BY count DESC, reject_reason
+      LIMIT 15
+    `, [modifier, ...categoryParams]),
+
+    safeAll<{ source_account: string; total: number; selected: number; rejected: number; queued: number }>(env, `
+      SELECT
+        COALESCE(NULLIF(source_account,''), '__unknown__') AS source_account,
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN status='ai_selected' THEN 1 ELSE 0 END), 0) AS selected,
+        COALESCE(SUM(CASE WHEN status='ai_rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+        COALESCE(SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END), 0) AS queued
+      FROM discovery_items
+      WHERE created_at >= datetime('now', ?)
+      ${categoryFilter}
+      GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
+      ORDER BY total DESC, source_account
+      LIMIT 20
+    `, [modifier, ...categoryParams]),
+
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT pq.status AS status, COUNT(*) AS count
+      FROM publish_queue pq
+      ${queueCategoryJoin}
+      WHERE (pq.created_at >= datetime('now', ?) OR pq.published_at >= CAST(strftime('%s','now', ?) AS INTEGER))
+      ${queueCategoryFilter}
+      GROUP BY pq.status
+      ORDER BY count DESC, pq.status
+    `, [modifier, modifier, ...queueCategoryParams]),
+
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT pq.status AS status, COUNT(*) AS count
+      FROM publish_queue pq
+      ${queueCategoryJoin}
+      WHERE 1=1
+      ${queueCategoryFilter}
+      GROUP BY pq.status
+      ORDER BY count DESC, pq.status
+    `, queueCategoryParams),
+
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT status, COUNT(*) AS count
+      FROM ai_candidate_queue
+      WHERE 1=1
+      ${categoryFilter}
+      GROUP BY status
+      ORDER BY count DESC, status
+    `, categoryParams),
+
+    safeAll<{ source_account: string; count: number }>(env, `
+      SELECT COALESCE(NULLIF(source_account,''), '__unknown__') AS source_account, COUNT(*) AS count
+      FROM ai_candidate_queue
+      WHERE status='pending'
+      ${categoryFilter}
+      GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
+      ORDER BY count DESC, source_account
+      LIMIT 20
+    `, categoryParams),
+
+    safeAll<{ provider: string; purpose: string; status: string; calls: number; tokens: number }>(env, `
+      SELECT
+        provider,
+        purpose,
+        status,
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+      FROM ai_usage
+      WHERE created_at >= datetime('now', ?)
+      GROUP BY provider, purpose, status
+      ORDER BY purpose, provider, status
+    `, [modifier]),
+
+    safeAll<any>(env, `
+      SELECT id, category_id, platform, apify_dataset_id, status, items_fetched, items_new,
+             items_duplicate, items_ai_selected, items_ai_rejected, items_queued, error_message,
+             created_at, completed_at
+      FROM discovery_runs
+      WHERE created_at >= datetime('now', ?)
+      ${categoryFilter}
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [modifier, ...categoryParams]),
+
+    safeAll<any>(env, `
+      SELECT id, category_id, platform, apify_dataset_id, status, error_message, created_at
+      FROM discovery_runs
+      WHERE status='processing'
+        AND created_at < datetime('now','-30 minutes')
+        ${categoryFilter}
+      ORDER BY created_at ASC
+      LIMIT 10
+    `, categoryParams),
+
+    safeAll<{ severity: string; count: number }>(env, `
+      SELECT severity, COUNT(*) AS count
+      FROM run_events
+      WHERE created_at >= datetime('now', ?)
+      GROUP BY severity
+      ORDER BY count DESC, severity
+    `, [modifier]),
+  ]);
+
+  const runSummary = {
+    runs: toCount(runs.runs),
+    fetched: toCount(runs.fetched),
+    duplicate: toCount(runs.duplicate),
+    fresh: toCount(runs.fresh),
+    ai_selected: toCount(runs.ai_selected),
+    ai_rejected: toCount(runs.ai_rejected),
+    queued: toCount(runs.queued),
+    processing: toCount(runs.processing),
+    failed: toCount(runs.failed),
+    last_run_at: runs.last_run_at ?? null,
+  };
+
+  const duplicateRate = runSummary.fetched > 0 ? pct(runSummary.duplicate, runSummary.fetched) : null;
+  const freshRate = runSummary.fetched > 0 ? pct(runSummary.fresh, runSummary.fetched) : null;
+  const aiSelectRate = (runSummary.ai_selected + runSummary.ai_rejected) > 0
+    ? pct(runSummary.ai_selected, runSummary.ai_selected + runSummary.ai_rejected)
+    : null;
+  const queuedRate = runSummary.fresh > 0 ? pct(runSummary.queued, runSummary.fresh) : null;
+
+  const aiBudget = summarizeAIUsage(aiUsage, env);
+  const notes = buildDailyReportNotes({
+    runs: runSummary,
+    duplicateRate,
+    aiSelectRate,
+    queuedRate,
+    queueCurrent: queueCurrentStatuses,
+    backlogStatuses,
+    aiBudget,
+    stuckRunsCount: stuckRuns.length,
+  });
+
+  return ok({
+    read_only: true,
+    window: {
+      hours,
+      category_id: categoryId ?? null,
+    },
+    funnel: {
+      ...runSummary,
+      duplicate_rate_pct: duplicateRate,
+      fresh_rate_pct: freshRate,
+      ai_select_rate_pct: aiSelectRate,
+      queued_rate_of_fresh_pct: queuedRate,
+    },
+    statuses: {
+      discovery_runs: countRowsToObject(runStatuses),
+      discovery_items: countRowsToObject(itemStatuses),
+      publish_queue_window: countRowsToObject(queueWindowStatuses),
+      publish_queue_current: countRowsToObject(queueCurrentStatuses),
+      ai_candidate_backlog: countRowsToObject(backlogStatuses),
+      run_events_by_severity: countRowsToObject(runEventSeverities, 'severity'),
+    },
+    rejection_reasons: rejectReasons.map(row => ({
+      reason: row.reject_reason,
+      count: toCount(row.count),
+    })),
+    source_accounts: sourceAccounts.map(row => {
+      const total = toCount(row.total);
+      const selected = toCount(row.selected);
+      const rejected = toCount(row.rejected);
+      return {
+        source_account: row.source_account,
+        total,
+        selected,
+        rejected,
+        queued: toCount(row.queued),
+        select_rate_pct: total > 0 ? pct(selected, total) : null,
+      };
+    }),
+    backlog: {
+      enabled: isCandidateBacklogEnabled(env),
+      fair_source_picker_enabled: isFairSourcePickerEnabled(env),
+      status_counts: countRowsToObject(backlogStatuses),
+      pending_total: countRowsToObject(backlogStatuses).pending ?? 0,
+      scoring_total: countRowsToObject(backlogStatuses).scoring ?? 0,
+      failed_total: countRowsToObject(backlogStatuses).failed ?? 0,
+      top_pending_accounts: backlogTopAccounts.map(row => ({
+        source_account: row.source_account,
+        count: toCount(row.count),
+      })),
+    },
+    ai_budget: aiBudget,
+    recent_runs: recentRuns,
+    stuck_runs: stuckRuns,
+    notes,
+  });
+}
+
+
+interface MarketTrendingSourceRow {
+  id: string;
+  category_id: string;
+  platform: string;
+  apify_dataset_id: string;
+  label: string | null;
+  enabled: number;
+  apify_actor_id?: string | null;
+  apify_task_id?: string | null;
+  last_dataset_id?: string | null;
+  source_config?: string | null;
+  created_at?: string | null;
+}
+
+interface MarketTrendingRunRow {
+  id: string;
+  category_id: string;
+  platform: string;
+  apify_dataset_id: string;
+  status: string;
+  items_fetched: number;
+  items_new: number;
+  items_duplicate: number;
+  items_ai_selected: number;
+  items_ai_rejected: number;
+  items_queued: number;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+async function getMarketTrendingReport(env: Env, url: URL): Promise<Response> {
+  const hours = clamp(num(url.searchParams.get('hours'), 48), 1, 168);
+  const modifier = `-${hours} hours`;
+  const sourceId = 'src_market_trending_x';
+
+  const source = await safeFirst<MarketTrendingSourceRow | null>(env, `
+    SELECT id, category_id, platform, apify_dataset_id, label, enabled,
+           apify_actor_id, apify_task_id, last_dataset_id, source_config, created_at
+    FROM apify_sources
+    WHERE id=?
+    LIMIT 1
+  `, [sourceId], null);
+
+  if (!source) {
+    return Response.json({
+      ok: false,
+      error: 'source_not_found',
+      source_id: sourceId,
+      hint: 'Apply migration 0016_market_trending_source_seed.sql before using this report.',
+    }, { status: 404 });
+  }
+
+  const isPlaceholder = isMarketTrendingPlaceholderDataset(source.apify_dataset_id);
+  const datasetIds = Array.from(new Set([
+    source.apify_dataset_id,
+    source.last_dataset_id ?? '',
+  ].filter(id => id && !isMarketTrendingPlaceholderDataset(id))));
+
+  const runRowsFromEvents = await safeAll<MarketTrendingRunRow>(env, `
+    SELECT dr.id, dr.category_id, dr.platform, dr.apify_dataset_id, dr.status,
+           dr.items_fetched, dr.items_new, dr.items_duplicate, dr.items_ai_selected,
+           dr.items_ai_rejected, dr.items_queued, dr.error_message, dr.created_at, dr.completed_at
+    FROM discovery_runs dr
+    WHERE dr.created_at >= datetime('now', ?)
+      AND dr.id IN (
+        SELECT DISTINCT run_id
+        FROM run_events
+        WHERE source_id=?
+          AND created_at >= datetime('now', ?)
+      )
+    ORDER BY dr.created_at DESC
+    LIMIT 200
+  `, [modifier, sourceId, modifier]);
+
+  let runRows = runRowsFromEvents;
+  if (runRows.length === 0 && datasetIds.length > 0) {
+    const placeholders = datasetIds.map(() => '?').join(',');
+    runRows = await safeAll<MarketTrendingRunRow>(env, `
+      SELECT id, category_id, platform, apify_dataset_id, status,
+             items_fetched, items_new, items_duplicate, items_ai_selected,
+             items_ai_rejected, items_queued, error_message, created_at, completed_at
+      FROM discovery_runs
+      WHERE created_at >= datetime('now', ?)
+        AND apify_dataset_id IN (${placeholders})
+      ORDER BY created_at DESC
+      LIMIT 200
+    `, [modifier, ...datasetIds]);
+  }
+
+  const runIds = runRows.map(row => row.id).filter(isValidId).slice(0, 200);
+  const runPlaceholders = runIds.map(() => '?').join(',');
+
+  const [rejectReasons, sourceAccounts, backlogStatuses, backlogPendingAccounts] = runIds.length > 0
+    ? await Promise.all([
+        safeAll<{ reject_reason: string; count: number }>(env, `
+          SELECT COALESCE(NULLIF(reject_reason,''), '__none__') AS reject_reason, COUNT(*) AS count
+          FROM discovery_items
+          WHERE run_id IN (${runPlaceholders})
+            AND status='ai_rejected'
+          GROUP BY COALESCE(NULLIF(reject_reason,''), '__none__')
+          ORDER BY count DESC, reject_reason
+          LIMIT 15
+        `, runIds),
+        safeAll<{ source_account: string; total: number; selected: number; rejected: number; queued: number }>(env, `
+          SELECT
+            COALESCE(NULLIF(source_account,''), '__unknown__') AS source_account,
+            COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN status='ai_selected' THEN 1 ELSE 0 END), 0) AS selected,
+            COALESCE(SUM(CASE WHEN status='ai_rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+            COALESCE(SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END), 0) AS queued
+          FROM discovery_items
+          WHERE run_id IN (${runPlaceholders})
+          GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
+          ORDER BY total DESC, source_account
+          LIMIT 20
+        `, runIds),
+        safeAll<{ status: string; count: number }>(env, `
+          SELECT status, COUNT(*) AS count
+          FROM ai_candidate_queue
+          WHERE source_id=?
+          GROUP BY status
+          ORDER BY count DESC, status
+        `, [sourceId]),
+        safeAll<{ source_account: string; count: number }>(env, `
+          SELECT COALESCE(NULLIF(source_account,''), '__unknown__') AS source_account, COUNT(*) AS count
+          FROM ai_candidate_queue
+          WHERE source_id=? AND status='pending'
+          GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
+          ORDER BY count DESC, source_account
+          LIMIT 20
+        `, [sourceId]),
+      ])
+    : await Promise.all([
+        Promise.resolve([] as Array<{ reject_reason: string; count: number }>),
+        Promise.resolve([] as Array<{ source_account: string; total: number; selected: number; rejected: number; queued: number }>),
+        safeAll<{ status: string; count: number }>(env, `
+          SELECT status, COUNT(*) AS count
+          FROM ai_candidate_queue
+          WHERE source_id=?
+          GROUP BY status
+          ORDER BY count DESC, status
+        `, [sourceId]),
+        safeAll<{ source_account: string; count: number }>(env, `
+          SELECT COALESCE(NULLIF(source_account,''), '__unknown__') AS source_account, COUNT(*) AS count
+          FROM ai_candidate_queue
+          WHERE source_id=? AND status='pending'
+          GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
+          ORDER BY count DESC, source_account
+          LIMIT 20
+        `, [sourceId]),
+      ]);
+
+  const pipeline = summarizeMarketTrendingRuns(runRows);
+  const duplicateRate = pipeline.items_fetched > 0 ? pct(pipeline.items_duplicate, pipeline.items_fetched) : 0;
+  const aiScored = pipeline.items_ai_selected + pipeline.items_ai_rejected;
+  const aiSelectRate = aiScored > 0 ? pct(pipeline.items_ai_selected, aiScored) : 0;
+  const queuedRate = pipeline.items_new > 0 ? pct(pipeline.items_queued, pipeline.items_new) : 0;
+  const recommendation = getMarketTrendingRecommendation({
+    enabled: source.enabled === 1,
+    isPlaceholder,
+    runs: pipeline.runs,
+    duplicateRate,
+    aiSelectRate,
+    queuedRate,
+  });
+  const warnings = buildMarketTrendingWarnings({
+    enabled: source.enabled === 1,
+    isPlaceholder,
+    runs: pipeline.runs,
+    duplicateRate,
+    aiSelectRate,
+    queuedRate,
+    backlog: countRowsToObject(backlogStatuses),
+  });
+
+  return ok({
+    read_only: true,
+    generated_at: new Date().toISOString(),
+    window: { hours },
+    source: {
+      id: source.id,
+      label: source.label,
+      category_id: source.category_id,
+      platform: source.platform,
+      enabled: source.enabled === 1,
+      apify_dataset_id: source.apify_dataset_id,
+      apify_task_id: source.apify_task_id ?? null,
+      last_dataset_id: source.last_dataset_id ?? null,
+      is_placeholder: isPlaceholder,
+      webhook_source_id: sourceId,
+      webhook_url_pattern: `/webhook/apify?source_id=${sourceId}&secret=***`,
+    },
+    pipeline,
+    quality: {
+      duplicate_rate_pct: duplicateRate,
+      ai_select_rate_pct: aiSelectRate,
+      queued_rate_of_fresh_pct: queuedRate,
+    },
+    statuses: {
+      runs: statusCountsFromRuns(runRows),
+      backlog: countRowsToObject(backlogStatuses),
+    },
+    rejection_reasons: rejectReasons.map(row => ({
+      reason: row.reject_reason,
+      count: toCount(row.count),
+    })),
+    source_accounts: sourceAccounts.map(row => {
+      const total = toCount(row.total);
+      const selected = toCount(row.selected);
+      return {
+        source_account: row.source_account,
+        total,
+        selected,
+        rejected: toCount(row.rejected),
+        queued: toCount(row.queued),
+        select_rate_pct: total > 0 ? pct(selected, total) : 0,
+      };
+    }),
+    backlog: {
+      status_counts: countRowsToObject(backlogStatuses),
+      top_pending_accounts: backlogPendingAccounts.map(row => ({
+        source_account: row.source_account,
+        count: toCount(row.count),
+      })),
+    },
+    recommendation,
+    warnings,
+    notes: [
+      'This report is read-only and does not enable the source.',
+      `Use webhook source_id=${sourceId} for Apify setup.`,
+    ],
+  });
+}
+
+function isMarketTrendingPlaceholderDataset(value: string | null | undefined): boolean {
+  const v = String(value ?? '').trim();
+  return !v || v === 'PLACEHOLDER_REPLACE_BEFORE_ENABLE';
+}
+
+function summarizeMarketTrendingRuns(rows: MarketTrendingRunRow[]) {
+  const out = {
+    runs: rows.length,
+    items_fetched: 0,
+    items_new: 0,
+    items_duplicate: 0,
+    items_ai_selected: 0,
+    items_ai_rejected: 0,
+    items_queued: 0,
+    failed_runs: 0,
+    processing_runs: 0,
+    last_run_at: null as string | null,
+  };
+  for (const row of rows) {
+    out.items_fetched += toCount(row.items_fetched);
+    out.items_new += toCount(row.items_new);
+    out.items_duplicate += toCount(row.items_duplicate);
+    out.items_ai_selected += toCount(row.items_ai_selected);
+    out.items_ai_rejected += toCount(row.items_ai_rejected);
+    out.items_queued += toCount(row.items_queued);
+    if (row.status === 'failed') out.failed_runs++;
+    if (row.status === 'processing') out.processing_runs++;
+    if (!out.last_run_at || String(row.created_at) > out.last_run_at) out.last_run_at = row.created_at;
+  }
+  return out;
+}
+
+function statusCountsFromRuns(rows: MarketTrendingRunRow[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const row of rows) {
+    const status = String(row.status || '__unknown__');
+    out[status] = (out[status] ?? 0) + 1;
+  }
+  return out;
+}
+
+function getMarketTrendingRecommendation(input: {
+  enabled: boolean;
+  isPlaceholder: boolean;
+  runs: number;
+  duplicateRate: number;
+  aiSelectRate: number;
+  queuedRate: number;
+}): 'not_started' | 'monitoring' | 'keep' | 'tune_or_disable' {
+  if (!input.enabled || input.isPlaceholder) return 'not_started';
+  if (input.runs === 0) return 'monitoring';
+  if (input.duplicateRate >= 70 || input.aiSelectRate < 10 || input.queuedRate < 5) return 'tune_or_disable';
+  return 'keep';
+}
+
+function buildMarketTrendingWarnings(input: {
+  enabled: boolean;
+  isPlaceholder: boolean;
+  runs: number;
+  duplicateRate: number;
+  aiSelectRate: number;
+  queuedRate: number;
+  backlog: Record<string, number>;
+}): string[] {
+  const warnings: string[] = [];
+  if (!input.enabled) warnings.push('source_disabled');
+  if (input.isPlaceholder) warnings.push('placeholder_dataset_id_replace_before_enable');
+  if (input.enabled && input.runs === 0) warnings.push('source_enabled_but_no_runs_in_window');
+  if (input.duplicateRate >= 70) warnings.push('high_duplicate_rate_tune_query_or_reduce_overlap');
+  if (input.runs > 0 && input.aiSelectRate < 10) warnings.push('low_ai_select_rate_tune_query');
+  if (input.runs > 0 && input.queuedRate < 5) warnings.push('low_queue_rate_check_rule_gate_translation_or_quality');
+  if ((input.backlog.pending ?? 0) > 0) warnings.push('pending_backlog_candidates_exist');
+  if ((input.backlog.failed ?? 0) > 0) warnings.push('failed_backlog_candidates_exist');
+  return warnings;
+}
+
 async function getStats(env: Env): Promise<Response> {
   const [categories, channels, queuePending, queueRetry, queueFailed, queuePublished, lastRun, itemsToday, settingsRows, mediaPending, mediaFailed, mediaUploaded, aiUsage24h, aiScoring24h, aiTranslation24h] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) as n FROM categories WHERE enabled=1").first<{ n: number }>(),
@@ -1334,11 +2023,131 @@ async function getStats(env: Env): Promise<Response> {
 
 // ── Helpers ───────────────────────────────────────────────────
 
-async function safeFirst<T>(env: Env, sql: string, fallback: T): Promise<T> {
+// ── Daily report helpers ───────────────────────────────────────
+
+function toCount(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pct(part: number, total: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  return Math.round((part / total) * 10000) / 100;
+}
+
+function countRowsToObject(rows: Array<{ status?: string; severity?: string; count: number }>, key: 'status' | 'severity' = 'status'): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const row of rows) {
+    const name = String(row[key] ?? '__unknown__');
+    out[name] = toCount(row.count);
+  }
+  return out;
+}
+
+interface DailyReportNotesInput {
+  runs: { runs: number; fetched: number; duplicate: number; fresh: number; ai_selected: number; ai_rejected: number; queued: number; processing: number; failed: number };
+  duplicateRate: number | null;
+  aiSelectRate: number | null;
+  queuedRate: number | null;
+  queueCurrent: Array<{ status: string; count: number }>;
+  backlogStatuses: Array<{ status: string; count: number }>;
+  aiBudget: ReturnType<typeof summarizeAIUsage>;
+  stuckRunsCount: number;
+}
+
+function buildDailyReportNotes(input: DailyReportNotesInput): string[] {
+  const notes: string[] = [];
+  const queueCurrent = countRowsToObject(input.queueCurrent);
+  const backlog = countRowsToObject(input.backlogStatuses);
+
+  if (input.runs.runs === 0) notes.push('no_discovery_runs_in_window');
+  if (input.runs.fetched > 0 && input.runs.fresh === 0) notes.push('all_fetched_items_were_duplicates');
+  if ((input.duplicateRate ?? 0) >= 80) notes.push('high_duplicate_rate');
+  if (input.runs.fresh > 0 && input.runs.ai_selected === 0) notes.push('fresh_items_but_no_ai_selected_items');
+  if (input.runs.ai_rejected > 0 && input.runs.ai_selected === 0) notes.push('ai_rejected_every_scored_item');
+  if (input.runs.queued === 0 && input.runs.ai_selected > 0) notes.push('ai_selected_items_did_not_create_queue_items');
+  if ((queueCurrent.scheduled ?? 0) === 0 && (queueCurrent.retry ?? 0) === 0) notes.push('publish_queue_has_no_due_backlog');
+  if ((backlog.pending ?? 0) > 0) notes.push('ai_candidate_backlog_has_pending_items');
+  if ((backlog.scoring ?? 0) > 0) notes.push('ai_candidate_backlog_has_scoring_items');
+  if ((backlog.failed ?? 0) > 0) notes.push('ai_candidate_backlog_has_failed_items');
+  if (input.stuckRunsCount > 0) notes.push('stale_processing_discovery_runs_detected');
+  if (input.aiBudget.scoring.calls_remaining === 0) notes.push('ai_scoring_call_budget_exhausted');
+  if (input.aiBudget.scoring.tokens_remaining === 0) notes.push('ai_scoring_token_budget_exhausted');
+  return notes;
+}
+
+function summarizeAIUsage(rows: Array<{ provider: string; purpose: string; status: string; calls: number; tokens: number }>, env: Env) {
+  const byPurpose: Record<string, { calls: number; tokens: number; failed: number; skipped: number }> = {
+    scoring: { calls: 0, tokens: 0, failed: 0, skipped: 0 },
+    translation: { calls: 0, tokens: 0, failed: 0, skipped: 0 },
+  };
+  const byProvider: Record<string, { calls: number; tokens: number; failed: number; skipped: number }> = {};
+
+  for (const row of rows) {
+    const purpose = String(row.purpose || 'unknown');
+    const provider = String(row.provider || 'unknown');
+    const calls = toCount(row.calls);
+    const tokens = toCount(row.tokens);
+    const status = String(row.status || 'success');
+
+    const purposeBucket = byPurpose[purpose] ?? (byPurpose[purpose] = { calls: 0, tokens: 0, failed: 0, skipped: 0 });
+    const providerBucket = byProvider[provider] ?? (byProvider[provider] = { calls: 0, tokens: 0, failed: 0, skipped: 0 });
+
+    if (status === 'success') {
+      purposeBucket.calls += calls;
+      purposeBucket.tokens += tokens;
+      providerBucket.calls += calls;
+      providerBucket.tokens += tokens;
+    } else if (status === 'failed') {
+      purposeBucket.failed += calls;
+      providerBucket.failed += calls;
+    } else if (status === 'skipped') {
+      purposeBucket.skipped += calls;
+      providerBucket.skipped += calls;
+    }
+  }
+
+  const maxCalls = parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0;
+  const tokenBudget = parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0;
+  const scoringCalls = byPurpose.scoring?.calls ?? 0;
+  const scoringTokens = byPurpose.scoring?.tokens ?? 0;
+
+  return {
+    scoring: {
+      ...byPurpose.scoring,
+      max_calls: maxCalls,
+      token_budget: tokenBudget,
+      calls_remaining: maxCalls > 0 ? Math.max(0, maxCalls - scoringCalls) : null,
+      tokens_remaining: tokenBudget > 0 ? Math.max(0, tokenBudget - scoringTokens) : null,
+    },
+    translation: byPurpose.translation,
+    by_provider: byProvider,
+  };
+}
+
+async function safeFirst<T>(env: Env, sql: string, paramsOrFallback: unknown[] | T, maybeFallback?: T): Promise<T> {
+  const params   = Array.isArray(paramsOrFallback) ? paramsOrFallback : [];
+  const fallback = Array.isArray(paramsOrFallback) ? (maybeFallback as T) : (paramsOrFallback as T);
   try {
-    return (await env.DB.prepare(sql).first<T>()) ?? fallback;
+    const stmt = env.DB.prepare(sql);
+    const result = params.length > 0
+      ? await stmt.bind(...params).first<T>()
+      : await stmt.first<T>();
+    return result ?? fallback;
   } catch {
     return fallback;
+  }
+}
+
+async function safeAll<T>(env: Env, sql: string, params: unknown[] = []): Promise<T[]> {
+  try {
+    const stmt = env.DB.prepare(sql);
+    const result = params.length > 0
+      ? await stmt.bind(...params).all<T>()
+      : await stmt.all<T>();
+    return result.results ?? [];
+  } catch {
+    return [];
   }
 }
 
@@ -1648,6 +2457,7 @@ function err(message: string, status = 400): Response {
 }
 
 function num(s: string | null, def: number): number {
+  if (s === null || s === '') return def;
   const n = Number(s);
   return isNaN(n) ? def : n;
 }
