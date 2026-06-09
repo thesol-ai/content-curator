@@ -153,11 +153,19 @@ function resolveInitialDatasetId(source: ApifySourceRow): string {
   const primary = String(source.apify_dataset_id ?? '').trim();
   const last = String(source.last_dataset_id ?? '').trim();
 
-  if (isPlaceholderDatasetId(primary) && sanitizeApifyDatasetId(last)) {
+  if (sanitizeApifyDatasetId(last) && last !== primary) {
     return last;
   }
 
   return primary;
+}
+
+function datasetSyncReason(primaryDatasetId: string, effectiveDatasetId: string): string | null {
+  if (!effectiveDatasetId || effectiveDatasetId === primaryDatasetId) return null;
+
+  return isPlaceholderDatasetId(primaryDatasetId)
+    ? 'placeholder_primary_resolved_from_last_dataset_id'
+    : 'stale_primary_resolved_from_last_dataset_id';
 }
 
 async function fetchSourceDatasetItems(
@@ -224,11 +232,9 @@ async function processSingleSource(
   let effectiveDatasetId = resolveInitialDatasetId(source);
   const primaryDatasetId = String(source.apify_dataset_id ?? '').trim();
 
-  if (
-    effectiveDatasetId &&
-    effectiveDatasetId !== primaryDatasetId &&
-    isPlaceholderDatasetId(primaryDatasetId)
-  ) {
+  const syncReason = datasetSyncReason(primaryDatasetId, effectiveDatasetId);
+
+  if (syncReason) {
     await updateApifySourceLastDataset(env, source.id, effectiveDatasetId);
     await recordRunEvent(env, {
       runId,
@@ -242,7 +248,7 @@ async function processSingleSource(
       metadata: {
         previousDatasetId: primaryDatasetId,
         syncedDatasetId: effectiveDatasetId,
-        reason: 'placeholder_primary_resolved_from_last_dataset_id',
+        reason: syncReason,
       },
     });
   }

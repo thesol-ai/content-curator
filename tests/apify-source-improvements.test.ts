@@ -143,6 +143,45 @@ describe('Apify source task bindings and webhook scoping', () => {
     expect(calls.some(call => call.sql.includes('INSERT OR IGNORE INTO discovery_runs') && call.values.includes('NEWDATASET123'))).toBe(true);
   });
 
+
+  it('prefers last_dataset_id when primary dataset is stale and syncs primary before fetching', async () => {
+    const fetches: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      fetches.push(url);
+      return Response.json([]);
+    }));
+
+    const { env, calls } = envWithDb({
+      sources: [
+        source({
+          id: 'src_market',
+          apify_dataset_id: 'STALEDATASET123',
+          last_dataset_id: 'FRESHDATASET123',
+        }),
+      ],
+    });
+
+    const results = await runCuration(env, undefined, {
+      forceCurationEnabled: true,
+      curationDryRun: true,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]).toContain('/datasets/FRESHDATASET123/items');
+    expect(calls.some(call =>
+      call.sql.includes('UPDATE apify_sources SET apify_dataset_id=?, last_dataset_id=? WHERE id=?') &&
+      call.values[0] === 'FRESHDATASET123' &&
+      call.values[1] === 'FRESHDATASET123' &&
+      call.values[2] === 'src_market'
+    )).toBe(true);
+    expect(calls.some(call =>
+      call.sql.includes('INSERT INTO run_events') &&
+      call.values.includes('dataset.primary.synced') &&
+      call.values.includes('FRESHDATASET123')
+    )).toBe(true);
+  });
+
   it('treats unknown source_id as a safe no-op and does not fetch Apify', async () => {
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
