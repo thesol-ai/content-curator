@@ -66,43 +66,48 @@ export async function runRuleGate(
     .bind(channel.id)
     .first<{ last_at: number | null }>();
 
-  const scheduledAt = computeScheduledAt(
+  const lastScheduledAt = lastScheduled?.last_at ?? null;
+  let scheduledAt = computeScheduledAt(
     env,
     aiResult.publishPriority,
     channel,
     mediaUrlExpiresSoon,
-    lastScheduled?.last_at ?? null
+    lastScheduledAt
   );
 
-  const dayBounds = getChannelDayBoundsForUnix(scheduledAt, channel.timezone);
+  for (let quotaAttempt = 0; quotaAttempt < 7; quotaAttempt++) {
+    const dayBounds = getChannelDayBoundsForUnix(scheduledAt, channel.timezone);
 
-  const publishedForDay = await env.DB
-    .prepare(`
-      SELECT COUNT(*) as cnt FROM publish_queue
-      WHERE channel_id = ? AND status = 'published'
-        AND published_at >= ? AND published_at < ?
-    `)
-    .bind(channel.id, dayBounds.startUnix, dayBounds.endUnix)
-    .first<{ cnt: number }>();
+    const publishedForDay = await env.DB
+      .prepare(`
+        SELECT COUNT(*) as cnt FROM publish_queue
+        WHERE channel_id = ? AND status = 'published'
+          AND published_at >= ? AND published_at < ?
+      `)
+      .bind(channel.id, dayBounds.startUnix, dayBounds.endUnix)
+      .first<{ cnt: number }>();
 
-  const scheduledForDay = await env.DB
-    .prepare(`
-      SELECT COUNT(*) as cnt FROM publish_queue
-      WHERE channel_id = ? AND status IN ('scheduled', 'retry', 'publishing')
-        AND scheduled_at >= ? AND scheduled_at < ?
-    `)
-    .bind(channel.id, dayBounds.startUnix, dayBounds.endUnix)
-    .first<{ cnt: number }>();
+    const scheduledForDay = await env.DB
+      .prepare(`
+        SELECT COUNT(*) as cnt FROM publish_queue
+        WHERE channel_id = ? AND status IN ('scheduled', 'retry', 'publishing')
+          AND scheduled_at >= ? AND scheduled_at < ?
+      `)
+      .bind(channel.id, dayBounds.startUnix, dayBounds.endUnix)
+      .first<{ cnt: number }>();
 
-  const totalForDay = (publishedForDay?.cnt ?? 0) + (scheduledForDay?.cnt ?? 0);
-  if (totalForDay >= channel.max_per_day) {
-    return {
-      approved: false,
-      reason: `daily_quota_exceeded:${totalForDay}/${channel.max_per_day}`,
-    };
+    const totalForDay = (publishedForDay?.cnt ?? 0) + (scheduledForDay?.cnt ?? 0);
+    if (totalForDay < channel.max_per_day) {
+      return { approved: true, scheduledAt };
+    }
+
+    scheduledAt = computeScheduledAtForNextLocalDay(channel, lastScheduledAt, scheduledAt);
   }
 
-  return { approved: true, scheduledAt };
+  return {
+    approved: false,
+    reason: `daily_quota_exceeded_next_7_days:${channel.max_per_day}`,
+  };
 }
 
 function computeScheduledAt(
@@ -122,6 +127,43 @@ function computeScheduledAt(
 
   const allowedWindows = safeParseWindows(channel.allowed_windows);
   const blockedWindows = safeParseWindows(channel.blocked_windows);
+
+  return normalizeToChannelWindows(candidateUnix, channel.timezone, allowedWindows, blockedWindows);
+}
+
+function computeScheduledAtForNextLocalDay(
+  channel: ChannelRow,
+  lastScheduledAt: number | null,
+  afterUnix: number
+): number {
+  const local = getZonedDateParts(new Date(afterUnix * 1000), channel.timezone);
+  const nextDay = addDaysToLocalDate(local.year, local.month, local.day, 1);
+  const blockedWindows = safeParseWindows(channel.blocked_windows);
+
+  let startMinute = 0;
+  for (const window of blockedWindows) {
+    // When deferring because a local day quota is full, avoid scheduling into
+    // the early after-midnight allowance before the channel's sleep window.
+    // For a common 01:00-07:00 block, the next publishable day starts at 07:00.
+    if (window.startMin <= 60 && window.endMin > window.startMin) {
+      startMinute = Math.max(startMinute, window.endMin);
+    }
+  }
+
+  let candidateUnix = localDateMinuteToUnix(
+    channel.timezone,
+    nextDay.year,
+    nextDay.month,
+    nextDay.day,
+    startMinute
+  );
+
+  if (channel.min_gap_minutes > 0 && lastScheduledAt !== null) {
+    const minNextAt = lastScheduledAt + channel.min_gap_minutes * 60;
+    if (minNextAt > candidateUnix) candidateUnix = minNextAt;
+  }
+
+  const allowedWindows = safeParseWindows(channel.allowed_windows);
 
   return normalizeToChannelWindows(candidateUnix, channel.timezone, allowedWindows, blockedWindows);
 }

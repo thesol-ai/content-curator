@@ -72,13 +72,28 @@ describe('rule-gate scheduling and quota', () => {
     await expect(runRuleGate(env, ai({ translations: {} }), channel())).resolves.toMatchObject({ approved: false, reason: 'no_translation_for_fa' });
   });
 
-  it('rejects when published plus scheduled items exceed daily quota for the scheduled local day', async () => {
+  it('rolls candidates to the next allowed day when the scheduled local day quota is full', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-01T12:00:00Z'));
 
-    const env = envWithDb([{ last_at: null }, { cnt: 2 }, { cnt: 1 }]);
-    const result = await runRuleGate(env, ai(), channel({ max_per_day: 3 }));
-    expect(result).toEqual({ approved: false, reason: 'daily_quota_exceeded:3/3' });
+    const env = envWithDb([
+      { last_at: null },
+      { cnt: 2 },
+      { cnt: 1 },
+      { cnt: 0 },
+      { cnt: 0 },
+    ]);
+
+    const result = await runRuleGate(env, ai(), channel({
+      max_per_day: 3,
+      allowed_windows: '["07:00-23:59","00:00-01:00"]',
+      blocked_windows: '["01:00-07:00"]',
+      timezone: 'UTC',
+      min_gap_minutes: 10,
+    }));
+
+    expect(result.approved).toBe(true);
+    expectUnix(result.scheduledAt, '2026-06-02T07:00:00Z');
   });
 
   it('applies min_gap_minutes against the latest scheduled or published item', async () => {
