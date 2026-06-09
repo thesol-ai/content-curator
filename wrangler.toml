@@ -18,7 +18,7 @@ migrations_dir = "migrations"
 
 # ── Cron ─────────────────────────────────────────────────────
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]
 
 # ══════════════════════════════════════════════════════════════
 # Local / Default
@@ -135,7 +135,7 @@ STREAM_TRANSCODE_ENABLED = "false"
 
 MARKET_SNAPSHOT_ENABLED = "true"
 MARKET_SNAPSHOT_INTERVAL_HOURS = "1"
-MARKET_SNAPSHOT_SLOTS = "09:00,12:30,15:30,18:30,21:30"
+MARKET_SNAPSHOT_SLOTS = "09:05,12:35,15:35,18:35,21:35"
 MARKET_SNAPSHOT_CHANNEL_ID = "crypto_fa_pilot"
 [[env.production.d1_databases]]
 binding = "DB"
