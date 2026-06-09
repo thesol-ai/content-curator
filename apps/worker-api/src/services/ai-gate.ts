@@ -48,10 +48,12 @@ const PROMPT_PROFILES: Record<string, string> = {
   crypto_editorial:
     'Curate for a crypto/blockchain audience. Explain market, protocol, token, and risk context cautiously. ' +
     'NEVER provide financial advice. NEVER invent price predictions. ' +
+    'Reject generic macro/economic-calendar posts unless the source text explicitly connects the event to crypto, Bitcoin, Ethereum, stablecoins, ETFs, DeFi, on-chain activity, liquidity, or digital-asset regulation. ' +
+    'If a macro item is selected, the final rewrite must explain the crypto or digital-asset market relevance. ' +
     'Flag sponsored content, unverified claims, token promotions, and pump-and-dump signals. ' +
     'Be especially strict: reject any post that could amplify scams or market manipulation. ' +
     'Risk flags: pump_and_dump, financial_advice, unverified_claims, price_prediction, ' +
-    'sponsored_content, regulatory_sensitive, scam_amplification.',
+    'sponsored_content, regulatory_sensitive, scam_amplification, macro_without_crypto_angle.',
 
   design_editorial:
     'Curate for designers and product teams. Emphasize UX implications, visual patterns, tools, practical takeaways. ' +
@@ -798,6 +800,8 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Do NOT include HTML tags — plain text only',
     '- Do NOT invent facts not present in the source text',
     '- Do NOT provide financial/investment advice',
+    '- Remove source engagement bait and CTA questions such as "Which are you watching?", "What do you think?", "Which report matters most?", or equivalent phrasing in any language; replace with concise editorial context only when useful.',
+    '- For crypto/blockchain items about macroeconomic data, explain the relevance to crypto or digital-asset markets; do not publish a generic economic calendar without that angle.',
     '- Respect forbidden_phrases for each target',
     '- hashtags: 3-5 relevant hashtags per target, no # prefix needed',
     '- Every translation target key listed above must be included for every item',
