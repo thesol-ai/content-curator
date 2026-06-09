@@ -174,8 +174,21 @@ function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
   const sourceBlock = sourceParts.join(String.fromCharCode(10));
   const signatureBlock = signatureParts.join(String.fromCharCode(10));
 
-  if (sourceBlock) blocks.push(sourceBlock);
-  if (signatureBlock) blocks.push(signatureBlock);
+  // Keep the footer compact inside Telegram cards:
+  // body
+  //
+  // Source
+  // @channel
+  //
+  // Previously Source and @channel were separate blocks, which rendered an
+  // awkward blank line between them in the final post footer.
+  if (sourceBlock && signatureBlock) {
+    blocks.push([sourceBlock, signatureBlock].join(String.fromCharCode(10)));
+  } else if (sourceBlock) {
+    blocks.push(sourceBlock);
+  } else if (signatureBlock) {
+    blocks.push(signatureBlock);
+  }
 
   return {
     html: blocks.join(String.fromCharCode(10, 10)),
