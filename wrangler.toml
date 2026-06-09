@@ -44,6 +44,10 @@ AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
 AI_MAX_OUTPUT_TOKENS          = "4096"
 AI_MAX_RETRIES                = "1"
 
+# ── AI Candidate Backlog (Phase 1) ────────────────────────────
+# همه پیش‌فرض‌ها روی safe/off هستند.
+# تا زمان فعال‌سازی آگاهانه در production، هیچ تغییری در رفتار pipeline ایجاد نمی‌شود.
+
 # ── AI Translation ────────────────────────────────────────────
 # TRANSLATION_PROVIDER: gemini | openai | claude
 # Gemini: gemini-2.5-flash-lite ($0.10/$0.40) | gemini-2.5-flash ($0.30/$2.50)
@@ -99,6 +103,9 @@ AI_MAX_CANDIDATES_PER_RUN     = "10"
 AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
 AI_MAX_OUTPUT_TOKENS          = "4096"
 AI_MAX_RETRIES                = "2"
+
+# ── AI Candidate Backlog (Phase 1) ────────────────────────────
+# پیش‌فرض false — فعال‌سازی در production باید به‌صورت جداگانه و آگاهانه انجام شود.
 
 TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
