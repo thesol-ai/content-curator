@@ -93,7 +93,7 @@ LOG_LEVEL     = "info"
 APIFY_CURATION_ENABLED      = "true"
 APIFY_CURATION_DRY_RUN      = "false"
 APIFY_SCHEDULED_CURATION_ENABLED = "false"
-APIFY_MAX_ITEMS_PER_SOURCE  = "24"
+APIFY_MAX_ITEMS_PER_SOURCE = "60"
 
 AI_SCORING_MODEL              = "claude-haiku-4-5-20251001"
 AI_SCORE_THRESHOLD_DEFAULT    = "75"
@@ -105,7 +105,14 @@ AI_MAX_OUTPUT_TOKENS          = "4096"
 AI_MAX_RETRIES                = "2"
 
 # ── AI Candidate Backlog (Phase 1) ────────────────────────────
-# پیش‌فرض false — فعال‌سازی در production باید به‌صورت جداگانه و آگاهانه انجام شود.
+# Production: enabled explicitly so fresh items are queued and drained safely.
+AI_CANDIDATE_BACKLOG_ENABLED = "true"
+AI_FAIR_SOURCE_PICKER_ENABLED = "true"
+AI_SCORING_BATCH_SIZE = "10"
+AI_MAX_SCORING_BATCHES_PER_RUN = "3"
+AI_CANDIDATE_BACKLOG_DRAIN_LIMIT = "30"
+AI_CANDIDATE_MAX_ATTEMPTS = "2"
+AI_CANDIDATE_MAX_AGE_HOURS = "12"
 
 TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"

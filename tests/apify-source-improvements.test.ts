@@ -115,7 +115,7 @@ describe('Apify source task bindings and webhook scoping', () => {
     vi.unstubAllGlobals();
   });
 
-  it('scopes webhook curation by source_id, fetches the webhook dataset, and records last_dataset_id', async () => {
+  it('scopes webhook curation by source_id, fetches the webhook dataset, and records current dataset ids', async () => {
     const fetches: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       fetches.push(url);
@@ -134,7 +134,12 @@ describe('Apify source task bindings and webhook scoping', () => {
     expect(results).toHaveLength(1);
     expect(fetches).toHaveLength(1);
     expect(fetches[0]).toContain('/datasets/NEWDATASET123/items');
-    expect(calls.some(call => call.sql.includes('UPDATE apify_sources SET last_dataset_id=') && call.values[0] === 'NEWDATASET123' && call.values[1] === 'src_crypto')).toBe(true);
+    expect(calls.some(call =>
+      call.sql.includes('UPDATE apify_sources SET apify_dataset_id=?, last_dataset_id=? WHERE id=?') &&
+      call.values[0] === 'NEWDATASET123' &&
+      call.values[1] === 'NEWDATASET123' &&
+      call.values[2] === 'src_crypto'
+    )).toBe(true);
     expect(calls.some(call => call.sql.includes('INSERT OR IGNORE INTO discovery_runs') && call.values.includes('NEWDATASET123'))).toBe(true);
   });
 

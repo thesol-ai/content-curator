@@ -140,9 +140,72 @@ function sanitizeSourceId(value: unknown): string | null {
 
 async function updateApifySourceLastDataset(env: Env, sourceId: string, datasetId: string): Promise<void> {
   await env.DB
-    .prepare('UPDATE apify_sources SET last_dataset_id=? WHERE id=?')
-    .bind(datasetId, sourceId)
+    .prepare('UPDATE apify_sources SET apify_dataset_id=?, last_dataset_id=? WHERE id=?')
+    .bind(datasetId, datasetId, sourceId)
     .run();
+}
+
+function isPlaceholderDatasetId(value: unknown): boolean {
+  return String(value ?? '').trim().startsWith('placeholder_');
+}
+
+function resolveInitialDatasetId(source: ApifySourceRow): string {
+  const primary = String(source.apify_dataset_id ?? '').trim();
+  const last = String(source.last_dataset_id ?? '').trim();
+
+  if (isPlaceholderDatasetId(primary) && sanitizeApifyDatasetId(last)) {
+    return last;
+  }
+
+  return primary;
+}
+
+async function fetchSourceDatasetItems(
+  env: Env,
+  source: ApifySourceRow,
+  datasetId: string,
+  maxItems: number,
+  runId: string,
+  category: CategoryRow,
+  startedAtMs: number
+): Promise<{ raw: any[]; datasetId: string; usedFallback: boolean }> {
+  try {
+    const raw = await fetchApifyDataset(datasetId, env.APIFY_TOKEN, maxItems);
+    return { raw, datasetId, usedFallback: false };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const lastDatasetId = sanitizeApifyDatasetId(source.last_dataset_id);
+
+    if (
+      lastDatasetId &&
+      lastDatasetId !== datasetId &&
+      (message.includes('404') || message.toLowerCase().includes('not found'))
+    ) {
+      await recordRunEvent(env, {
+        runId,
+        eventType: 'dataset.fetch.fallback',
+        phase: 'fetch_dataset',
+        categoryId: category.id,
+        platform: source.platform,
+        sourceId: source.id,
+        datasetId,
+        durationMs: Date.now() - startedAtMs,
+        metadata: {
+          failedDatasetId: datasetId,
+          fallbackDatasetId: lastDatasetId,
+          reason: message.slice(0, 300),
+        },
+      });
+
+      const raw = await fetchApifyDataset(lastDatasetId, env.APIFY_TOKEN, maxItems);
+
+      await updateApifySourceLastDataset(env, source.id, lastDatasetId);
+
+      return { raw, datasetId: lastDatasetId, usedFallback: true };
+    }
+
+    throw err;
+  }
 }
 
 // ── Process one source ────────────────────────────────────────
@@ -158,12 +221,37 @@ async function processSingleSource(
   let phase = 'init';
   let itemsFetched = 0, itemsNew = 0, itemsDuplicate = 0;
   let itemsAiSelected = 0, itemsAiRejected = 0, itemsQueued = 0;
+  let effectiveDatasetId = resolveInitialDatasetId(source);
+  const primaryDatasetId = String(source.apify_dataset_id ?? '').trim();
+
+  if (
+    effectiveDatasetId &&
+    effectiveDatasetId !== primaryDatasetId &&
+    isPlaceholderDatasetId(primaryDatasetId)
+  ) {
+    await updateApifySourceLastDataset(env, source.id, effectiveDatasetId);
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'dataset.primary.synced',
+      phase: 'init',
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: effectiveDatasetId,
+      durationMs: Date.now() - t0,
+      metadata: {
+        previousDatasetId: primaryDatasetId,
+        syncedDatasetId: effectiveDatasetId,
+        reason: 'placeholder_primary_resolved_from_last_dataset_id',
+      },
+    });
+  }
 
   const markPhase = async (nextPhase: string): Promise<void> => {
     phase = nextPhase;
-    console.log(`[Curation][${category.id}/${source.platform}] run=${runId} dataset=${source.apify_dataset_id} phase=${phase}`);
+    console.log(`[Curation][${category.id}/${source.platform}] run=${runId} dataset=${effectiveDatasetId} phase=${phase}`);
     try {
-      await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id, 'processing', {
+      await finishRun(env, runId, category.id, source.platform, effectiveDatasetId, 'processing', {
         itemsFetched,
         itemsNew,
         itemsDuplicate,
@@ -185,7 +273,7 @@ async function processSingleSource(
       categoryId: category.id,
       platform: source.platform,
       sourceId: source.id,
-      datasetId: source.apify_dataset_id,
+      datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
         itemsFetched,
@@ -198,7 +286,7 @@ async function processSingleSource(
     });
   };
 
-  await saveDiscoveryRun(env, runId, category.id, source.platform, source.apify_dataset_id, 'processing');
+  await saveDiscoveryRun(env, runId, category.id, source.platform, effectiveDatasetId, 'processing');
   await recordRunEvent(env, {
     runId,
     eventType: 'curation.run.created',
@@ -206,7 +294,7 @@ async function processSingleSource(
     categoryId: category.id,
     platform: source.platform,
     sourceId: source.id,
-    datasetId: source.apify_dataset_id,
+    datasetId: effectiveDatasetId,
     metadata: {
       dryRun,
       maxItems,
@@ -218,8 +306,11 @@ async function processSingleSource(
 
   try {
     await markPhase('fetch_dataset');
-    const raw = await fetchApifyDataset(source.apify_dataset_id, env.APIFY_TOKEN, maxItems);
+    const fetched = await fetchSourceDatasetItems(env, source, effectiveDatasetId, maxItems, runId, category, t0);
+    const raw = fetched.raw;
+    effectiveDatasetId = fetched.datasetId;
     itemsFetched = raw.length;
+
     await recordRunEvent(env, {
       runId,
       eventType: 'dataset.fetch.success',
@@ -227,17 +318,71 @@ async function processSingleSource(
       categoryId: category.id,
       platform: source.platform,
       sourceId: source.id,
-      datasetId: source.apify_dataset_id,
+      datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
-      metadata: { rawCount: raw.length, maxItems },
+      metadata: {
+        rawCount: raw.length,
+        maxItems,
+        usedFallback: fetched.usedFallback,
+      },
     });
 
     await markPhase('normalize_items');
     const normalized: NormalizedItem[] = [];
+    let droppedNormalizeNull = 0;
+    let droppedMissingUrl = 0;
+    let droppedShortTextNoSignal = 0;
+    let keptShortTextWithSignal = 0;
+
     for (const r of raw) {
       const item = normalizeItem(r, source.platform as any);
-      if (item && item.text.length >= 15 && item.sourceUrl) normalized.push(item);
+
+      if (!item) {
+        droppedNormalizeNull++;
+        continue;
+      }
+
+      if (!item.sourceUrl) {
+        droppedMissingUrl++;
+        continue;
+      }
+
+      const hasSignal =
+        item.media.length > 0 ||
+        Number(item.engagementLikes ?? 0) >= 100 ||
+        Number(item.engagementShares ?? 0) >= 20 ||
+        Number(item.engagementViews ?? 0) >= 10000;
+
+      if (item.text.length < 15 && !hasSignal) {
+        droppedShortTextNoSignal++;
+        continue;
+      }
+
+      if (item.text.length < 15 && hasSignal) {
+        keptShortTextWithSignal++;
+      }
+
+      normalized.push(item);
     }
+
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'normalize.complete',
+      phase: 'normalize_items',
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: effectiveDatasetId,
+      durationMs: Date.now() - t0,
+      metadata: {
+        rawCount: raw.length,
+        normalizedCount: normalized.length,
+        droppedNormalizeNull,
+        droppedMissingUrl,
+        droppedShortTextNoSignal,
+        keptShortTextWithSignal,
+      },
+    });
 
     await markPhase('dedupe_check');
     const fresh: NormalizedItem[] = [];
@@ -255,7 +400,7 @@ async function processSingleSource(
       categoryId: category.id,
       platform: source.platform,
       sourceId: source.id,
-      datasetId: source.apify_dataset_id,
+      datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
         normalizedCount: normalized.length,
@@ -266,7 +411,7 @@ async function processSingleSource(
     await markPhase('dedupe_complete');
 
     if (fresh.length === 0) {
-      await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+      await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
         dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
       return mkResult(runId, category.id, source.platform, true, dryRun,
         { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
@@ -297,7 +442,7 @@ async function processSingleSource(
         categoryId: category.id,
         platform: source.platform,
         sourceId: source.id,
-        datasetId: source.apify_dataset_id,
+        datasetId: effectiveDatasetId,
         durationMs: Date.now() - t0,
         metadata: {
           freshCount: fresh.length,
@@ -320,7 +465,7 @@ async function processSingleSource(
           categoryId: category.id,
           platform: source.platform,
           sourceId: source.id,
-          datasetId: source.apify_dataset_id,
+          datasetId: effectiveDatasetId,
           durationMs: Date.now() - t0,
           metadata: { errors: enqueueErrors.map(e => e.reason).slice(0, 10) },
         });
@@ -331,7 +476,7 @@ async function processSingleSource(
         itemsAiRejected += drain.candidatesRejected + drain.candidatesFailed + drain.candidatesSkipped;
         itemsQueued += drain.candidatesQueued;
 
-        await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+        await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
           dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
         await recordRunEvent(env, {
           runId,
@@ -340,7 +485,7 @@ async function processSingleSource(
           categoryId: category.id,
           platform: source.platform,
           sourceId: source.id,
-          datasetId: source.apify_dataset_id,
+          datasetId: effectiveDatasetId,
           durationMs: Date.now() - t0,
           metadata: {
             itemsFetched,
@@ -404,7 +549,7 @@ async function processSingleSource(
     await markPhase('pre_ai_filters_complete');
 
     if (filteredBatch.length === 0) {
-      await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+      await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
         dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiRejected, durationMs: Date.now() - t0 });
       return mkResult(runId, category.id, source.platform, true, dryRun,
         { itemsFetched, itemsNew, itemsDuplicate, itemsAiRejected, durationMs: Date.now() - t0 });
@@ -422,7 +567,7 @@ async function processSingleSource(
       categoryId: category.id,
       platform: source.platform,
       sourceId: source.id,
-      datasetId: source.apify_dataset_id,
+      datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
         candidates: filteredBatch.length,
@@ -581,7 +726,7 @@ async function processSingleSource(
 
     await markPhase('finalize');
     const finalStatus = dryRun ? 'dry_run' : 'completed';
-    await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+    await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
       finalStatus, { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
     await recordRunEvent(env, {
       runId,
@@ -590,7 +735,7 @@ async function processSingleSource(
       categoryId: category.id,
       platform: source.platform,
       sourceId: source.id,
-      datasetId: source.apify_dataset_id,
+      datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
         itemsFetched,
@@ -609,7 +754,7 @@ async function processSingleSource(
     const phaseMsg = `phase=${phase}: ${msg}`;
     errors.push(phaseMsg);
     console.error(`[Curation][${category.id}/${source.platform}]`, phaseMsg);
-    await finishRun(env, runId, category.id, source.platform, source.apify_dataset_id,
+    await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
       'failed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, errorMessage: phaseMsg, durationMs: Date.now() - t0 });
     await recordRunEvent(env, {
       runId,
@@ -620,7 +765,7 @@ async function processSingleSource(
       categoryId: category.id,
       platform: source.platform,
       sourceId: source.id,
-      datasetId: source.apify_dataset_id,
+      datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
         itemsFetched,
