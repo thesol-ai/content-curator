@@ -44,6 +44,12 @@ export function getCandidateMaxAgeHours(env: Env): number {
   return isNaN(v) || v <= 0 ? 6 : v;
 }
 
+function sqliteTimestampFromMs(ms: number): string {
+  // D1 stores CURRENT_TIMESTAMP as "YYYY-MM-DD HH:MM:SS".
+  // Keep cutoff values in the same format before comparing TEXT timestamps.
+  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+}
+
 function generateCandidateId(): string {
   const ts = Date.now().toString(36);
   const rand = Math.random().toString(36).slice(2, 8);
@@ -187,7 +193,7 @@ export async function fetchPendingCandidates(
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
     const maxAttempts = getMaxCandidateAttempts(env);
-    const cutoff = new Date(Date.now() - maxAgeHours * 3600 * 1000).toISOString();
+    const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
 
     if (categoryId) {
       const rows = await env.DB.prepare(`
@@ -324,7 +330,7 @@ export async function failMaxAttemptPendingCandidates(env: Env): Promise<number>
 export async function skipStaleCandidates(env: Env): Promise<number> {
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
-    const cutoff = new Date(Date.now() - maxAgeHours * 3600 * 1000).toISOString();
+    const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
 
     const result = await env.DB.prepare(`
       UPDATE ai_candidate_queue
