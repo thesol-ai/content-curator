@@ -109,7 +109,24 @@ describe('telegram-message-formatter', () => {
       maxLength: 4096,
     });
 
-    expect(result.html).toContain('متن خبر\n\n<a href="https://example.com/post">منبع</a>\n\n— The &lt;Sol&gt; Crypto\n@thesolxcrypto_fa');
+    expect(result.html).toContain('متن خبر\n\n<a href="https://example.com/post">منبع</a>\n— The &lt;Sol&gt; Crypto\n@thesolxcrypto_fa');
+  });
+
+  it('keeps source and channel footer adjacent without an empty line', () => {
+    const result = formatTelegramMessage({
+      body: 'متن خبر',
+      sourceUrl: 'https://example.com/post',
+      language: 'en',
+      channel: channel({
+        source_label_override: '🌏 Source',
+        channel_id_footer_enabled: 1,
+        channel_id_footer_text: '@thesolcrypto_fa',
+      }),
+      maxLength: 4096,
+    });
+
+    expect(result.html).toContain('متن خبر\n\n🌏 <a href="https://example.com/post">Source</a>\n@thesolcrypto_fa');
+    expect(result.html).not.toContain('Source</a>\n\n@thesolcrypto_fa');
   });
 
   it('uses custom channel footer and omits numeric chat id without custom text', () => {
