@@ -187,6 +187,65 @@ describe('backlog drain phase 2 safety', () => {
     expect(db.sqls.some(sql => sql.includes('status') && sql.includes('ai_candidate_queue'))).toBe(true);
   });
 
+  it('rejects and does not enqueue a candidate when the same semantic topic was recently queued for the channel', async () => {
+    const source = candidate();
+    runAIGateMock.mockResolvedValueOnce([{
+      publish: true,
+      score: 90,
+      riskLevel: 'low',
+      riskFlags: [],
+      topicFingerprint: 'humanity-exploit',
+      publishPriority: 'normal',
+      translations: {
+        fa: { captionShort: 'خبر کوتاه', captionFull: 'خبر کامل', hashtags: ['#Crypto'] },
+      },
+    }]);
+
+    const db = makeDb([source], { callsToday: 0 });
+    db.prepare.mockImplementation((sql: string) => {
+      db.sqls.push(sql);
+      const normalized = sql.replace(/\s+/g, ' ');
+      const statement = makeStatement(normalized, [source], { callsToday: 0 });
+      const captureBind = <T>(factory: () => T) => vi.fn((...args: unknown[]) => {
+        db.bindArgs.push(args);
+        return factory();
+      });
+
+      if (normalized.includes('SELECT * FROM channels')) {
+        return {
+          bind: captureBind(() => ({ all: vi.fn(async () => ({ results: [{
+            id: 'ch_fa', category_id: 'crypto', telegram_chat_id: '@x', language: 'fa', timezone: 'Asia/Tehran',
+            allowed_windows: '[]', blocked_windows: '[]', max_per_day: 100, max_per_hour: 10, min_gap_minutes: 0,
+            publish_enabled: 1, enabled: 1, custom_instructions: null, tone_profile: 'neutral', channel_label: null,
+            source_enabled: 1, source_label_override: null, signature_enabled: 0, signature_text: null,
+            channel_id_footer_enabled: 0, channel_id_footer_text: null, disable_link_preview: 1,
+            semantic_dedupe_enabled: 1, semantic_dedupe_window_hours: 48, max_posts_per_source_per_day: null,
+            editorial_mode: 'news', audience_level: 'intermediate', caption_style: 'contextual', creativity_level: 0.2,
+            caption_max_chars: 1200, caption_short_max_chars: 280, language_prompt: null, terminology_notes: null, forbidden_phrases: null,
+          }] })) })),
+          ...statement,
+        };
+      }
+
+      if (normalized.includes('FROM publish_queue q') && normalized.includes('JOIN discovery_items d')) {
+        return {
+          bind: captureBind(() => ({ first: vi.fn(async () => ({ found: 1 })) })),
+          ...statement,
+        };
+      }
+
+      return { bind: captureBind(() => statement), ...statement };
+    });
+
+    const result = await drainAICandidateQueue(envWithDb(db.prepare), { categoryId: 'crypto', maxBatches: 1 });
+
+    expect(result.candidatesSelected).toBe(0);
+    expect(result.candidatesRejected).toBe(1);
+    expect(result.candidatesQueued).toBe(0);
+    expect(db.sqls.some(sql => sql.includes('INSERT OR IGNORE INTO publish_queue'))).toBe(false);
+    expect(db.bindArgs.flat()).toContain('similar_topic_recent_channel');
+  });
+
   it('uses candidate_id in publish_queue inserts so retrying a candidate cannot enqueue the same channel twice', async () => {
     const source = candidate();
     runAIGateMock.mockResolvedValueOnce([{

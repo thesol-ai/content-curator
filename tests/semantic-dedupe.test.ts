@@ -52,14 +52,14 @@ describe('run-level semantic dedupe', () => {
     expect([...rejected]).toEqual([]);
   });
 
-  it('scopes duplicate detection to the source account as well as the topic fingerprint', () => {
+  it('deduplicates publishable items across sources when the topic fingerprint matches', () => {
     const rejected = findSimilarTopicInRunRejections(
       [item('source-a'), item('source-b')],
       [ai({ score: 90 }), ai({ score: 80 })],
       75,
     );
 
-    expect([...rejected]).toEqual([]);
+    expect([...rejected]).toEqual([1]);
   });
 
   it('does not group empty topic fingerprints', () => {

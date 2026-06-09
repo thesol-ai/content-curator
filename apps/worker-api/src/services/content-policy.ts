@@ -14,10 +14,9 @@ export function findSimilarTopicInRunRejections(
     if (!isAiPublishEligible(ai, scoreThreshold)) continue;
 
     const fingerprint = normalizeSemanticKeyPart(ai.topicFingerprint);
-    const source = normalizeSemanticKeyPart(item.sourceAccount);
-    if (!fingerprint || !source) continue;
+    if (!fingerprint) continue;
 
-    const key = `${source}::${fingerprint}`;
+    const key = fingerprint;
     const group = groups.get(key) ?? [];
     group.push({ index: i, score: Number(ai.score) || 0 });
     groups.set(key, group);

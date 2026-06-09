@@ -245,11 +245,14 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
     }
 
     const itemId = itemIdForCandidate(candidate.row.id);
-    const rejectReason = getItemRejectReason(ai, category, candidate.item, similarTopicRejects.has(i));
+    const recentTopicDuplicate = await hasRecentTopicMatchForAnySemanticChannel(env, channels, ai.topicFingerprint);
+    const rejectReason = recentTopicDuplicate
+      ? 'similar_topic_recent_channel'
+      : getItemRejectReason(ai, category, candidate.item, similarTopicRejects.has(i));
     const isRejected = rejectReason !== null;
 
     await saveDiscoveryItem(env, itemId, candidate.row.run_id ?? 'backlog', candidate.row.category_id, candidate.item, ai, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason);
-    await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai);
+    await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai, recentTopicDuplicate ? { topicFingerprint: ai.topicFingerprint } : undefined);
 
     if (isRejected) {
       await recordDedupeKeys(env, candidate.keys, itemId);
@@ -402,6 +405,52 @@ async function saveDiscoveryMedia(env: Env, itemId: string, item: NormalizedItem
       m.thumbnailUrl ?? null, m.width ?? null, m.height ?? null,
       m.durationSec ?? null, m.sizeMb ?? null).run();
   }
+}
+
+async function hasRecentChannelTopicMatch(
+  env: Env,
+  channel: ChannelRow,
+  topicFingerprint: string | null | undefined
+): Promise<boolean> {
+  const fingerprint = String(topicFingerprint ?? '').trim().toLowerCase();
+
+  // ns-* is a non-semantic fallback based on post_id. Do not use it for story-level dedupe.
+  if (!fingerprint || fingerprint.startsWith('ns-')) return false;
+
+  const windowHoursRaw = Number((channel as any).semantic_dedupe_window_hours);
+  const windowHours = Number.isFinite(windowHoursRaw) && windowHoursRaw > 0
+    ? Math.min(Math.max(windowHoursRaw, 1), 168)
+    : 48;
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT 1 AS found
+      FROM publish_queue q
+      JOIN discovery_items d ON d.id = q.item_id
+      WHERE q.channel_id = ?
+        AND q.status IN ('scheduled','retry','publishing','published')
+        AND lower(d.topic_fingerprint) = ?
+        AND COALESCE(q.published_at, q.scheduled_at) >= unixepoch('now', '-' || ? || ' hours')
+      LIMIT 1
+    `).bind(channel.id, fingerprint, String(windowHours)).first<{ found: number }>();
+
+    return row?.found === 1;
+  } catch (err) {
+    console.warn('[BacklogDrain] recent topic dedupe skipped:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
+
+async function hasRecentTopicMatchForAnySemanticChannel(
+  env: Env,
+  channels: ChannelRow[],
+  topicFingerprint: string | null | undefined
+): Promise<boolean> {
+  const semanticChannels = channels.filter(channel => channel.enabled && channel.semantic_dedupe_enabled !== 0);
+  for (const channel of semanticChannels) {
+    if (await hasRecentChannelTopicMatch(env, channel, topicFingerprint)) return true;
+  }
+  return false;
 }
 
 async function saveQueueItem(env: Env, data: {
