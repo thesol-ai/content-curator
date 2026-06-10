@@ -109,7 +109,8 @@ describe('telegram-message-formatter', () => {
       maxLength: 4096,
     });
 
-    expect(result.html).toContain('\u200Fمتن خبر\n\n<a href="https://example.com/post">منبع</a>\n— The &lt;Sol&gt; Crypto\n@thesolxcrypto_fa');
+    expect(result.html).toContain('متن خبر\n\n<a href="https://example.com/post">منبع</a>\n— The &lt;Sol&gt; Crypto\n@thesolxcrypto_fa');
+    expect(result.html).not.toContain('\u200F');
     expect(result.html).not.toContain('\n\u200F<a href="https://example.com/post">منبع</a>');
     expect(result.html).not.toContain('\n\u200F@thesolxcrypto_fa');
   });
@@ -212,7 +213,8 @@ describe('telegram-message-formatter', () => {
 
     expect(result.footerIncluded).toBe(false);
     expect(result.footerOmitted).toBe(true);
-    expect(result.html).toBe('\u200Fabcdefg');
+    expect(result.html).toBe('abcdefg');
+    expect(result.html).not.toContain('\u200F');
     expect(result.html).not.toContain('<a href=');
   });
 
@@ -229,7 +231,7 @@ describe('telegram-message-formatter', () => {
     expect(result.html).toContain('…');
   });
 
-  it('prefixes Persian Telegram captions with RTL marks even when they start with emoji or English text', () => {
+  it('does not inject RTL marks into Persian messages because structured content can break', () => {
     const result = formatTelegramMessage({
       body: '🚀 Ondo Perps نسخه بتای عمومی خود را راه‌اندازی کرد.\nETF بیت‌کوین دوباره در مرکز توجه است.',
       sourceUrl: 'https://example.com/post',
@@ -238,10 +240,11 @@ describe('telegram-message-formatter', () => {
       maxLength: 4096,
     });
 
-    expect(result.html.charCodeAt(0)).toBe(8207);
-    expect(result.html).toContain('\n\u200FETF بیت‌کوین');
+    expect(result.html.charCodeAt(0)).not.toBe(8207);
+    expect(result.html).toContain('🚀 Ondo Perps نسخه بتای عمومی خود را راه‌اندازی کرد.');
+    expect(result.html).toContain('\nETF بیت‌کوین دوباره در مرکز توجه است.');
     expect(result.html).toContain('\n\n<a href="https://example.com/post">منبع</a>');
-    expect(result.html).not.toContain('\n\n\u200F<a href="https://example.com/post">منبع</a>');
+    expect(result.html).not.toContain('\u200F');
   });
 
   it('keeps the small standalone helpers stable', () => {

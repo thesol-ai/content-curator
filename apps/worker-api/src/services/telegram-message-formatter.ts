@@ -33,16 +33,15 @@ const DEFAULT_SOURCE_LABELS: Record<string, string> = {
 
 const ELLIPSIS = '…';
 const FOOTER_SEPARATOR = '\n\n';
-const RTL_MARK = '\u200F';
-const RTL_LANGUAGES = new Set(['fa', 'ar', 'he', 'ur']);
 
 export function formatTelegramMessage(input: TelegramMessageFormatInput): TelegramMessageFormatResult {
   const maxLength = normalizeMaxLength(input.maxLength);
   const cleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
   const footer = buildFooterHtml(input);
-  const escapedBody = applyTelegramDirection(escapeHtml(cleanedBody), input.language);
-  // Direction marks are applied only to the translated body.
-  // Source links, signatures, and channel IDs must remain neutral/LTR so @handles and links render correctly.
+  // Do not inject Unicode direction marks.
+  // Telegram boxes, numeric tables, tickers, links, and @handles can break badly when the whole message is forced RTL.
+  // Persian captions should instead start with natural Persian wording at generation time.
+  const escapedBody = escapeHtml(cleanedBody);
   const footerHtml = footer.html;
 
   if (!footerHtml) {
@@ -201,23 +200,6 @@ function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
   };
 }
 
-function applyTelegramDirection(html: string, language: string): string {
-  if (!isRtlLanguage(language)) return html;
-  const value = String(html ?? '');
-  if (!value) return value;
-
-  return value
-    .split('\n')
-    .map((line) => {
-      if (!line.trim()) return line;
-      return line.startsWith(RTL_MARK) ? line : `${RTL_MARK}${line}`;
-    })
-    .join('\n');
-}
-
-function isRtlLanguage(language: string): boolean {
-  return RTL_LANGUAGES.has(String(language ?? '').trim().toLowerCase());
-}
 
 function truncateHtmlText(escapedBody: string, maxLength: number, footerOmitted: boolean): TelegramMessageFormatResult {
   const bodyResult = truncateEscapedText(escapedBody, maxLength);
