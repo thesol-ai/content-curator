@@ -13,6 +13,8 @@ function makeReq(body: object, secret = 'test-secret'): Request {
 }
 
 function makeEnv() {
+  const settings = new Map<string, string>();
+
   return {
     ENVIRONMENT: 'production',
     TELEGRAM_ADMIN_BOT_ENABLED: 'true',
@@ -21,12 +23,42 @@ function makeEnv() {
     TELEGRAM_BOT_TOKEN: 'telegram-token',
     APIFY_ROTATION_INTERVAL_HOURS: '3',
     DB: {
-      prepare: (_sql: string) => {
+      prepare: (sql: string) => {
+        let bound: unknown[] = [];
         const stmt = {
-          bind: (..._args: unknown[]) => stmt,
-          first: async () => ({ count: 0 }),
-          all: async () => ({ results: [] }),
-          run: async () => { throw new Error('bot test must not write db'); },
+          bind: (...args: unknown[]) => {
+            bound = args;
+            return stmt;
+          },
+          first: async () => {
+            if (sql.includes('FROM settings')) {
+              const value = settings.get(String(bound[0]));
+              return value === undefined ? null : { value };
+            }
+
+            if (sql.includes('FROM channels')) {
+              return { category_id: 'crypto' };
+            }
+
+            return null;
+          },
+          all: async () => {
+            if (sql.includes('FROM channels')) {
+              return { results: [{ id: 'crypto_fa_pilot', category_id: 'crypto' }] };
+            }
+
+            if (sql.includes('SELECT DISTINCT platform')) {
+              return { results: [{ platform: 'x' }, { platform: 'instagram' }, { platform: 'linkedin' }] };
+            }
+
+            return { results: [] };
+          },
+          run: async () => {
+            if (sql.includes('INSERT INTO settings')) {
+              settings.set(String(bound[0]), String(bound[1]));
+            }
+            return { success: true };
+          },
         };
         return stmt;
       },
@@ -35,7 +67,7 @@ function makeEnv() {
 }
 
 describe('telegram admin bot', () => {
-  it('sends an English home menu to allowed admins', async () => {
+  it('sends a visual home menu to allowed admins', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -57,25 +89,22 @@ describe('telegram admin bot', () => {
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(fetchMock.mock.calls[0][0]).toContain('/sendMessage');
     expect(payload.chat_id).toBe(222);
-    expect(payload.text).toContain('Content Admin Home');
-    expect(payload.reply_markup.inline_keyboard[0][0].callback_data).toBe('channels');
+    expect(payload.text).toContain('✨ <b>Content Command Center</b>');
+    expect(payload.reply_markup.keyboard[0][0].text).toBe('📊 Open Reports');
+    expect(payload.reply_markup.resize_keyboard).toBe(true);
 
     vi.unstubAllGlobals();
   });
 
-  it('edits the message into channel selection when report menu is opened', async () => {
+  it('sends channel selection as a new reply-keyboard message', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
     const res = await handleTelegramAdminBot(makeReq({
-      callback_query: {
-        id: 'cb_1',
-        data: 'channels',
+      message: {
+        text: '📊 Open Reports',
+        chat: { id: 222 },
         from: { id: 111 },
-        message: {
-          message_id: 333,
-          chat: { id: 222 },
-        },
       },
     }), makeEnv());
 
@@ -83,32 +112,25 @@ describe('telegram admin bot', () => {
 
     expect(res.status).toBe(200);
     expect(body.handled).toBe('channels');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0][0]).toContain('/answerCallbackQuery');
-    expect(fetchMock.mock.calls[1][0]).toContain('/editMessageText');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    const payload = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(payload.chat_id).toBe(222);
-    expect(payload.message_id).toBe(333);
-    expect(payload.text).toContain('Select Channel');
-    expect(payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toContain('channel:crypto_fa_pilot');
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(fetchMock.mock.calls[0][0]).toContain('/sendMessage');
+    expect(payload.text).toContain('📣 <b>Select Channel</b>');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('📣 crypto_fa_pilot');
 
     vi.unstubAllGlobals();
   });
 
-  it('edits the message into platform selection after channel selection', async () => {
+  it('sends platform selection after channel selection', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
     const res = await handleTelegramAdminBot(makeReq({
-      callback_query: {
-        id: 'cb_2',
-        data: 'channel:crypto_fa_pilot',
+      message: {
+        text: '📣 crypto_fa_pilot',
+        chat: { id: 222 },
         from: { id: 111 },
-        message: {
-          message_id: 333,
-          chat: { id: 222 },
-        },
       },
     }), makeEnv());
 
@@ -117,39 +139,72 @@ describe('telegram admin bot', () => {
     expect(res.status).toBe(200);
     expect(body.handled).toBe('platforms');
 
-    const payload = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(payload.text).toContain('Select Platform');
-    expect(payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toContain('reports:crypto_fa_pilot:all');
-    expect(payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toContain('reports:crypto_fa_pilot:x');
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(payload.text).toContain('🌐 <b>Select Platform</b>');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('🌐 All Platforms');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('𝕏 X / Twitter');
 
     vi.unstubAllGlobals();
   });
 
-  it('edits the message into a selected report section', async () => {
+  it('sends report section picker after platform selection', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
+    const env = makeEnv();
+
+    await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '📣 crypto_fa_pilot',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }), env);
+
+    fetchMock.mockClear();
 
     const res = await handleTelegramAdminBot(makeReq({
-      callback_query: {
-        id: 'cb_3',
-        data: 'report:costs:crypto_fa_pilot:x',
+      message: {
+        text: '𝕏 X / Twitter',
+        chat: { id: 222 },
         from: { id: 111 },
-        message: {
-          message_id: 333,
-          chat: { id: 222 },
-        },
       },
-    }), makeEnv());
+    }), env);
+
+    const body: any = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.handled).toBe('report_picker');
+
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(payload.text).toContain('🧭 <b>Select Report Section</b>');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('● ✨ Overview');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('💸 Costs');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('sends a new report message for selected sections', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const env = makeEnv();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '💸 Costs',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }), env);
 
     const body: any = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.handled).toBe('report:costs');
 
-    const payload = JSON.parse(fetchMock.mock.calls[1][1].body);
-    expect(payload.text).toContain('<b>Costs</b>');
-    expect(payload.text).not.toContain('Content Funnel');
-    expect(payload.reply_markup.inline_keyboard.flat().map((b: any) => b.callback_data)).toContain('report:pipeline:crypto_fa_pilot:x');
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(fetchMock.mock.calls[0][0]).toContain('/sendMessage');
+    expect(payload.text).toContain('💸 <b>Costs</b>');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('🔄 Funnel');
 
     vi.unstubAllGlobals();
   });
@@ -176,9 +231,9 @@ describe('telegram admin bot', () => {
 
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(payload.chat_id).toBe(222);
-    expect(payload.text).toContain('Your Telegram user_id');
+    expect(payload.text).toContain('🪪 Your Telegram user_id');
     expect(payload.text).toContain('<code>999</code>');
-    expect(payload.text).not.toContain('Reports');
+    expect(payload.text).not.toContain('Open Reports');
 
     vi.unstubAllGlobals();
   });

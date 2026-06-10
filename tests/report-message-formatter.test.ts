@@ -67,49 +67,52 @@ const sampleReport = {
 };
 
 describe('report-message-formatter', () => {
-  it('formats a compact English overview instead of dumping every operational section', () => {
+  it('formats a visual overview', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'overview');
 
-    expect(text).toContain('<b>Overview</b>');
-    expect(text).toContain('Scope: <code>channel=crypto_fa_pilot | category=crypto | platform=x</code>');
-    expect(text).toContain('Last 24h');
-    expect(text).toContain('Last 7d');
-    expect(text).toContain('Apify monthly projection');
-    expect(text).not.toContain('Content Funnel');
-    expect(text).not.toContain('Top Sources');
+    expect(text).toContain('✨ <b>Overview</b>');
+    expect(text).toContain('📍 <b>Scope</b>');
+    expect(text).toContain('crypto_fa_pilot');
+    expect(text).toContain('🗓 <b>Last 24h</b>');
+    expect(text).toContain('📆 <b>Last 7d</b>');
+    expect(text).toContain('🧭 <b>Current State</b>');
+    expect(text).not.toContain('Content Funnel</b>');
+    expect(text).not.toContain('Top Sources</b>');
   });
 
-  it('formats the costs section separately in English', () => {
+  it('formats the costs section separately', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'costs');
 
-    expect(text).toContain('<b>Costs</b>');
-    expect(text).toContain('AI spent');
-    expect(text).toContain('Apify spent');
-    expect(text).toContain('Provider Breakdown');
+    expect(text).toContain('💸 <b>Costs</b>');
+    expect(text).toContain('💰 <b>Cost Windows</b>');
+    expect(text).toContain('🤖 AI spent');
+    expect(text).toContain('🕷 Apify spent');
+    expect(text).toContain('🧾 <b>Provider Breakdown</b>');
     expect(text).toContain('anthropic');
-    expect(text).not.toContain('Publish Queue');
+    expect(text).not.toContain('Publish Queue</b>');
   });
 
-  it('formats the pipeline section separately in English', () => {
+  it('formats the pipeline section separately', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'pipeline');
 
-    expect(text).toContain('<b>Content Funnel</b>');
-    expect(text).toContain('fetched');
-    expect(text).toContain('duplicate');
-    expect(text).toContain('AI selected/rejected');
-    expect(text).not.toContain('<b>Costs</b>');
+    expect(text).toContain('🔄 <b>Content Funnel</b>');
+    expect(text).toContain('📥 fetched');
+    expect(text).toContain('♻️ duplicate');
+    expect(text).toContain('🤖 selected/rejected');
+    expect(text).not.toContain('💰 <b>Cost Windows</b>');
   });
 
-  it('formats the health section separately in English', () => {
+  it('formats the health section separately', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'health');
 
-    expect(text).toContain('<b>System State</b>');
-    expect(text).toContain('AI Backlog');
-    expect(text).toContain('Processing');
-    expect(text).toContain('Failures');
+    expect(text).toContain('🩺 <b>System State</b>');
+    expect(text).toContain('🩺 <b>Attention Board</b>');
+    expect(text).toContain('🧠 <b>AI Backlog</b>');
+    expect(text).toContain('⚙️ <b>Processing</b>');
+    expect(text).toContain('🚨 <b>Failures</b>');
     expect(text).toContain('run_1');
     expect(text).toContain('run_2');
-    expect(text).not.toContain('Top Sources');
+    expect(text).not.toContain('Top Sources</b>');
   });
 
   it('truncates very long reports to stay under Telegram message limits', () => {

@@ -26,6 +26,11 @@ type TelegramCallbackQuery = {
   from?: { id?: number; username?: string; first_name?: string };
 };
 
+type AdminSession = {
+  channelId?: string;
+  platform?: string;
+};
+
 export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Response> {
   if (env.TELEGRAM_ADMIN_BOT_ENABLED !== 'true') {
     return Response.json({ ok: false, error: 'telegram_admin_bot_disabled' }, { status: 404 });
@@ -63,45 +68,97 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
 
   const text = update.message?.text?.trim() ?? '';
   const callbackData = update.callback_query?.data?.trim() ?? '';
-  const callbackMessageId = update.callback_query?.message?.message_id;
 
-  if (text === '/start' || text === '/menu' || callbackData === 'home') {
-    await replyOrEdit(env, chatId, callbackMessageId, buildHomeText(), homeKeyboard());
+  if (callbackData) {
+    await handleLegacyCallback(env, chatId, callbackData);
+    return Response.json({ ok: true, handled: 'legacy_callback' });
+  }
+
+  if (text === '/start') {
+    if (await shouldSuppressDuplicateStart(env, chatId)) {
+      return Response.json({ ok: true, handled: 'duplicate_start_suppressed' });
+    }
+
+    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
     return Response.json({ ok: true, handled: 'home' });
   }
 
-  if (text === '/report' || text === '/ops' || callbackData === 'channels' || callbackData === 'report:menu') {
-    await replyOrEdit(env, chatId, callbackMessageId, buildChannelPickerText(), await channelKeyboard(env));
+  if (text === '/menu' || text === '🏠 Home') {
+    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+    return Response.json({ ok: true, handled: 'home' });
+  }
+
+  if (text === '/report' || text === '/ops' || text === '📊 Open Reports' || text === '📣 Change Channel' || text === '🧭 Change Scope') {
+    await sendTelegramMessage(env, chatId, buildChannelPickerText(), await channelKeyboard(env));
     return Response.json({ ok: true, handled: 'channels' });
+  }
+
+  if (text.startsWith('📣 ')) {
+    const channelId = sanitizeCallbackId(text.slice('📣 '.length).trim(), 'crypto_fa_pilot');
+    await saveSession(env, chatId, { channelId, platform: 'all' });
+    await sendTelegramMessage(env, chatId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
+    return Response.json({ ok: true, handled: 'platforms' });
+  }
+
+  const platform = parsePlatformButton(text);
+  if (platform) {
+    const session = await loadSession(env, chatId);
+    const channelId = session.channelId ?? 'crypto_fa_pilot';
+    await saveSession(env, chatId, { channelId, platform });
+    await sendTelegramMessage(env, chatId, buildReportPickerText(channelId, platform), reportSectionKeyboard('overview'));
+    return Response.json({ ok: true, handled: 'report_picker' });
+  }
+
+  const section = parseSectionButton(text);
+  if (section) {
+    const session = await loadSession(env, chatId);
+    await sendReportSection(env, chatId, section, session.channelId ?? 'crypto_fa_pilot', session.platform ?? 'all');
+    return Response.json({ ok: true, handled: `report:${section}` });
+  }
+
+  await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+  return Response.json({ ok: true, handled: 'fallback_home' });
+}
+
+async function handleLegacyCallback(env: Env, chatId: string | number, callbackData: string): Promise<void> {
+  if (callbackData === 'home') {
+    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+    return;
+  }
+
+  if (callbackData === 'channels' || callbackData === 'report:menu') {
+    await sendTelegramMessage(env, chatId, buildChannelPickerText(), await channelKeyboard(env));
+    return;
   }
 
   if (callbackData.startsWith('channel:')) {
     const channelId = sanitizeCallbackId(callbackData.slice('channel:'.length), 'crypto_fa_pilot');
-    await replyOrEdit(env, chatId, callbackMessageId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
-    return Response.json({ ok: true, handled: 'platforms' });
+    await saveSession(env, chatId, { channelId, platform: 'all' });
+    await sendTelegramMessage(env, chatId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
+    return;
   }
 
   if (callbackData.startsWith('reports:')) {
     const [, channelId = 'crypto_fa_pilot', platform = 'all'] = callbackData.split(':');
-    await sendReportSection(env, chatId, callbackMessageId, 'overview', channelId, platform);
-    return Response.json({ ok: true, handled: 'report:overview' });
+    await saveSession(env, chatId, { channelId, platform });
+    await sendReportSection(env, chatId, 'overview', channelId, platform);
+    return;
   }
 
   if (callbackData.startsWith('report:')) {
     const [, sectionRaw, channelId = 'crypto_fa_pilot', platform = 'all'] = callbackData.split(':');
     const section = normalizeOperationalReportSection(sectionRaw);
-    await sendReportSection(env, chatId, callbackMessageId, section, channelId, platform);
-    return Response.json({ ok: true, handled: `report:${section}` });
+    await saveSession(env, chatId, { channelId, platform });
+    await sendReportSection(env, chatId, section, channelId, platform);
+    return;
   }
 
-  await replyOrEdit(env, chatId, callbackMessageId, buildHomeText(), homeKeyboard());
-  return Response.json({ ok: true, handled: 'fallback_home' });
+  await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
 }
 
 async function sendReportSection(
   env: Env,
   chatId: string | number,
-  messageId: number | undefined,
   section: OperationalReportSection,
   channelId = 'crypto_fa_pilot',
   platform = 'all',
@@ -115,16 +172,17 @@ async function sendReportSection(
 
   const report = await buildOperationalReport(env, reportUrl);
   const text = formatOperationalReportForTelegram(report as any, section);
-  await replyOrEdit(env, chatId, messageId, text, reportSectionKeyboard(section, cleanChannelId, cleanPlatform));
+  await sendTelegramMessage(env, chatId, text, reportSectionKeyboard(section));
 }
 
 function buildUnauthorizedText(userId: number | null): string {
   return [
-    'Access denied',
+    '🚫 <b>Access denied</b>',
+    '━━━━━━━━━━━━━━━━━━━━',
     '',
     'This bot is restricted to approved admin users.',
     '',
-    `Your Telegram user_id: <code>${userId ?? 'unknown'}</code>`,
+    `🪪 Your Telegram user_id: <code>${userId ?? 'unknown'}</code>`,
     '',
     'Ask an admin to add this ID to TELEGRAM_ADMIN_ALLOWED_USER_IDS.',
   ].join('\n');
@@ -132,34 +190,51 @@ function buildUnauthorizedText(userId: number | null): string {
 
 function buildHomeText(): string {
   return [
-    '<b>Content Admin Home</b>',
+    '✨ <b>Content Command Center</b>',
+    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    'Select a channel, then a platform, then a report section.',
+    '📊 Reports are grouped by channel, platform, and section.',
+    '🧭 Use the keyboard below to navigate.',
   ].join('\n');
 }
 
 function buildChannelPickerText(): string {
   return [
-    '<b>Select Channel</b>',
+    '📣 <b>Select Channel</b>',
+    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    'Reports are scoped by channel and platform.',
+    'Choose the publishing channel you want to inspect.',
   ].join('\n');
 }
 
 function buildPlatformPickerText(channelId: string): string {
   return [
-    '<b>Select Platform</b>',
+    '🌐 <b>Select Platform</b>',
+    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    `Channel: <code>${escapeHtml(channelId)}</code>`,
+    `📣 Channel: <code>${escapeHtml(channelId)}</code>`,
+    '',
+    'Choose a platform scope for this report.',
+  ].join('\n');
+}
+
+function buildReportPickerText(channelId: string, platform: string): string {
+  return [
+    '🧭 <b>Select Report Section</b>',
+    '━━━━━━━━━━━━━━━━━━━━',
+    '',
+    `📣 Channel: <code>${escapeHtml(channelId)}</code>`,
+    `🌐 Platform: <code>${escapeHtml(platform)}</code>`,
+    '',
+    'Pick the section you want to generate.',
   ].join('\n');
 }
 
 function homeKeyboard(): object {
-  return {
-    inline_keyboard: [
-      [{ text: 'Reports', callback_data: 'channels' }],
-    ],
-  };
+  return replyKeyboard([
+    ['📊 Open Reports'],
+    ['🏠 Home'],
+  ]);
 }
 
 async function channelKeyboard(env: Env): Promise<object> {
@@ -172,16 +247,10 @@ async function channelKeyboard(env: Env): Promise<object> {
   `);
 
   const channels = rows.length > 0 ? rows : [{ id: 'crypto_fa_pilot', category_id: 'crypto' }];
+  const rowsForKeyboard = channels.map(row => [`📣 ${row.id}`]);
+  rowsForKeyboard.push(['🏠 Home']);
 
-  return {
-    inline_keyboard: [
-      ...channels.map(row => ([{
-        text: row.id,
-        callback_data: `channel:${row.id}`,
-      }])),
-      [{ text: 'Home', callback_data: 'home' }],
-    ],
-  };
+  return replyKeyboard(rowsForKeyboard);
 }
 
 async function platformKeyboard(env: Env, channelId: string): Promise<object> {
@@ -212,70 +281,68 @@ async function platformKeyboard(env: Env, channelId: string): Promise<object> {
 
   const platforms = rows.map(row => row.platform).filter(Boolean);
   const unique = platforms.length > 0 ? platforms : ['x', 'instagram', 'linkedin'];
+  const rowsForKeyboard = [
+    ['🌐 All Platforms'],
+    ...unique.map(platform => [platformLabel(platform)]),
+    ['📣 Change Channel', '🏠 Home'],
+  ];
 
-  return {
-    inline_keyboard: [
-      [{ text: 'All platforms', callback_data: `reports:${channelId}:all` }],
-      ...unique.map(platform => ([{
-        text: platformLabel(platform),
-        callback_data: `reports:${channelId}:${platform}`,
-      }])),
-      [{ text: 'Change channel', callback_data: 'channels' }],
-      [{ text: 'Home', callback_data: 'home' }],
-    ],
-  };
+  return replyKeyboard(rowsForKeyboard);
 }
 
-function reportSectionKeyboard(active: OperationalReportSection, channelId = 'crypto_fa_pilot', platform = 'all'): object {
+function reportSectionKeyboard(active: OperationalReportSection): object {
   const label = (section: OperationalReportSection, text: string) =>
     section === active ? `● ${text}` : text;
 
+  return replyKeyboard([
+    [label('overview', '✨ Overview'), label('costs', '💸 Costs')],
+    [label('pipeline', '🔄 Funnel'), label('publish', '📬 Publish')],
+    [label('apify', '🕷 Apify'), label('health', '🩺 System')],
+    [label('sources', '🏆 Sources')],
+    ['🧭 Change Scope', '🏠 Home'],
+  ]);
+}
+
+function replyKeyboard(rows: string[][]): object {
   return {
-    inline_keyboard: [
-      [
-        { text: label('overview', 'Overview'), callback_data: `report:overview:${channelId}:${platform}` },
-        { text: label('costs', 'Costs'), callback_data: `report:costs:${channelId}:${platform}` },
-      ],
-      [
-        { text: label('pipeline', 'Funnel'), callback_data: `report:pipeline:${channelId}:${platform}` },
-        { text: label('publish', 'Publish'), callback_data: `report:publish:${channelId}:${platform}` },
-      ],
-      [
-        { text: label('apify', 'Apify'), callback_data: `report:apify:${channelId}:${platform}` },
-        { text: label('health', 'System'), callback_data: `report:health:${channelId}:${platform}` },
-      ],
-      [
-        { text: label('sources', 'Sources'), callback_data: `report:sources:${channelId}:${platform}` },
-      ],
-      [
-        { text: 'Change channel', callback_data: 'channels' },
-        { text: 'Home', callback_data: 'home' },
-      ],
-    ],
+    keyboard: rows.map(row => row.map(text => ({ text }))),
+    resize_keyboard: true,
+    one_time_keyboard: false,
+    is_persistent: true,
   };
 }
 
 function platformLabel(platform: string): string {
   const p = String(platform).toLowerCase();
-  if (p === 'x' || p === 'twitter') return 'X / Twitter';
-  if (p === 'instagram') return 'Instagram';
-  if (p === 'linkedin') return 'LinkedIn';
-  return platform;
+  if (p === 'x' || p === 'twitter') return '𝕏 X / Twitter';
+  if (p === 'instagram') return '📸 Instagram';
+  if (p === 'linkedin') return '💼 LinkedIn';
+  return `🌐 ${platform}`;
 }
 
-async function replyOrEdit(
-  env: Env,
-  chatId: string | number,
-  messageId: number | undefined,
-  text: string,
-  replyMarkup?: object,
-): Promise<void> {
-  if (messageId) {
-    await editTelegramMessage(env, chatId, messageId, text, replyMarkup);
-    return;
-  }
+function parsePlatformButton(text: string): string | null {
+  if (text === '🌐 All Platforms') return 'all';
+  if (text === '𝕏 X / Twitter') return 'x';
+  if (text === '📸 Instagram') return 'instagram';
+  if (text === '💼 LinkedIn') return 'linkedin';
+  if (text.startsWith('🌐 ')) return sanitizeCallbackId(text.slice('🌐 '.length).trim(), 'all');
+  return null;
+}
 
-  await sendTelegramMessage(env, chatId, text, replyMarkup);
+function parseSectionButton(text: string): OperationalReportSection | null {
+  const normalized = text.replace(/^●\s*/, '').trim();
+
+  const map: Record<string, OperationalReportSection> = {
+    '✨ Overview': 'overview',
+    '💸 Costs': 'costs',
+    '🔄 Funnel': 'pipeline',
+    '📬 Publish': 'publish',
+    '🕷 Apify': 'apify',
+    '🩺 System': 'health',
+    '🏆 Sources': 'sources',
+  };
+
+  return map[normalized] ?? null;
 }
 
 async function sendTelegramMessage(
@@ -308,39 +375,6 @@ async function sendTelegramMessage(
   }
 }
 
-async function editTelegramMessage(
-  env: Env,
-  chatId: string | number,
-  messageId: number,
-  text: string,
-  replyMarkup?: object,
-): Promise<void> {
-  const token = env.TELEGRAM_BOT_TOKEN?.trim();
-  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not configured');
-
-  const payload: Record<string, unknown> = {
-    chat_id: chatId,
-    message_id: messageId,
-    text,
-    parse_mode: 'HTML',
-    disable_web_page_preview: true,
-  };
-
-  if (replyMarkup) payload.reply_markup = replyMarkup;
-
-  const res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    if (body.includes('message is not modified')) return;
-    throw new Error(`Telegram editMessageText failed ${res.status}: ${body.slice(0, 300)}`);
-  }
-}
-
 async function answerCallbackQuery(env: Env, callbackQueryId: string): Promise<void> {
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   if (!token) return;
@@ -350,6 +384,68 @@ async function answerCallbackQuery(env: Env, callbackQueryId: string): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackQueryId }),
   }).catch(() => undefined);
+}
+
+async function shouldSuppressDuplicateStart(env: Env, chatId: string | number): Promise<boolean> {
+  const key = sessionKey('last_start', chatId);
+  const now = Date.now();
+  const row = await safeFirst<{ value: string } | null>(env, `
+    SELECT value
+    FROM settings
+    WHERE key=?
+    LIMIT 1
+  `, [key], null);
+
+  const last = Number(row?.value ?? 0);
+  await saveSetting(env, key, String(now));
+
+  return Number.isFinite(last) && last > 0 && now - last < 5000;
+}
+
+async function loadSession(env: Env, chatId: string | number): Promise<AdminSession> {
+  const row = await safeFirst<{ value: string } | null>(env, `
+    SELECT value
+    FROM settings
+    WHERE key=?
+    LIMIT 1
+  `, [sessionKey('session', chatId)], null);
+
+  if (!row?.value) return {};
+
+  try {
+    const parsed = JSON.parse(row.value) as AdminSession;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveSession(env: Env, chatId: string | number, patch: AdminSession): Promise<void> {
+  const current = await loadSession(env, chatId);
+  const next = {
+    ...current,
+    ...patch,
+  };
+
+  await saveSetting(env, sessionKey('session', chatId), JSON.stringify(next));
+}
+
+async function saveSetting(env: Env, key: string, value: string): Promise<void> {
+  try {
+    await env.DB.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value=excluded.value,
+        updated_at=CURRENT_TIMESTAMP
+    `).bind(key, value).run();
+  } catch (error) {
+    console.warn('[TelegramAdminBot] saveSetting failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+function sessionKey(kind: string, chatId: string | number): string {
+  return `telegram_admin:${kind}:${chatId}`;
 }
 
 async function safeFirst<T>(env: Env, sql: string, binds: unknown[], fallback: T): Promise<T> {
