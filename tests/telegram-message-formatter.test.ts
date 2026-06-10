@@ -240,7 +240,8 @@ describe('telegram-message-formatter', () => {
 
     expect(result.html.charCodeAt(0)).toBe(8207);
     expect(result.html).toContain('\n\u200FETF بیت‌کوین');
-    expect(result.html).toContain('\n\n\u200F<a href="https://example.com/post">منبع</a>');
+    expect(result.html).toContain('\n\n<a href="https://example.com/post">منبع</a>');
+    expect(result.html).not.toContain('\n\n\u200F<a href="https://example.com/post">منبع</a>');
   });
 
   it('keeps the small standalone helpers stable', () => {
