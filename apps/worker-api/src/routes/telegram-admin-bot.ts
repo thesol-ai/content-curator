@@ -65,24 +65,37 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
   const callbackData = update.callback_query?.data?.trim() ?? '';
   const callbackMessageId = update.callback_query?.message?.message_id;
 
-  if (text === '/start' || text === '/menu' || callbackData === 'menu') {
-    await replyOrEdit(env, chatId, callbackMessageId, buildMenuText(), mainMenuKeyboard());
-    return Response.json({ ok: true, handled: 'menu' });
+  if (text === '/start' || text === '/menu' || callbackData === 'home') {
+    await replyOrEdit(env, chatId, callbackMessageId, buildHomeText(), homeKeyboard());
+    return Response.json({ ok: true, handled: 'home' });
   }
 
-  if (text === '/report' || text === '/ops' || callbackData === 'report:menu') {
-    await sendReportSection(env, chatId, callbackMessageId, 'overview');
+  if (text === '/report' || text === '/ops' || callbackData === 'channels' || callbackData === 'report:menu') {
+    await replyOrEdit(env, chatId, callbackMessageId, buildChannelPickerText(), await channelKeyboard(env));
+    return Response.json({ ok: true, handled: 'channels' });
+  }
+
+  if (callbackData.startsWith('channel:')) {
+    const channelId = sanitizeCallbackId(callbackData.slice('channel:'.length), 'crypto_fa_pilot');
+    await replyOrEdit(env, chatId, callbackMessageId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
+    return Response.json({ ok: true, handled: 'platforms' });
+  }
+
+  if (callbackData.startsWith('reports:')) {
+    const [, channelId = 'crypto_fa_pilot', platform = 'all'] = callbackData.split(':');
+    await sendReportSection(env, chatId, callbackMessageId, 'overview', channelId, platform);
     return Response.json({ ok: true, handled: 'report:overview' });
   }
 
   if (callbackData.startsWith('report:')) {
-    const section = normalizeOperationalReportSection(callbackData.slice('report:'.length));
-    await sendReportSection(env, chatId, callbackMessageId, section);
+    const [, sectionRaw, channelId = 'crypto_fa_pilot', platform = 'all'] = callbackData.split(':');
+    const section = normalizeOperationalReportSection(sectionRaw);
+    await sendReportSection(env, chatId, callbackMessageId, section, channelId, platform);
     return Response.json({ ok: true, handled: `report:${section}` });
   }
 
-  await replyOrEdit(env, chatId, callbackMessageId, buildMenuText(), mainMenuKeyboard());
-  return Response.json({ ok: true, handled: 'fallback_menu' });
+  await replyOrEdit(env, chatId, callbackMessageId, buildHomeText(), homeKeyboard());
+  return Response.json({ ok: true, handled: 'fallback_home' });
 }
 
 async function sendReportSection(
@@ -90,69 +103,164 @@ async function sendReportSection(
   chatId: string | number,
   messageId: number | undefined,
   section: OperationalReportSection,
+  channelId = 'crypto_fa_pilot',
+  platform = 'all',
 ): Promise<void> {
-  const reportUrl = new URL('https://telegram-admin.local/internal/report/ops?category=crypto');
+  const cleanChannelId = sanitizeCallbackId(channelId, 'crypto_fa_pilot');
+  const cleanPlatform = sanitizeCallbackId(platform, 'all');
+
+  const reportUrl = new URL('https://telegram-admin.local/internal/report/ops');
+  reportUrl.searchParams.set('channel_id', cleanChannelId);
+  reportUrl.searchParams.set('platform', cleanPlatform);
+
   const report = await buildOperationalReport(env, reportUrl);
   const text = formatOperationalReportForTelegram(report as any, section);
-  await replyOrEdit(env, chatId, messageId, text, reportSectionKeyboard(section));
+  await replyOrEdit(env, chatId, messageId, text, reportSectionKeyboard(section, cleanChannelId, cleanPlatform));
 }
 
 function buildUnauthorizedText(userId: number | null): string {
   return [
-    '⛔️ <b>دسترسی مجاز نیست</b>',
+    'Access denied',
     '',
-    'این bot فقط برای ادمین‌های ثبت‌شده فعال است.',
+    'This bot is restricted to approved admin users.',
     '',
-    `user_id شما: <code>${userId ?? 'unknown'}</code>`,
+    `Your Telegram user_id: <code>${userId ?? 'unknown'}</code>`,
     '',
-    'این عدد باید در TELEGRAM_ADMIN_ALLOWED_USER_IDS اضافه شود.',
+    'Ask an admin to add this ID to TELEGRAM_ADMIN_ALLOWED_USER_IDS.',
   ].join('\n');
 }
 
-function buildMenuText(): string {
+function buildHomeText(): string {
   return [
-    '🛠 <b>پنل مدیریت محتوا</b>',
+    '<b>Content Admin Home</b>',
     '',
-    'گزارش‌ها دسته‌بندی شده‌اند. هر بخش فقط همان اطلاعات خودش را نشان می‌دهد.',
-    '',
-    'یک بخش را انتخاب کن:',
+    'Select a channel, then a platform, then a report section.',
   ].join('\n');
 }
 
-function mainMenuKeyboard(): object {
+function buildChannelPickerText(): string {
+  return [
+    '<b>Select Channel</b>',
+    '',
+    'Reports are scoped by channel and platform.',
+  ].join('\n');
+}
+
+function buildPlatformPickerText(channelId: string): string {
+  return [
+    '<b>Select Platform</b>',
+    '',
+    `Channel: <code>${escapeHtml(channelId)}</code>`,
+  ].join('\n');
+}
+
+function homeKeyboard(): object {
   return {
     inline_keyboard: [
-      [{ text: '📊 گزارش‌ها', callback_data: 'report:menu' }],
+      [{ text: 'Reports', callback_data: 'channels' }],
     ],
   };
 }
 
-function reportSectionKeyboard(active: OperationalReportSection): object {
+async function channelKeyboard(env: Env): Promise<object> {
+  const rows = await safeAll<{ id: string; category_id: string }>(env, `
+    SELECT id, category_id
+    FROM channels
+    WHERE enabled=1
+    ORDER BY id
+    LIMIT 20
+  `);
+
+  const channels = rows.length > 0 ? rows : [{ id: 'crypto_fa_pilot', category_id: 'crypto' }];
+
+  return {
+    inline_keyboard: [
+      ...channels.map(row => ([{
+        text: row.id,
+        callback_data: `channel:${row.id}`,
+      }])),
+      [{ text: 'Home', callback_data: 'home' }],
+    ],
+  };
+}
+
+async function platformKeyboard(env: Env, channelId: string): Promise<object> {
+  const category = await safeFirst<{ category_id: string } | null>(env, `
+    SELECT category_id
+    FROM channels
+    WHERE id=?
+    LIMIT 1
+  `, [channelId], null);
+
+  const categoryId = category?.category_id ?? 'crypto';
+  const rows = await safeAll<{ platform: string }>(env, `
+    SELECT DISTINCT platform
+    FROM (
+      SELECT platform FROM source_accounts WHERE category_id=? AND enabled=1
+      UNION
+      SELECT platform FROM apify_sources WHERE category_id=? AND enabled=1
+      UNION
+      SELECT platform FROM discovery_runs WHERE category_id=?
+      UNION
+      SELECT platform FROM discovery_items WHERE category_id=?
+    )
+    WHERE platform IS NOT NULL
+      AND platform != ''
+    ORDER BY platform
+    LIMIT 10
+  `, [categoryId, categoryId, categoryId, categoryId]);
+
+  const platforms = rows.map(row => row.platform).filter(Boolean);
+  const unique = platforms.length > 0 ? platforms : ['x', 'instagram', 'linkedin'];
+
+  return {
+    inline_keyboard: [
+      [{ text: 'All platforms', callback_data: `reports:${channelId}:all` }],
+      ...unique.map(platform => ([{
+        text: platformLabel(platform),
+        callback_data: `reports:${channelId}:${platform}`,
+      }])),
+      [{ text: 'Change channel', callback_data: 'channels' }],
+      [{ text: 'Home', callback_data: 'home' }],
+    ],
+  };
+}
+
+function reportSectionKeyboard(active: OperationalReportSection, channelId = 'crypto_fa_pilot', platform = 'all'): object {
   const label = (section: OperationalReportSection, text: string) =>
     section === active ? `● ${text}` : text;
 
   return {
     inline_keyboard: [
       [
-        { text: label('overview', '📌 خلاصه'), callback_data: 'report:overview' },
-        { text: label('costs', '💵 هزینه‌ها'), callback_data: 'report:costs' },
+        { text: label('overview', 'Overview'), callback_data: `report:overview:${channelId}:${platform}` },
+        { text: label('costs', 'Costs'), callback_data: `report:costs:${channelId}:${platform}` },
       ],
       [
-        { text: label('pipeline', '🔁 قیف محتوا'), callback_data: 'report:pipeline' },
-        { text: label('publish', '📬 صف انتشار'), callback_data: 'report:publish' },
+        { text: label('pipeline', 'Funnel'), callback_data: `report:pipeline:${channelId}:${platform}` },
+        { text: label('publish', 'Publish'), callback_data: `report:publish:${channelId}:${platform}` },
       ],
       [
-        { text: label('apify', '🕷 Apify'), callback_data: 'report:apify' },
-        { text: label('health', '⚠️ سلامت'), callback_data: 'report:health' },
+        { text: label('apify', 'Apify'), callback_data: `report:apify:${channelId}:${platform}` },
+        { text: label('health', 'System'), callback_data: `report:health:${channelId}:${platform}` },
       ],
       [
-        { text: label('sources', '🏷 منابع'), callback_data: 'report:sources' },
+        { text: label('sources', 'Sources'), callback_data: `report:sources:${channelId}:${platform}` },
       ],
       [
-        { text: '🏠 منو', callback_data: 'menu' },
+        { text: 'Change channel', callback_data: 'channels' },
+        { text: 'Home', callback_data: 'home' },
       ],
     ],
   };
+}
+
+function platformLabel(platform: string): string {
+  const p = String(platform).toLowerCase();
+  if (p === 'x' || p === 'twitter') return 'X / Twitter';
+  if (p === 'instagram') return 'Instagram';
+  if (p === 'linkedin') return 'LinkedIn';
+  return platform;
 }
 
 async function replyOrEdit(
@@ -242,6 +350,38 @@ async function answerCallbackQuery(env: Env, callbackQueryId: string): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackQueryId }),
   }).catch(() => undefined);
+}
+
+async function safeFirst<T>(env: Env, sql: string, binds: unknown[], fallback: T): Promise<T> {
+  try {
+    const stmt = env.DB.prepare(sql);
+    const row = binds.length > 0 ? await stmt.bind(...binds).first<T>() : await stmt.first<T>();
+    return row ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function safeAll<T>(env: Env, sql: string, binds: unknown[] = []): Promise<T[]> {
+  try {
+    const stmt = env.DB.prepare(sql);
+    const result = binds.length > 0 ? await stmt.bind(...binds).all<T>() : await stmt.all<T>();
+    return (result.results ?? []) as T[];
+  } catch {
+    return [];
+  }
+}
+
+function sanitizeCallbackId(value: string, fallback: string): string {
+  return /^[\w-]{1,64}$/.test(value) ? value : fallback;
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function verifyTelegramAdminSecret(req: Request, env: Env): boolean {

@@ -41,17 +41,16 @@ export function formatOperationalReportForTelegram(
   else if (normalized === 'sources') appendSources(lines, report);
 
   const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  return text.length <= 3900 ? text : text.slice(0, 3850) + '\n\n…خروجی کوتاه شد.';
+  return text.length <= 3900 ? text : text.slice(0, 3850) + '\n\n…output truncated.';
 }
 
 function header(report: AnyRecord, title: string): string[] {
-  const categoryId = report.category_id ? safeText(report.category_id) : 'همه دسته‌ها';
   const generatedAt = formatDate(report.generated_at ?? new Date().toISOString());
 
   return [
-    `${title}`,
-    `دسته: <code>${escapeHtml(categoryId)}</code>`,
-    `زمان: <code>${escapeHtml(generatedAt)}</code>`,
+    title,
+    scopeLine(report),
+    `Time: <code>${escapeHtml(generatedAt)}</code>`,
     '',
   ];
 }
@@ -66,47 +65,47 @@ function appendOverview(lines: string[], report: AnyRecord): void {
   const recentFailed = Array.isArray(current.recent_failed_runs) ? current.recent_failed_runs : [];
   const apify = report.apify ?? {};
 
-  lines.push('📌 <b>خلاصه وضعیت</b>');
+  lines.push('Executive Summary');
   lines.push('');
 
   if (w24) {
-    lines.push('⏱ <b>۲۴ ساعت گذشته</b>');
-    lines.push(`• هزینه AI: <b>${usd(w24.ai?.total_cost_usd)}</b>`);
-    lines.push(`• هزینه Apify: <b>${usd(findApifyWindow(report, '24h')?.cost_usd)}</b>`);
-    lines.push(`• جدید/تکراری: <b>${int(w24.pipeline?.fresh)}</b> / <b>${int(w24.pipeline?.duplicate)}</b>`);
-    lines.push(`• منتشرشده/زمان‌بندی‌شده: <b>${int(w24.publish?.published)}</b> / <b>${int(w24.publish?.scheduled)}</b>`);
+    lines.push('Last 24h');
+    lines.push(`• Cost: AI <b>${usd(w24.ai?.total_cost_usd)}</b> | Apify <b>${usd(findApifyWindow(report, '24h')?.cost_usd)}</b>`);
+    lines.push(`• Content: fresh <b>${int(w24.pipeline?.fresh)}</b> | duplicate <b>${int(w24.pipeline?.duplicate)}</b>`);
+    lines.push(`• AI: selected <b>${int(w24.pipeline?.ai_selected)}</b> | rejected <b>${int(w24.pipeline?.ai_rejected)}</b>`);
+    lines.push(`• Publish: sent <b>${int(w24.publish?.published)}</b> | scheduled <b>${int(w24.publish?.scheduled)}</b>`);
     lines.push('');
   }
 
   if (w7) {
-    lines.push('🗓 <b>۷ روز گذشته</b>');
-    lines.push(`• هزینه کل AI: <b>${usd(w7.ai?.total_cost_usd)}</b>`);
-    lines.push(`• محتوای تازه: <b>${int(w7.pipeline?.fresh)}</b>`);
-    lines.push(`• انتخاب AI: <b>${int(w7.pipeline?.ai_selected)}</b>`);
-    lines.push(`• انتشار: <b>${int(w7.publish?.published)}</b>`);
+    lines.push('Last 7d');
+    lines.push(`• AI cost: <b>${usd(w7.ai?.total_cost_usd)}</b>`);
+    lines.push(`• Fresh content: <b>${int(w7.pipeline?.fresh)}</b>`);
+    lines.push(`• AI selected: <b>${int(w7.pipeline?.ai_selected)}</b>`);
+    lines.push(`• Published: <b>${int(w7.publish?.published)}</b>`);
     lines.push('');
   }
 
-  lines.push('📍 <b>الان</b>');
-  lines.push(`• صف انتشار: <b>${int(activeQueue.scheduled)}</b> scheduled`);
-  lines.push(`• Backlog queued: <b>${int(backlog.queued)}</b>`);
-  lines.push(`• گیرکرده processing: <b>${stuckRuns.length}</b>`);
-  lines.push(`• failed اخیر: <b>${recentFailed.length}</b>`);
-  lines.push(`• Apify ماهانه تخمینی: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
+  lines.push('Current State');
+  lines.push(`• Publish queue: <b>${int(activeQueue.scheduled)}</b> scheduled`);
+  lines.push(`• AI backlog: <b>${int(backlog.queued)}</b> queued`);
+  lines.push(`• Stuck runs: <b>${stuckRuns.length}</b>`);
+  lines.push(`• Recent failures: <b>${recentFailed.length}</b>`);
+  lines.push(`• Apify monthly projection: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
 }
 
 function appendCosts(lines: string[], report: AnyRecord): void {
-  lines.push('💵 <b>هزینه‌ها</b>');
+  lines.push('Costs');
   lines.push('');
 
   for (const window of getWindows(report)) {
     const apify = findApifyWindow(report, String(window.key));
-    lines.push(`⏱ <b>${escapeHtml(window.label ?? window.key)}</b>`);
-    lines.push(`• AI مصرف‌شده: <b>${usd(window.ai?.total_cost_usd)}</b>`);
-    lines.push(`• AI ماهانه تخمینی: <b>${usd(window.ai?.projected_monthly_usd)}</b>`);
+    lines.push(windowLabel(window));
+    lines.push(`• AI spent: <b>${usd(window.ai?.total_cost_usd)}</b>`);
+    lines.push(`• AI monthly projection: <b>${usd(window.ai?.projected_monthly_usd)}</b>`);
     if (apify) {
-      lines.push(`• Apify مصرف‌شده: <b>${usd(apify.cost_usd)}</b>`);
-      lines.push(`• Apify ماهانه تخمینی: <b>${usd(apify.projected_monthly_usd)}</b>`);
+      lines.push(`• Apify spent: <b>${usd(apify.cost_usd)}</b>`);
+      lines.push(`• Apify monthly projection: <b>${usd(apify.projected_monthly_usd)}</b>`);
       lines.push(`• Apify runs: <b>${int(apify.runs)}</b>`);
     }
     lines.push('');
@@ -114,8 +113,8 @@ function appendCosts(lines: string[], report: AnyRecord): void {
 
   const rows = getWindows(report).flatMap((w: AnyRecord) => Array.isArray(w.ai?.rows) ? w.ai.rows : []);
   if (rows.length > 0) {
-    lines.push('🤖 <b>تفکیک provider/model</b>');
-    for (const row of rows.slice(0, 6)) {
+    lines.push('Provider Breakdown');
+    for (const row of rows.slice(0, 8)) {
       lines.push(
         `• ${escapeHtml(row.provider ?? 'unknown')} / ${escapeHtml(row.purpose ?? 'n/a')}: <b>${usd(row.cost_usd)}</b> (${int(row.calls)} calls)`
       );
@@ -124,16 +123,16 @@ function appendCosts(lines: string[], report: AnyRecord): void {
 }
 
 function appendPipeline(lines: string[], report: AnyRecord): void {
-  lines.push('🔁 <b>قیف محتوا</b>');
+  lines.push('Content Funnel');
   lines.push('');
 
   for (const window of getWindows(report)) {
     const p = window.pipeline ?? {};
-    lines.push(`⏱ <b>${escapeHtml(window.label ?? window.key)}</b>`);
-    lines.push(`• اسکرپ‌شده: <b>${int(p.fetched)}</b>`);
-    lines.push(`• تازه: <b>${int(p.fresh)}</b> (${pctText(p.fresh_rate_pct)})`);
-    lines.push(`• تکراری: <b>${int(p.duplicate)}</b> (${pctText(p.duplicate_rate_pct)})`);
-    lines.push(`• AI قبول/رد: <b>${int(p.ai_selected)}</b> / <b>${int(p.ai_rejected)}</b>`);
+    lines.push(windowLabel(window));
+    lines.push(`• fetched: <b>${int(p.fetched)}</b>`);
+    lines.push(`• fresh: <b>${int(p.fresh)}</b> (${pctText(p.fresh_rate_pct)})`);
+    lines.push(`• duplicate: <b>${int(p.duplicate)}</b> (${pctText(p.duplicate_rate_pct)})`);
+    lines.push(`• AI selected/rejected: <b>${int(p.ai_selected)}</b> / <b>${int(p.ai_rejected)}</b>`);
     lines.push(`• queued: <b>${int(p.queued)}</b>`);
     lines.push('');
   }
@@ -143,9 +142,9 @@ function appendPublish(lines: string[], report: AnyRecord): void {
   const current = report.current ?? {};
   const activeQueue = current.publish_queue_active ?? {};
 
-  lines.push('📬 <b>صف و انتشار</b>');
+  lines.push('Publish Queue');
   lines.push('');
-  lines.push('📍 <b>وضعیت فعلی صف</b>');
+  lines.push('Current Queue');
   lines.push(`• scheduled: <b>${int(activeQueue.scheduled)}</b>`);
   lines.push(`• retry: <b>${int(activeQueue.retry)}</b>`);
   lines.push(`• failed: <b>${int(activeQueue.failed)}</b>`);
@@ -153,7 +152,7 @@ function appendPublish(lines: string[], report: AnyRecord): void {
 
   for (const window of getWindows(report)) {
     const publish = window.publish ?? {};
-    lines.push(`⏱ <b>${escapeHtml(window.label ?? window.key)}</b>`);
+    lines.push(windowLabel(window));
     lines.push(`• published: <b>${int(publish.published)}</b>`);
     lines.push(`• scheduled: <b>${int(publish.scheduled)}</b>`);
     lines.push(`• failed: <b>${int(publish.failed)}</b>`);
@@ -164,25 +163,25 @@ function appendPublish(lines: string[], report: AnyRecord): void {
 function appendApify(lines: string[], report: AnyRecord): void {
   const apify = report.apify ?? {};
 
-  lines.push('🕷 <b>Apify</b>');
+  lines.push('Apify');
   lines.push('');
-  lines.push(`• وضعیت: <b>${apify.available ? 'فعال' : 'غیرفعال'}</b>`);
-  lines.push(`• source فعال: <b>${int(apify.active_sources)}</b>`);
-  lines.push(`• interval: هر <b>${int(apify.rotation_interval_hours)}</b> ساعت`);
-  lines.push(`• run ماهانه تخمینی: <b>${int(apify.projected_runs_per_month)}</b>`);
-  lines.push(`• میانگین هر run: <b>${usd(apify.avg_cost_per_run_usd)}</b>`);
-  lines.push(`• هزینه ماهانه تخمینی: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
+  lines.push(`• status: <b>${apify.available ? 'active' : 'inactive'}</b>`);
+  lines.push(`• active_sources: <b>${int(apify.active_sources)}</b>`);
+  lines.push(`• interval_hours: <b>${int(apify.rotation_interval_hours)}</b>`);
+  lines.push(`• projected_runs_month: <b>${int(apify.projected_runs_per_month)}</b>`);
+  lines.push(`• avg_cost_per_run: <b>${usd(apify.avg_cost_per_run_usd)}</b>`);
+  lines.push(`• projected_monthly_cost: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
   lines.push('');
 
   if (!apify.available) {
-    lines.push(`دلیل: <code>${escapeHtml(apify.reason ?? 'unknown')}</code>`);
+    lines.push(`reason: <code>${escapeHtml(apify.reason ?? 'unknown')}</code>`);
     return;
   }
 
-  lines.push('📊 <b>بازه‌ها</b>');
+  lines.push('Windows');
   for (const row of Array.isArray(apify.windows) ? apify.windows : []) {
     lines.push(
-      `• ${escapeHtml(row.label ?? row.key)}: <b>${int(row.runs)}</b> runs / <b>${usd(row.cost_usd)}</b>`
+      `• ${windowLabel(row)}: <b>${int(row.runs)}</b> runs | <b>${usd(row.cost_usd)}</b>`
     );
   }
 }
@@ -193,34 +192,39 @@ function appendHealth(lines: string[], report: AnyRecord): void {
   const stuckRuns = Array.isArray(current.stuck_processing_runs) ? current.stuck_processing_runs : [];
   const failedRuns = Array.isArray(current.recent_failed_runs) ? current.recent_failed_runs : [];
 
-  lines.push('⚠️ <b>خطاها و وضعیت سلامت</b>');
+  lines.push('System State');
   lines.push('');
-  lines.push('🧠 <b>AI backlog</b>');
+  lines.push('This section shows what needs attention. It is not a raw error dump.');
+  lines.push('');
+
+  lines.push('AI Backlog');
   lines.push(`• queued: <b>${int(backlog.queued)}</b>`);
-  lines.push(`• rejected: <b>${int(backlog.ai_rejected)}</b>`);
   lines.push(`• pending: <b>${int(backlog.pending)}</b>`);
+  lines.push(`• rejected: <b>${int(backlog.ai_rejected)}</b>`);
   lines.push(`• failed: <b>${int(backlog.failed)}</b>`);
   lines.push('');
 
-  lines.push('⏳ <b>processing گیرکرده</b>');
-  if (stuckRuns.length === 0) {
-    lines.push('• موردی نیست.');
-  } else {
-    for (const run of stuckRuns.slice(0, 5)) {
-      lines.push(`• <code>${escapeHtml(run.id)}</code>`);
-      lines.push(`  ${escapeHtml(run.error_message ?? run.status ?? '')}`);
+  lines.push('Processing');
+  lines.push(`• stuck_runs: <b>${stuckRuns.length}</b>`);
+  if (stuckRuns.length > 0) {
+    lines.push('• action: inspect backlog drain / run_events');
+    for (const run of stuckRuns.slice(0, 3)) {
+      lines.push(`  - <code>${escapeHtml(run.id)}</code>`);
     }
+  } else {
+    lines.push('• action: none');
   }
 
   lines.push('');
-  lines.push('❌ <b>failed اخیر</b>');
-  if (failedRuns.length === 0) {
-    lines.push('• موردی نیست.');
-  } else {
-    for (const run of failedRuns.slice(0, 5)) {
-      lines.push(`• <code>${escapeHtml(run.id)}</code>`);
-      lines.push(`  ${escapeHtml(run.error_message ?? run.status ?? '')}`);
+  lines.push('Failures');
+  lines.push(`• recent_failed_runs: <b>${failedRuns.length}</b>`);
+  if (failedRuns.length > 0) {
+    lines.push('• action: inspect failed datasets / Apify task mapping');
+    for (const run of failedRuns.slice(0, 3)) {
+      lines.push(`  - <code>${escapeHtml(run.id)}</code>`);
     }
+  } else {
+    lines.push('• action: none');
   }
 }
 
@@ -228,34 +232,34 @@ function appendSources(lines: string[], report: AnyRecord): void {
   const window = findWindow(report, '7d') ?? findWindow(report, '24h') ?? getWindows(report)[0];
   const sources = Array.isArray(window?.top_sources) ? window.top_sources : [];
 
-  lines.push('🏷 <b>منابع برتر</b>');
+  lines.push('Top Sources');
   lines.push('');
-  lines.push(`بازه: <b>${escapeHtml(window?.label ?? 'نامشخص')}</b>`);
+  lines.push(`window: <b>${escapeHtml(windowLabel(window))}</b>`);
   lines.push('');
 
   if (sources.length === 0) {
-    lines.push('داده‌ای برای منابع برتر پیدا نشد.');
+    lines.push('No source data found.');
     return;
   }
 
-  for (const row of sources.slice(0, 12)) {
+  for (const [index, row] of sources.slice(0, 10).entries()) {
     lines.push(
-      `• <b>${escapeHtml(row.source_account ?? '__unknown__')}</b>: total ${int(row.total)} | selected ${int(row.selected)} | rate ${pctText(row.select_rate_pct)}`
+      `<code>${pad2(index + 1)} ${trimSource(row.source_account)} | total=${int(row.total)} | selected=${int(row.selected)} | rate=${pctText(row.select_rate_pct)}</code>`
     );
   }
 }
 
 function sectionTitle(section: OperationalReportSection): string {
   const titles: Record<OperationalReportSection, string> = {
-    overview: '📌 <b>خلاصه عملیات</b>',
-    costs: '💵 <b>گزارش هزینه‌ها</b>',
-    pipeline: '🔁 <b>گزارش قیف محتوا</b>',
-    publish: '📬 <b>گزارش صف انتشار</b>',
-    apify: '🕷 <b>گزارش Apify</b>',
-    health: '⚠️ <b>گزارش سلامت سیستم</b>',
-    sources: '🏷 <b>گزارش منابع</b>',
+    overview: 'Overview',
+    costs: 'Costs',
+    pipeline: 'Content Funnel',
+    publish: 'Publish Queue',
+    apify: 'Apify',
+    health: 'System State',
+    sources: 'Top Sources',
   };
-  return titles[section];
+  return `<b>${titles[section]}</b>`;
 }
 
 function getWindows(report: AnyRecord): AnyRecord[] {
@@ -269,6 +273,34 @@ function findWindow(report: AnyRecord, key: string): AnyRecord | undefined {
 function findApifyWindow(report: AnyRecord, key: string): AnyRecord | undefined {
   const windows = Array.isArray(report.apify?.windows) ? report.apify.windows : [];
   return windows.find((row: AnyRecord) => String(row.key) === key);
+}
+
+function scopeLine(report: AnyRecord): string {
+  const channel = report.channel_id ? String(report.channel_id) : 'all';
+  const category = report.category_id ? String(report.category_id) : 'all';
+  const platform = report.platform ? String(report.platform) : 'all';
+  return `Scope: <code>channel=${escapeHtml(channel)} | category=${escapeHtml(category)} | platform=${escapeHtml(platform)}</code>`;
+}
+
+function windowLabel(window: AnyRecord | undefined): string {
+  const key = String(window?.key ?? '');
+  const labels: Record<string, string> = {
+    '24h': 'Last 24h',
+    '7d': 'Last 7d',
+    '15d': 'Last 15d',
+    '30d': 'Last 30d',
+    '180d': 'Last 6 months',
+  };
+  return labels[key] ?? String((window?.label ?? key) || 'unknown');
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function trimSource(value: unknown): string {
+  const raw = String(value ?? '__unknown__').replace(/\s+/g, '');
+  return escapeHtml(raw.length > 18 ? raw.slice(0, 17) + '…' : raw);
 }
 
 function escapeHtml(value: unknown): string {

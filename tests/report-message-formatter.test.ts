@@ -3,7 +3,9 @@ import { formatOperationalReportForTelegram } from '../apps/worker-api/src/servi
 
 const sampleReport = {
   generated_at: '2026-06-10T20:12:41.539Z',
+  channel_id: 'crypto_fa_pilot',
   category_id: 'crypto',
+  platform: 'x',
   apify: {
     available: true,
     active_sources: 6,
@@ -12,14 +14,14 @@ const sampleReport = {
     avg_cost_per_run_usd: 0.010623,
     projected_monthly_cost_usd: 15.3,
     windows: [
-      { key: '24h', label: '۲۴ ساعت گذشته', runs: 50, cost_usd: 0.51025, projected_monthly_usd: 15.31 },
-      { key: '7d', label: '۷ روز گذشته', runs: 153, cost_usd: 1.62525, projected_monthly_usd: 6.97 },
+      { key: '24h', label: 'Last 24h', runs: 50, cost_usd: 0.51025, projected_monthly_usd: 15.31 },
+      { key: '7d', label: 'Last 7d', runs: 153, cost_usd: 1.62525, projected_monthly_usd: 6.97 },
     ],
   },
   windows: [
     {
       key: '24h',
-      label: '۲۴ ساعت گذشته',
+      label: 'Last 24h',
       ai: {
         total_cost_usd: 0.255842,
         projected_monthly_usd: 7.68,
@@ -40,7 +42,7 @@ const sampleReport = {
     },
     {
       key: '7d',
-      label: '۷ روز گذشته',
+      label: 'Last 7d',
       ai: { total_cost_usd: 0.930465, projected_monthly_usd: 3.99 },
       pipeline: {
         fetched: 7381,
@@ -65,43 +67,49 @@ const sampleReport = {
 };
 
 describe('report-message-formatter', () => {
-  it('formats a compact overview instead of dumping every operational section', () => {
+  it('formats a compact English overview instead of dumping every operational section', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'overview');
 
-    expect(text).toContain('📌 <b>خلاصه عملیات</b>');
-    expect(text).toContain('۲۴ ساعت گذشته');
-    expect(text).toContain('۷ روز گذشته');
-    expect(text).toContain('Apify ماهانه تخمینی');
-    expect(text).not.toContain('گزارش قیف محتوا');
-    expect(text).not.toContain('گزارش منابع');
+    expect(text).toContain('<b>Overview</b>');
+    expect(text).toContain('Scope: <code>channel=crypto_fa_pilot | category=crypto | platform=x</code>');
+    expect(text).toContain('Last 24h');
+    expect(text).toContain('Last 7d');
+    expect(text).toContain('Apify monthly projection');
+    expect(text).not.toContain('Content Funnel');
+    expect(text).not.toContain('Top Sources');
   });
 
-  it('formats the costs section separately', () => {
+  it('formats the costs section separately in English', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'costs');
 
-    expect(text).toContain('💵 <b>گزارش هزینه‌ها</b>');
-    expect(text).toContain('AI مصرف‌شده');
-    expect(text).toContain('Apify مصرف‌شده');
+    expect(text).toContain('<b>Costs</b>');
+    expect(text).toContain('AI spent');
+    expect(text).toContain('Apify spent');
+    expect(text).toContain('Provider Breakdown');
     expect(text).toContain('anthropic');
-    expect(text).not.toContain('صف و انتشار');
+    expect(text).not.toContain('Publish Queue');
   });
 
-  it('formats the pipeline section separately', () => {
+  it('formats the pipeline section separately in English', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'pipeline');
 
-    expect(text).toContain('🔁 <b>گزارش قیف محتوا</b>');
-    expect(text).toContain('اسکرپ‌شده');
-    expect(text).toContain('تکراری');
-    expect(text).not.toContain('گزارش هزینه‌ها');
+    expect(text).toContain('<b>Content Funnel</b>');
+    expect(text).toContain('fetched');
+    expect(text).toContain('duplicate');
+    expect(text).toContain('AI selected/rejected');
+    expect(text).not.toContain('<b>Costs</b>');
   });
 
-  it('formats the health section separately', () => {
+  it('formats the health section separately in English', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'health');
 
-    expect(text).toContain('⚠️ <b>گزارش سلامت سیستم</b>');
+    expect(text).toContain('<b>System State</b>');
+    expect(text).toContain('AI Backlog');
+    expect(text).toContain('Processing');
+    expect(text).toContain('Failures');
     expect(text).toContain('run_1');
     expect(text).toContain('run_2');
-    expect(text).not.toContain('گزارش منابع');
+    expect(text).not.toContain('Top Sources');
   });
 
   it('truncates very long reports to stay under Telegram message limits', () => {
@@ -119,6 +127,6 @@ describe('report-message-formatter', () => {
     }, 'pipeline');
 
     expect(text.length).toBeLessThanOrEqual(3900);
-    expect(text).toContain('خروجی کوتاه شد');
+    expect(text).toContain('output truncated');
   });
 });

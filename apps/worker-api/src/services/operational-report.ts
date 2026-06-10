@@ -56,37 +56,83 @@ type ApifyRun = {
   usage_usd: number;
 };
 
+type ChannelRow = {
+  id: string;
+  category_id: string;
+  label?: string | null;
+};
+
+type ReportScope = {
+  channel_id?: string;
+  category_id?: string;
+  platform?: string;
+};
+
 export async function buildOperationalReport(env: Env, url: URL): Promise<object> {
+  const rawChannel = url.searchParams.get('channel') ?? url.searchParams.get('channel_id');
   const rawCategory = url.searchParams.get('category') ?? url.searchParams.get('category_id');
-  const categoryId = rawCategory && isValidReportId(rawCategory) ? rawCategory : undefined;
+  const rawPlatform = url.searchParams.get('platform');
+
+  const requestedChannelId = rawChannel && isValidReportId(rawChannel) ? rawChannel : undefined;
+  const requestedCategoryId = rawCategory && isValidReportId(rawCategory) ? rawCategory : undefined;
+  const platform = rawPlatform && rawPlatform !== 'all' && isValidReportId(rawPlatform) ? rawPlatform : undefined;
+
+  const channel = requestedChannelId
+    ? await safeFirst<ChannelRow | null>(env, `
+      SELECT c.id, c.category_id, c.id AS label
+      FROM channels c
+      WHERE c.id=?
+        AND c.enabled=1
+      LIMIT 1
+    `, [requestedChannelId], null)
+    : null;
+
+  const scope: ReportScope = {
+    channel_id: channel?.id ?? requestedChannelId,
+    category_id: channel?.category_id ?? requestedCategoryId,
+    platform,
+  };
 
   const windows = await Promise.all(
-    REPORT_WINDOWS.map(window => buildWindowReport(env, window, categoryId))
+    REPORT_WINDOWS.map(window => buildWindowReport(env, window, scope))
   );
 
-  const current = await buildCurrentState(env, categoryId);
-  const apify = await buildApifyReport(env, REPORT_WINDOWS);
+  const current = await buildCurrentState(env, scope);
+  const apify = await buildApifyReport(env, REPORT_WINDOWS, scope);
 
   return {
     read_only: true,
     generated_at: new Date().toISOString(),
     currency: 'USD',
-    category_id: categoryId ?? null,
+    channel_id: scope.channel_id ?? null,
+    category_id: scope.category_id ?? null,
+    platform: scope.platform ?? null,
     windows,
     current,
     apify,
   };
 }
 
-async function buildWindowReport(env: Env, window: ReportWindow, categoryId?: string): Promise<object> {
+async function buildWindowReport(env: Env, window: ReportWindow, scope: ReportScope = {}): Promise<object> {
   const modifier = `-${window.hours} hours`;
 
-  const categoryFilter = categoryId ? ' AND category_id=?' : '';
-  const categoryParams = categoryId ? [categoryId] : [];
+  const categoryFilter = scope.category_id ? ' AND category_id=?' : '';
+  const categoryParams = scope.category_id ? [scope.category_id] : [];
+  const platformFilter = scope.platform ? ' AND platform=?' : '';
+  const platformParams = scope.platform ? [scope.platform] : [];
 
-  const queueCategoryJoin = categoryId ? 'JOIN discovery_items di ON di.id = pq.item_id' : '';
-  const queueCategoryFilter = categoryId ? ' AND di.category_id=?' : '';
-  const queueCategoryParams = categoryId ? [categoryId] : [];
+  const queueNeedsItemJoin = Boolean(scope.category_id || scope.platform);
+  const queueCategoryJoin = queueNeedsItemJoin ? 'JOIN discovery_items di ON di.id = pq.item_id' : '';
+  const queueCategoryFilter = [
+    scope.category_id ? ' AND di.category_id=?' : '',
+    scope.platform ? ' AND di.platform=?' : '',
+    scope.channel_id ? ' AND pq.channel_id=?' : '',
+  ].join('');
+  const queueCategoryParams = [
+    ...(scope.category_id ? [scope.category_id] : []),
+    ...(scope.platform ? [scope.platform] : []),
+    ...(scope.channel_id ? [scope.channel_id] : []),
+  ];
 
   const [aiRows, pipeline, publishRows, itemRows, sourceRows] = await Promise.all([
     safeAll<AIUsageRow>(env, `
@@ -119,7 +165,8 @@ async function buildWindowReport(env: Env, window: ReportWindow, categoryId?: st
       FROM discovery_runs
       WHERE created_at >= datetime('now', ?)
       ${categoryFilter}
-    `, [modifier, ...categoryParams], emptyPipeline()),
+      ${platformFilter}
+    `, [modifier, ...categoryParams, ...platformParams], emptyPipeline()),
 
     safeAll<CountRow>(env, `
       SELECT pq.status AS status, COUNT(*) AS count
@@ -139,9 +186,10 @@ async function buildWindowReport(env: Env, window: ReportWindow, categoryId?: st
       FROM discovery_items
       WHERE created_at >= datetime('now', ?)
       ${categoryFilter}
+      ${platformFilter}
       GROUP BY status
       ORDER BY count DESC, status
-    `, [modifier, ...categoryParams]),
+    `, [modifier, ...categoryParams, ...platformParams]),
 
     safeAll<SourceRow>(env, `
       SELECT
@@ -153,10 +201,11 @@ async function buildWindowReport(env: Env, window: ReportWindow, categoryId?: st
       FROM discovery_items
       WHERE created_at >= datetime('now', ?)
       ${categoryFilter}
+      ${platformFilter}
       GROUP BY COALESCE(NULLIF(source_account,''), '__unknown__')
       ORDER BY total DESC, source_account
       LIMIT 20
-    `, [modifier, ...categoryParams]),
+    `, [modifier, ...categoryParams, ...platformParams]),
   ]);
 
   const pipe = normalizePipeline(pipeline);
@@ -189,12 +238,24 @@ async function buildWindowReport(env: Env, window: ReportWindow, categoryId?: st
   };
 }
 
-async function buildCurrentState(env: Env, categoryId?: string): Promise<object> {
-  const categoryFilter = categoryId ? ' AND category_id=?' : '';
-  const categoryParams = categoryId ? [categoryId] : [];
-  const queueCategoryJoin = categoryId ? 'JOIN discovery_items di ON di.id = pq.item_id' : '';
-  const queueCategoryFilter = categoryId ? ' AND di.category_id=?' : '';
-  const queueCategoryParams = categoryId ? [categoryId] : [];
+async function buildCurrentState(env: Env, scope: ReportScope = {}): Promise<object> {
+  const categoryFilter = scope.category_id ? ' AND category_id=?' : '';
+  const categoryParams = scope.category_id ? [scope.category_id] : [];
+  const platformFilter = scope.platform ? ' AND platform=?' : '';
+  const platformParams = scope.platform ? [scope.platform] : [];
+
+  const queueNeedsItemJoin = Boolean(scope.category_id || scope.platform);
+  const queueCategoryJoin = queueNeedsItemJoin ? 'JOIN discovery_items di ON di.id = pq.item_id' : '';
+  const queueCategoryFilter = [
+    scope.category_id ? ' AND di.category_id=?' : '',
+    scope.platform ? ' AND di.platform=?' : '',
+    scope.channel_id ? ' AND pq.channel_id=?' : '',
+  ].join('');
+  const queueCategoryParams = [
+    ...(scope.category_id ? [scope.category_id] : []),
+    ...(scope.platform ? [scope.platform] : []),
+    ...(scope.channel_id ? [scope.channel_id] : []),
+  ];
 
   const [publishActive, backlogStatuses, backlogTopAccounts, stuckRuns, recentErrors] = await Promise.all([
     safeAll<CountRow>(env, `
@@ -232,9 +293,10 @@ async function buildCurrentState(env: Env, categoryId?: string): Promise<object>
       WHERE status='processing'
         AND created_at < datetime('now','-30 minutes')
         ${categoryFilter}
+        ${platformFilter}
       ORDER BY created_at ASC
       LIMIT 20
-    `, categoryParams),
+    `, [...categoryParams, ...platformParams]),
 
     safeAll<any>(env, `
       SELECT id, category_id, platform, apify_dataset_id, status, error_message, created_at
@@ -242,9 +304,10 @@ async function buildCurrentState(env: Env, categoryId?: string): Promise<object>
       WHERE status='failed'
         AND created_at >= datetime('now','-24 hours')
         ${categoryFilter}
+        ${platformFilter}
       ORDER BY created_at DESC
       LIMIT 20
-    `, categoryParams),
+    `, [...categoryParams, ...platformParams]),
   ]);
 
   return {
@@ -309,15 +372,24 @@ function getAIRate(provider: string, model: string): { inputPerMillion: number; 
   return { inputPerMillion: 0, outputPerMillion: 0 };
 }
 
-async function buildApifyReport(env: Env, windows: ReportWindow[]): Promise<object> {
+async function buildApifyReport(env: Env, windows: ReportWindow[], scope: ReportScope = {}): Promise<object> {
   const intervalHours = Math.max(1, Number((env as any).APIFY_ROTATION_INTERVAL_HOURS ?? 3) || 3);
+  const apifyScopeFilter = [
+    scope.category_id ? ' AND category_id=?' : '',
+    scope.platform ? ' AND platform=?' : '',
+  ].join('');
+  const apifyScopeParams = [
+    ...(scope.category_id ? [scope.category_id] : []),
+    ...(scope.platform ? [scope.platform] : []),
+  ];
   const sourceCountRow = await safeFirst<{ count: number }>(env, `
     SELECT COUNT(*) AS count
     FROM apify_sources
     WHERE enabled=1
       AND apify_task_id IS NOT NULL
       AND apify_task_id != ''
-  `, [], { count: 0 });
+      ${apifyScopeFilter}
+  `, apifyScopeParams, { count: 0 });
 
   const activeSources = toCount(sourceCountRow.count);
   const projectedRunsPerMonth = Math.round(activeSources * (24 / intervalHours) * 30);
@@ -346,9 +418,10 @@ async function buildApifyReport(env: Env, windows: ReportWindow[]): Promise<obje
     WHERE enabled=1
       AND apify_task_id IS NOT NULL
       AND apify_task_id != ''
+      ${apifyScopeFilter}
     ORDER BY id
     LIMIT 50
-  `);
+  `, apifyScopeParams);
 
   if (tasks.length === 0) {
     return {
