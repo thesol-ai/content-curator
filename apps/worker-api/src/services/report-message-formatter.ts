@@ -3,6 +3,9 @@ type AnyRecord = Record<string, any>;
 export type OperationalReportSection =
   | 'overview'
   | 'costs'
+  | 'costs_anthropic'
+  | 'costs_gemini'
+  | 'costs_apify'
   | 'pipeline'
   | 'publish'
   | 'apify'
@@ -14,6 +17,9 @@ export function normalizeOperationalReportSection(value: unknown): OperationalRe
   if (
     raw === 'overview' ||
     raw === 'costs' ||
+    raw === 'costs_anthropic' ||
+    raw === 'costs_gemini' ||
+    raw === 'costs_apify' ||
     raw === 'pipeline' ||
     raw === 'publish' ||
     raw === 'apify' ||
@@ -36,6 +42,9 @@ export function formatOperationalReportForTelegram(
 
   if (normalized === 'overview') appendOverview(lines, report);
   else if (normalized === 'costs') appendCosts(lines, report);
+  else if (normalized === 'costs_anthropic') appendProviderCosts(lines, report, 'anthropic');
+  else if (normalized === 'costs_gemini') appendProviderCosts(lines, report, 'gemini');
+  else if (normalized === 'costs_apify') appendApifyCosts(lines, report);
   else if (normalized === 'pipeline') appendPipeline(lines, report);
   else if (normalized === 'publish') appendPublish(lines, report);
   else if (normalized === 'apify') appendApify(lines, report);
@@ -46,8 +55,6 @@ export function formatOperationalReportForTelegram(
   return text.length <= 3900 ? text : text.slice(0, 3850) + '\n\n…output truncated.';
 }
 
-
-
 function appendHeader(lines: string[], report: AnyRecord, section: OperationalReportSection): void {
   lines.push(`${sectionIcon(section)} <b>${sectionTitle(section)}</b>`);
   lines.push('');
@@ -55,7 +62,6 @@ function appendHeader(lines: string[], report: AnyRecord, section: OperationalRe
   lines.push(`<b>Time</b>: ${escapeHtml(formatTehranDate(report.generated_at ?? new Date().toISOString()))}`);
   lines.push('');
 }
-
 
 function appendOverview(lines: string[], report: AnyRecord): void {
   const w24 = findWindow(report, '24h');
@@ -96,25 +102,110 @@ function appendOverview(lines: string[], report: AnyRecord): void {
   lines.push(`- Apify monthly projection: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
 }
 
-
 function appendCosts(lines: string[], report: AnyRecord): void {
-  lines.push('💰 <b>Cost Windows</b>');
+  lines.push('💸 <b>Cost Summary</b>');
+  lines.push('');
+  lines.push('AI scope: global');
+  lines.push('Apify scope: selected category/platform');
   lines.push('');
 
-  for (const window of getWindows(report)) {
+  const windows = ['24h', '7d', '30d']
+    .map(key => findWindow(report, key))
+    .filter(Boolean) as AnyRecord[];
+
+  for (const window of windows) {
     const apify = findApifyWindow(report, String(window.key));
+    const aiCost = Number(window.ai?.total_cost_usd ?? 0);
+    const apifyCost = Number(apify?.cost_usd ?? 0);
+
     lines.push(`🕒 <b>${windowLabel(window)}</b>`);
-    lines.push(`- AI spent: <b>${usd(window.ai?.total_cost_usd)}</b>`);
-    lines.push(`- AI monthly projection: <b>${usd(window.ai?.projected_monthly_usd)}</b>`);
-    if (apify) {
-      lines.push(`- Apify spent: <b>${usd(apify.cost_usd)}</b>`);
-      lines.push(`- Apify monthly projection: <b>${usd(apify.projected_monthly_usd)}</b>`);
-      lines.push(`- Apify runs: <b>${int(apify.runs)}</b>`);
-    }
+    lines.push(`- AI: <b>${usd(aiCost)}</b>`);
+    lines.push(`- Apify: <b>${usd(apifyCost)}</b>`);
+    lines.push(`- Total: <b>${usd(aiCost + apifyCost)}</b>`);
     lines.push('');
   }
 }
 
+function appendProviderCosts(lines: string[], report: AnyRecord, provider: 'anthropic' | 'gemini'): void {
+  const w24 = findWindow(report, '24h');
+  const w7 = findWindow(report, '7d');
+  const rows24 = aiRowsForProvider(w24, provider);
+  const rows7 = aiRowsForProvider(w7, provider);
+  const stat24 = providerStats(rows24);
+  const stat7 = providerStats(rows7);
+
+  lines.push(`${providerIconName(provider)} <b>${providerDisplayName(provider)} Cost</b>`);
+  lines.push('');
+  lines.push('AI scope: global');
+  lines.push('');
+
+  lines.push('📌 <b>Summary</b>');
+  lines.push(`- 24h: <b>${usd(stat24.cost)}</b> · calls <b>${int(stat24.calls)}</b>`);
+  lines.push(`- 7d: <b>${usd(stat7.cost)}</b> · calls <b>${int(stat7.calls)}</b>`);
+  lines.push(`- 7d tokens: in <b>${int(stat7.inputTokens)}</b> · out <b>${int(stat7.outputTokens)}</b>`);
+  lines.push('');
+
+  appendProviderWindow(lines, '🕒 Last 24h', rows24);
+  appendProviderWindow(lines, '📆 Last 7d', rows7);
+
+  const modelRows = rows7.length > 0 ? rows7 : rows24;
+  if (modelRows.length > 0) {
+    lines.push('🧾 <b>Main models</b>');
+    for (const row of modelRows.slice(0, 3)) {
+      lines.push(`- ${escapeHtml(row.model ?? 'unknown')} · ${escapeHtml(row.purpose ?? 'n/a')} · <b>${usd(row.cost_usd)}</b>`);
+    }
+  }
+}
+
+function appendProviderWindow(lines: string[], title: string, rows: AnyRecord[]): void {
+  const stats = providerStats(rows);
+  lines.push(`<b>${title}</b>`);
+
+  if (rows.length === 0) {
+    lines.push('- no usage');
+    lines.push('');
+    return;
+  }
+
+  lines.push(`- spent: <b>${usd(stats.cost)}</b>`);
+  lines.push(`- monthly projection: <b>${usd(stats.projected)}</b>`);
+  lines.push(`- calls: <b>${int(stats.calls)}</b>`);
+  lines.push(`- tokens: in <b>${int(stats.inputTokens)}</b> · out <b>${int(stats.outputTokens)}</b>`);
+  lines.push('');
+}
+
+function appendApifyCosts(lines: string[], report: AnyRecord): void {
+  const apify = report.apify ?? {};
+
+  lines.push('🕷 <b>Apify Cost</b>');
+  lines.push('');
+  lines.push('Apify scope: selected category/platform');
+  lines.push('');
+
+  if (!apify.available) {
+    lines.push('- status: <b>inactive</b>');
+    lines.push(`- reason: <code>${escapeHtml(apify.reason ?? 'unknown')}</code>`);
+    return;
+  }
+
+  lines.push('📌 <b>Summary</b>');
+  lines.push(`- active_sources: <b>${int(apify.active_sources)}</b>`);
+  lines.push(`- avg_cost_per_run: <b>${usd(apify.avg_cost_per_run_usd)}</b>`);
+  lines.push(`- monthly projection: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
+  lines.push('');
+
+  const windows = ['24h', '7d', '30d']
+    .map(key => findApifyWindow(report, key))
+    .filter(Boolean) as AnyRecord[];
+
+  for (const row of windows) {
+    lines.push(`🕒 <b>${windowLabel(row)}</b>`);
+    lines.push(`- spent: <b>${usd(row.cost_usd)}</b>`);
+    lines.push(`- runs: <b>${int(row.runs)}</b>`);
+    lines.push(`- monthly projection: <b>${usd(row.projected_monthly_usd)}</b>`);
+    lines.push('');
+  }
+}
 
 function appendPipeline(lines: string[], report: AnyRecord): void {
   lines.push('🔄 <b>Funnel by Window</b>');
@@ -131,7 +222,6 @@ function appendPipeline(lines: string[], report: AnyRecord): void {
     lines.push('');
   }
 }
-
 
 function appendPublish(lines: string[], report: AnyRecord): void {
   const current = report.current ?? {};
@@ -154,7 +244,6 @@ function appendPublish(lines: string[], report: AnyRecord): void {
     lines.push(`- ${windows.length - 3} older windows hidden to keep this readable.`);
   }
 }
-
 
 function appendApify(lines: string[], report: AnyRecord): void {
   const apify = report.apify ?? {};
@@ -183,7 +272,6 @@ function appendApify(lines: string[], report: AnyRecord): void {
     lines.push(`- ${windows.length - 3} older windows hidden.`);
   }
 }
-
 
 function appendHealth(lines: string[], report: AnyRecord): void {
   const current = report.current ?? {};
@@ -218,7 +306,6 @@ function appendHealth(lines: string[], report: AnyRecord): void {
   }
 }
 
-
 function appendSources(lines: string[], report: AnyRecord): void {
   const window = findWindow(report, '7d') ?? findWindow(report, '24h') ?? getWindows(report)[0];
   const sources = Array.isArray(window?.top_sources) ? window.top_sources : [];
@@ -239,10 +326,48 @@ function appendSources(lines: string[], report: AnyRecord): void {
   }
 }
 
+function aiRowsForProvider(window: AnyRecord | undefined, provider: 'anthropic' | 'gemini'): AnyRecord[] {
+  const rows: AnyRecord[] = Array.isArray(window?.ai?.rows) ? window.ai.rows : [];
+  return rows.filter((row: AnyRecord) => matchesAIProvider(row.provider, provider));
+}
+
+function providerStats(rows: AnyRecord[]): {
+  cost: number;
+  projected: number;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+} {
+  return {
+    cost: rows.reduce((sum: number, row: AnyRecord) => sum + Number(row.cost_usd ?? 0), 0),
+    projected: rows.reduce((sum: number, row: AnyRecord) => sum + Number(row.projected_monthly_usd ?? 0), 0),
+    calls: rows.reduce((sum: number, row: AnyRecord) => sum + Number(row.calls ?? 0), 0),
+    inputTokens: rows.reduce((sum: number, row: AnyRecord) => sum + Number(row.input_tokens ?? 0), 0),
+    outputTokens: rows.reduce((sum: number, row: AnyRecord) => sum + Number(row.output_tokens ?? 0), 0),
+  };
+}
+
+function matchesAIProvider(value: unknown, provider: 'anthropic' | 'gemini'): boolean {
+  const raw = String(value ?? '').toLowerCase();
+  if (provider === 'anthropic') return raw === 'anthropic' || raw === 'claude' || raw.includes('anthropic');
+  return raw === 'gemini' || raw.includes('gemini') || raw.includes('google');
+}
+
+function providerDisplayName(provider: 'anthropic' | 'gemini'): string {
+  return provider === 'anthropic' ? 'Anthropic / Claude' : 'Gemini';
+}
+
+function providerIconName(provider: 'anthropic' | 'gemini'): string {
+  return provider === 'anthropic' ? '🟣' : '🔵';
+}
+
 function sectionTitle(section: OperationalReportSection): string {
   const titles: Record<OperationalReportSection, string> = {
     overview: 'Overview',
-    costs: 'Costs',
+    costs: 'Cost Summary',
+    costs_anthropic: 'Anthropic / Claude',
+    costs_gemini: 'Gemini',
+    costs_apify: 'Apify Cost',
     pipeline: 'Content Funnel',
     publish: 'Publish Queue',
     apify: 'Apify',
@@ -256,6 +381,9 @@ function sectionIcon(section: OperationalReportSection): string {
   const icons: Record<OperationalReportSection, string> = {
     overview: '📊',
     costs: '💸',
+    costs_anthropic: '🟣',
+    costs_gemini: '🔵',
+    costs_apify: '🕷',
     pipeline: '🔄',
     publish: '📬',
     apify: '🕷',
@@ -278,7 +406,6 @@ function findApifyWindow(report: AnyRecord, key: string): AnyRecord | undefined 
   return windows.find((row: AnyRecord) => String(row.key) === key);
 }
 
-
 function scopeText(report: AnyRecord): string {
   const channel = report.channel_id ? String(report.channel_id) : 'all';
   const category = report.category_id ? String(report.category_id) : 'all';
@@ -296,13 +423,6 @@ function windowLabel(window: AnyRecord | undefined): string {
     '180d': 'Last 6 months',
   };
   return labels[key] ?? String((window?.label ?? key) || 'unknown');
-}
-
-function providerIcon(provider: unknown): string {
-  const p = String(provider ?? '').toLowerCase();
-  if (p.includes('anthropic') || p.includes('claude')) return '🟣';
-  if (p.includes('gemini') || p.includes('google')) return '🔵';
-  return '⚪️';
 }
 
 function pad2(value: number): string {
@@ -325,7 +445,6 @@ function escapeHtml(value: unknown): string {
 function safeText(value: unknown): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
-
 
 function formatTehranDate(value: unknown): string {
   const raw = safeText(value);
