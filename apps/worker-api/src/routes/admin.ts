@@ -148,7 +148,7 @@ export async function handleAdmin(
     }
 
     // ── Apify controlled rotation trigger ─────────────────────
-    if (path === '/internal/apify/rotation/run' && m === 'POST') {
+    if ((path === '/internal/apify/rotation/run' || path === '/internal/apify-rotation/run') && m === 'POST') {
       const body: any = await req.json().catch(() => ({}));
       const result = await runApifyRotation(env, {
         force: body.force === true || body.force === 'true',
