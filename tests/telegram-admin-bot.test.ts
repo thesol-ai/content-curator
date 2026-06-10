@@ -89,7 +89,7 @@ describe('telegram admin bot', () => {
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(fetchMock.mock.calls[0][0]).toContain('/sendMessage');
     expect(payload.chat_id).toBe(222);
-    expect(payload.text).toContain('✨ <b>Content Command Center</b>');
+    expect(payload.text).toContain('📊 <b>Content Command Center</b>');
     expect(payload.reply_markup.keyboard[0][0].text).toBe('📊 Open Reports');
     expect(payload.reply_markup.resize_keyboard).toBe(true);
 
@@ -147,7 +147,7 @@ describe('telegram admin bot', () => {
     vi.unstubAllGlobals();
   });
 
-  it('sends report section picker after platform selection', async () => {
+  it('sends overview immediately after platform selection', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const env = makeEnv();
@@ -173,11 +173,11 @@ describe('telegram admin bot', () => {
     const body: any = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.handled).toBe('report_picker');
+    expect(body.handled).toBe('report:overview');
 
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(payload.text).toContain('🧭 <b>Select Report Section</b>');
-    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('● ✨ Overview');
+    expect(payload.text).toContain('📊 <b>Overview</b>');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('● 📊 Overview');
     expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('💸 Costs');
 
     vi.unstubAllGlobals();

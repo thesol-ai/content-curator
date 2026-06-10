@@ -105,8 +105,8 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     const session = await loadSession(env, chatId);
     const channelId = session.channelId ?? 'crypto_fa_pilot';
     await saveSession(env, chatId, { channelId, platform });
-    await sendTelegramMessage(env, chatId, buildReportPickerText(channelId, platform), reportSectionKeyboard('overview'));
-    return Response.json({ ok: true, handled: 'report_picker' });
+    await sendReportSection(env, chatId, 'overview', channelId, platform);
+    return Response.json({ ok: true, handled: 'report:overview' });
   }
 
   const section = parseSectionButton(text);
@@ -190,11 +190,11 @@ function buildUnauthorizedText(userId: number | null): string {
 
 function buildHomeText(): string {
   return [
-    '✨ <b>Content Command Center</b>',
+    '📊 <b>Content Command Center</b>',
     '━━━━━━━━━━━━━━━━━━━━',
     '',
-    '📊 Reports are grouped by channel, platform, and section.',
-    '🧭 Use the keyboard below to navigate.',
+    '- Reports are grouped by channel, platform, and section.',
+    '- Use the keyboard below to navigate.',
   ].join('\n');
 }
 
@@ -223,8 +223,8 @@ function buildReportPickerText(channelId: string, platform: string): string {
     '🧭 <b>Select Report Section</b>',
     '━━━━━━━━━━━━━━━━━━━━',
     '',
-    `📣 Channel: <code>${escapeHtml(channelId)}</code>`,
-    `🌐 Platform: <code>${escapeHtml(platform)}</code>`,
+    `<b>Channel</b>: <code>${escapeHtml(channelId)}</code>`,
+    `<b>Platform</b>: <code>${escapeHtml(platform)}</code>`,
     '',
     'Pick the section you want to generate.',
   ].join('\n');
@@ -295,7 +295,7 @@ function reportSectionKeyboard(active: OperationalReportSection): object {
     section === active ? `● ${text}` : text;
 
   return replyKeyboard([
-    [label('overview', '✨ Overview'), label('costs', '💸 Costs')],
+    [label('overview', '📊 Overview'), label('costs', '💸 Costs')],
     [label('pipeline', '🔄 Funnel'), label('publish', '📬 Publish')],
     [label('apify', '🕷 Apify'), label('health', '🩺 System')],
     [label('sources', '🏆 Sources')],
@@ -333,7 +333,7 @@ function parseSectionButton(text: string): OperationalReportSection | null {
   const normalized = text.replace(/^●\s*/, '').trim();
 
   const map: Record<string, OperationalReportSection> = {
-    '✨ Overview': 'overview',
+    '📊 Overview': 'overview',
     '💸 Costs': 'costs',
     '🔄 Funnel': 'pipeline',
     '📬 Publish': 'publish',

@@ -46,13 +46,15 @@ export function formatOperationalReportForTelegram(
   return text.length <= 3900 ? text : text.slice(0, 3850) + '\n\n…output truncated.';
 }
 
+
 function appendHeader(lines: string[], report: AnyRecord, section: OperationalReportSection): void {
   lines.push(`${sectionIcon(section)} <b>${sectionTitle(section)}</b>`);
   lines.push('━━━━━━━━━━━━━━━━━━━━');
-  lines.push(`📍 <b>Scope</b>  ${scopeText(report)}`);
-  lines.push(`🕒 <b>Time</b>   <code>${escapeHtml(formatDate(report.generated_at ?? new Date().toISOString()))}</code>`);
+  lines.push(`<b>Scope</b>: ${scopeText(report)}`);
+  lines.push(`<b>Time</b>: <code>${escapeHtml(formatTehranDate(report.generated_at ?? new Date().toISOString()))}</code>`);
   lines.push('');
 }
+
 
 function appendOverview(lines: string[], report: AnyRecord): void {
   const w24 = findWindow(report, '24h');
@@ -64,118 +66,123 @@ function appendOverview(lines: string[], report: AnyRecord): void {
   const recentFailed = Array.isArray(current.recent_failed_runs) ? current.recent_failed_runs : [];
   const apify = report.apify ?? {};
 
-  lines.push('✨ <b>Snapshot</b>');
+  lines.push('<b>Snapshot</b>');
   lines.push('');
 
   if (w24) {
-    lines.push('🗓 <b>Last 24h</b>');
-    lines.push(`💸 Cost: AI <b>${usd(w24.ai?.total_cost_usd)}</b> · Apify <b>${usd(findApifyWindow(report, '24h')?.cost_usd)}</b>`);
-    lines.push(`🧲 Content: fresh <b>${int(w24.pipeline?.fresh)}</b> · duplicate <b>${int(w24.pipeline?.duplicate)}</b>`);
-    lines.push(`🤖 AI: selected <b>${int(w24.pipeline?.ai_selected)}</b> · rejected <b>${int(w24.pipeline?.ai_rejected)}</b>`);
-    lines.push(`📣 Publish: sent <b>${int(w24.publish?.published)}</b> · scheduled <b>${int(w24.publish?.scheduled)}</b>`);
+    lines.push('<b>Last 24h</b>');
+    lines.push(`- Cost: AI <b>${usd(w24.ai?.total_cost_usd)}</b> · Apify <b>${usd(findApifyWindow(report, '24h')?.cost_usd)}</b>`);
+    lines.push(`- Content: fresh <b>${int(w24.pipeline?.fresh)}</b> · duplicate <b>${int(w24.pipeline?.duplicate)}</b>`);
+    lines.push(`- AI: selected <b>${int(w24.pipeline?.ai_selected)}</b> · rejected <b>${int(w24.pipeline?.ai_rejected)}</b>`);
+    lines.push(`- Publish: sent <b>${int(w24.publish?.published)}</b> · scheduled <b>${int(w24.publish?.scheduled)}</b>`);
     lines.push('');
   }
 
   if (w7) {
-    lines.push('📆 <b>Last 7d</b>');
-    lines.push(`💵 AI cost: <b>${usd(w7.ai?.total_cost_usd)}</b>`);
-    lines.push(`🆕 Fresh content: <b>${int(w7.pipeline?.fresh)}</b>`);
-    lines.push(`✅ AI selected: <b>${int(w7.pipeline?.ai_selected)}</b>`);
-    lines.push(`🚀 Published: <b>${int(w7.publish?.published)}</b>`);
+    lines.push('<b>Last 7d</b>');
+    lines.push(`- AI cost: <b>${usd(w7.ai?.total_cost_usd)}</b>`);
+    lines.push(`- Fresh content: <b>${int(w7.pipeline?.fresh)}</b>`);
+    lines.push(`- AI selected: <b>${int(w7.pipeline?.ai_selected)}</b>`);
+    lines.push(`- Published: <b>${int(w7.publish?.published)}</b>`);
     lines.push('');
   }
 
-  lines.push('🧭 <b>Current State</b>');
-  lines.push(`📬 Publish queue: <b>${int(activeQueue.scheduled)}</b> scheduled`);
-  lines.push(`🧠 AI backlog: <b>${int(backlog.queued)}</b> queued`);
-  lines.push(`⏳ Stuck runs: <b>${stuckRuns.length}</b>`);
-  lines.push(`🚨 Recent failures: <b>${recentFailed.length}</b>`);
-  lines.push(`🕷 Apify monthly projection: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
+  lines.push('<b>Current State</b>');
+  lines.push(`- Publish queue: <b>${int(activeQueue.scheduled)}</b> scheduled`);
+  lines.push(`- AI backlog: <b>${int(backlog.queued)}</b> queued`);
+  lines.push(`- Stuck runs: <b>${stuckRuns.length}</b>`);
+  lines.push(`- Recent failures: <b>${recentFailed.length}</b>`);
+  lines.push(`- Apify monthly projection: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
 }
 
+
 function appendCosts(lines: string[], report: AnyRecord): void {
-  lines.push('💰 <b>Cost Windows</b>');
+  lines.push('<b>Cost Windows</b>');
   lines.push('');
 
   for (const window of getWindows(report)) {
     const apify = findApifyWindow(report, String(window.key));
-    lines.push(`▫️ <b>${windowLabel(window)}</b>`);
-    lines.push(`   🤖 AI spent: <b>${usd(window.ai?.total_cost_usd)}</b>`);
-    lines.push(`   📈 AI monthly: <b>${usd(window.ai?.projected_monthly_usd)}</b>`);
+    lines.push(`<b>${windowLabel(window)}</b>`);
+    lines.push(`- AI spent: <b>${usd(window.ai?.total_cost_usd)}</b>`);
+    lines.push(`- AI monthly projection: <b>${usd(window.ai?.projected_monthly_usd)}</b>`);
     if (apify) {
-      lines.push(`   🕷 Apify spent: <b>${usd(apify.cost_usd)}</b>`);
-      lines.push(`   📈 Apify monthly: <b>${usd(apify.projected_monthly_usd)}</b>`);
-      lines.push(`   🔁 Apify runs: <b>${int(apify.runs)}</b>`);
+      lines.push(`- Apify spent: <b>${usd(apify.cost_usd)}</b>`);
+      lines.push(`- Apify monthly projection: <b>${usd(apify.projected_monthly_usd)}</b>`);
+      lines.push(`- Apify runs: <b>${int(apify.runs)}</b>`);
     }
     lines.push('');
   }
-
-  const rows = getWindows(report).flatMap((w: AnyRecord) => Array.isArray(w.ai?.rows) ? w.ai.rows : []);
-  if (rows.length > 0) {
-    lines.push('🧾 <b>Provider Breakdown</b>');
-    for (const row of rows.slice(0, 8)) {
-      lines.push(
-        `• ${providerIcon(row.provider)} <b>${escapeHtml(row.provider ?? 'unknown')}</b> / ${escapeHtml(row.purpose ?? 'n/a')}: <b>${usd(row.cost_usd)}</b> · ${int(row.calls)} calls`
-      );
-    }
-  }
 }
 
+
 function appendPipeline(lines: string[], report: AnyRecord): void {
-  lines.push('🔄 <b>Funnel by Window</b>');
+  lines.push('<b>Funnel by Window</b>');
   lines.push('');
 
   for (const window of getWindows(report)) {
     const p = window.pipeline ?? {};
-    lines.push(`▫️ <b>${windowLabel(window)}</b>`);
-    lines.push(`   📥 fetched: <b>${int(p.fetched)}</b>`);
-    lines.push(`   🆕 fresh: <b>${int(p.fresh)}</b> (${pctText(p.fresh_rate_pct)})`);
-    lines.push(`   ♻️ duplicate: <b>${int(p.duplicate)}</b> (${pctText(p.duplicate_rate_pct)})`);
-    lines.push(`   🤖 selected/rejected: <b>${int(p.ai_selected)}</b> / <b>${int(p.ai_rejected)}</b>`);
-    lines.push(`   📦 queued: <b>${int(p.queued)}</b>`);
+    lines.push(`<b>${windowLabel(window)}</b>`);
+    lines.push(`- fetched: <b>${int(p.fetched)}</b>`);
+    lines.push(`- fresh: <b>${int(p.fresh)}</b> (${pctText(p.fresh_rate_pct)})`);
+    lines.push(`- duplicate: <b>${int(p.duplicate)}</b> (${pctText(p.duplicate_rate_pct)})`);
+    lines.push(`- selected/rejected: <b>${int(p.ai_selected)}</b> / <b>${int(p.ai_rejected)}</b>`);
+    lines.push(`- queued: <b>${int(p.queued)}</b>`);
     lines.push('');
   }
 }
+
 
 function appendPublish(lines: string[], report: AnyRecord): void {
   const current = report.current ?? {};
   const activeQueue = current.publish_queue_active ?? {};
 
-  lines.push('📬 <b>Queue Now</b>');
-  lines.push(`🟡 scheduled: <b>${int(activeQueue.scheduled)}</b>`);
-  lines.push(`🔁 retry: <b>${int(activeQueue.retry)}</b>`);
-  lines.push(`🔴 failed: <b>${int(activeQueue.failed)}</b>`);
+  lines.push('<b>Queue Now</b>');
+  lines.push(`- scheduled: <b>${int(activeQueue.scheduled)}</b>`);
+  lines.push(`- retry: <b>${int(activeQueue.retry)}</b>`);
+  lines.push(`- failed: <b>${int(activeQueue.failed)}</b>`);
   lines.push('');
 
-  lines.push('🚀 <b>Publish History</b>');
-  for (const window of getWindows(report)) {
+  lines.push('<b>Publish History</b>');
+  const windows = getWindows(report);
+  for (const window of windows.slice(0, 3)) {
     const publish = window.publish ?? {};
-    lines.push(`▫️ <b>${windowLabel(window)}</b> · sent <b>${int(publish.published)}</b> · scheduled <b>${int(publish.scheduled)}</b> · failed <b>${int(publish.failed)}</b>`);
+    lines.push(`- ${windowLabel(window)}: sent <b>${int(publish.published)}</b> · scheduled <b>${int(publish.scheduled)}</b> · failed <b>${int(publish.failed)}</b>`);
+  }
+
+  if (windows.length > 3) {
+    lines.push(`- ${windows.length - 3} older windows hidden to keep this readable.`);
   }
 }
+
 
 function appendApify(lines: string[], report: AnyRecord): void {
   const apify = report.apify ?? {};
 
-  lines.push('🕷 <b>Runtime</b>');
-  lines.push(`🟢 status: <b>${apify.available ? 'active' : 'inactive'}</b>`);
-  lines.push(`📡 active_sources: <b>${int(apify.active_sources)}</b>`);
-  lines.push(`⏱ interval_hours: <b>${int(apify.rotation_interval_hours)}</b>`);
-  lines.push(`🔁 projected_runs_month: <b>${int(apify.projected_runs_per_month)}</b>`);
-  lines.push(`💳 avg_cost_per_run: <b>${usd(apify.avg_cost_per_run_usd)}</b>`);
-  lines.push(`📈 projected_monthly_cost: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
+  lines.push('<b>Runtime</b>');
+  lines.push(`- status: <b>${apify.available ? 'active' : 'inactive'}</b>`);
+  lines.push(`- active_sources: <b>${int(apify.active_sources)}</b>`);
+  lines.push(`- interval_hours: <b>${int(apify.rotation_interval_hours)}</b>`);
+  lines.push(`- projected_runs_month: <b>${int(apify.projected_runs_per_month)}</b>`);
+  lines.push(`- avg_cost_per_run: <b>${usd(apify.avg_cost_per_run_usd)}</b>`);
+  lines.push(`- projected_monthly_cost: <b>${usd(apify.projected_monthly_cost_usd)}</b>`);
   lines.push('');
 
   if (!apify.available) {
-    lines.push(`⚠️ reason: <code>${escapeHtml(apify.reason ?? 'unknown')}</code>`);
+    lines.push(`- reason: <code>${escapeHtml(apify.reason ?? 'unknown')}</code>`);
     return;
   }
 
-  lines.push('📊 <b>Windows</b>');
-  for (const row of Array.isArray(apify.windows) ? apify.windows : []) {
-    lines.push(`• ${windowLabel(row)}: <b>${int(row.runs)}</b> runs · <b>${usd(row.cost_usd)}</b>`);
+  lines.push('<b>Windows</b>');
+  const windows = Array.isArray(apify.windows) ? apify.windows : [];
+  for (const row of windows.slice(0, 3)) {
+    lines.push(`- ${windowLabel(row)}: <b>${int(row.runs)}</b> runs · <b>${usd(row.cost_usd)}</b>`);
+  }
+
+  if (windows.length > 3) {
+    lines.push(`- ${windows.length - 3} older windows hidden.`);
   }
 }
+
 
 function appendHealth(lines: string[], report: AnyRecord): void {
   const current = report.current ?? {};
@@ -183,42 +190,43 @@ function appendHealth(lines: string[], report: AnyRecord): void {
   const stuckRuns = Array.isArray(current.stuck_processing_runs) ? current.stuck_processing_runs : [];
   const failedRuns = Array.isArray(current.recent_failed_runs) ? current.recent_failed_runs : [];
 
-  lines.push('🩺 <b>Attention Board</b>');
+  lines.push('<b>Attention Board</b>');
   lines.push('Only actionable system state is shown here.');
   lines.push('');
 
-  lines.push('🧠 <b>AI Backlog</b>');
-  lines.push(`📦 queued: <b>${int(backlog.queued)}</b>`);
-  lines.push(`⏳ pending: <b>${int(backlog.pending)}</b>`);
-  lines.push(`🚫 rejected: <b>${int(backlog.ai_rejected)}</b>`);
-  lines.push(`🔴 failed: <b>${int(backlog.failed)}</b>`);
+  lines.push('<b>AI Backlog</b>');
+  lines.push(`- queued: <b>${int(backlog.queued)}</b>`);
+  lines.push(`- pending: <b>${int(backlog.pending)}</b>`);
+  lines.push(`- rejected: <b>${int(backlog.ai_rejected)}</b>`);
+  lines.push(`- failed: <b>${int(backlog.failed)}</b>`);
   lines.push('');
 
-  lines.push('⚙️ <b>Processing</b>');
-  lines.push(`⏳ stuck_runs: <b>${stuckRuns.length}</b>`);
-  lines.push(stuckRuns.length > 0 ? '🛠 action: inspect backlog drain / run_events' : '✅ action: none');
+  lines.push('<b>Processing</b>');
+  lines.push(`- stuck_runs: <b>${stuckRuns.length}</b>`);
+  lines.push(stuckRuns.length > 0 ? '- action: inspect backlog drain / run_events' : '- action: none');
   for (const run of stuckRuns.slice(0, 3)) {
-    lines.push(`   • <code>${escapeHtml(run.id)}</code>`);
+    lines.push(`  - <code>${escapeHtml(run.id)}</code>`);
   }
 
   lines.push('');
-  lines.push('🚨 <b>Failures</b>');
-  lines.push(`🔴 recent_failed_runs: <b>${failedRuns.length}</b>`);
-  lines.push(failedRuns.length > 0 ? '🛠 action: inspect failed datasets / Apify task mapping' : '✅ action: none');
+  lines.push('<b>Failures</b>');
+  lines.push(`- recent_failed_runs: <b>${failedRuns.length}</b>`);
+  lines.push(failedRuns.length > 0 ? '- action: inspect failed datasets / Apify task mapping' : '- action: none');
   for (const run of failedRuns.slice(0, 3)) {
-    lines.push(`   • <code>${escapeHtml(run.id)}</code>`);
+    lines.push(`  - <code>${escapeHtml(run.id)}</code>`);
   }
 }
+
 
 function appendSources(lines: string[], report: AnyRecord): void {
   const window = findWindow(report, '7d') ?? findWindow(report, '24h') ?? getWindows(report)[0];
   const sources = Array.isArray(window?.top_sources) ? window.top_sources : [];
 
-  lines.push(`🏆 <b>Window:</b> ${escapeHtml(windowLabel(window))}`);
+  lines.push(`<b>Window</b>: ${escapeHtml(windowLabel(window))}`);
   lines.push('');
 
   if (sources.length === 0) {
-    lines.push('📭 No source data found.');
+    lines.push('No source data found.');
     return;
   }
 
@@ -244,7 +252,7 @@ function sectionTitle(section: OperationalReportSection): string {
 
 function sectionIcon(section: OperationalReportSection): string {
   const icons: Record<OperationalReportSection, string> = {
-    overview: '✨',
+    overview: '📊',
     costs: '💸',
     pipeline: '🔄',
     publish: '📬',
@@ -315,8 +323,25 @@ function safeText(value: unknown): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function formatDate(value: unknown): string {
-  return safeText(value).replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+
+function formatTehranDate(value: unknown): string {
+  const raw = safeText(value);
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return raw;
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} Tehran`;
 }
 
 function int(value: unknown): string {
