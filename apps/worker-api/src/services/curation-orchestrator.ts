@@ -285,7 +285,8 @@ async function processSingleSource(
 ): Promise<CurationRunResult> {
   const t0 = Date.now();
   const dryRun = env.APIFY_CURATION_DRY_RUN === 'true';
-  const maxItems = parseInt(env.APIFY_MAX_ITEMS_PER_SOURCE || '100', 10);
+  const maxItems = Math.max(1, parseInt(env.APIFY_MAX_ITEMS_PER_SOURCE || '100', 10));
+  const rawFetchLimit = getApifyRawFetchLimit(env, maxItems);
   const runId = generateId('run');
   const errors: string[] = [];
   let phase = 'init';
