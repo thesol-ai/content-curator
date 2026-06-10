@@ -241,49 +241,12 @@ describe('telegram-message-formatter', () => {
     });
 
     expect(result.html.charCodeAt(0)).not.toBe(8207);
-    expect(result.html).toContain('گزارش تازه: 🚀 Ondo Perps نسخه بتای عمومی خود را راه‌اندازی کرد.');
+    expect(result.html).toContain('🚀 Ondo Perps نسخه بتای عمومی خود را راه‌اندازی کرد.');
     expect(result.html).toContain('\nETF بیت‌کوین دوباره در مرکز توجه است.');
     expect(result.html).toContain('\n\n<a href="https://example.com/post">منبع</a>');
     expect(result.html).not.toContain('\u200F');
   });
 
-  it('adds a Persian lead-in when a Persian caption starts with Latin text or emoji', () => {
-    const latinStart = formatTelegramMessage({
-      body: 'ETF بیت‌کوین دوباره در مرکز توجه است.',
-      sourceUrl: 'https://example.com/post',
-      language: 'fa',
-      channel: channel(),
-      maxLength: 4096,
-    });
-
-    expect(latinStart.html).toContain('گزارش تازه: ETF بیت‌کوین');
-    expect(latinStart.html).not.toContain('\u200F');
-
-    const emojiStart = formatTelegramMessage({
-      body: '📊 بیت‌کوین امروز نوسان داشت.',
-      sourceUrl: undefined,
-      language: 'fa',
-      channel: channel({ source_enabled: 0 }),
-      maxLength: 4096,
-    });
-
-    expect(emojiStart.html).toBe('گزارش تازه: 📊 بیت‌کوین امروز نوسان داشت.');
-  });
-
-  it('does not rewrite market snapshot style structured text', () => {
-    const result = formatTelegramMessage({
-      body: '📊 نمای بازار کریپتو\n\n🟢 BTC  $61,789   (▲ 0.1%)',
-      sourceUrl: undefined,
-      language: 'fa',
-      channel: channel({ source_enabled: 0 }),
-      maxLength: 4096,
-    });
-
-    expect(result.html).toContain('📊 نمای بازار کریپتو');
-    expect(result.html).toContain('BTC  $61,789');
-    expect(result.html).not.toContain('گزارش تازه:');
-    expect(result.html).not.toContain('\u200F');
-  });
 
   it('keeps the small standalone helpers stable', () => {
     expect(sourceLabel('fa')).toBe('منبع');
