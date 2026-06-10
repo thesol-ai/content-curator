@@ -1,6 +1,10 @@
 import type { Env } from '../types';
 import { buildOperationalReport } from '../services/operational-report';
-import { formatOperationalReportForTelegram } from '../services/report-message-formatter';
+import {
+  formatOperationalReportForTelegram,
+  normalizeOperationalReportSection,
+  type OperationalReportSection,
+} from '../services/report-message-formatter';
 
 type TelegramUpdate = {
   update_id?: number;
@@ -59,26 +63,38 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
 
   const text = update.message?.text?.trim() ?? '';
   const callbackData = update.callback_query?.data?.trim() ?? '';
+  const callbackMessageId = update.callback_query?.message?.message_id;
 
   if (text === '/start' || text === '/menu' || callbackData === 'menu') {
-    await sendTelegramMessage(env, chatId, buildMenuText(), menuKeyboard());
+    await replyOrEdit(env, chatId, callbackMessageId, buildMenuText(), mainMenuKeyboard());
     return Response.json({ ok: true, handled: 'menu' });
   }
 
-  if (text === '/report' || text === '/ops' || callbackData === 'report:ops') {
-    await sendOperationalReport(env, chatId);
-    return Response.json({ ok: true, handled: 'report:ops' });
+  if (text === '/report' || text === '/ops' || callbackData === 'report:menu') {
+    await sendReportSection(env, chatId, callbackMessageId, 'overview');
+    return Response.json({ ok: true, handled: 'report:overview' });
   }
 
-  await sendTelegramMessage(env, chatId, buildMenuText(), menuKeyboard());
+  if (callbackData.startsWith('report:')) {
+    const section = normalizeOperationalReportSection(callbackData.slice('report:'.length));
+    await sendReportSection(env, chatId, callbackMessageId, section);
+    return Response.json({ ok: true, handled: `report:${section}` });
+  }
+
+  await replyOrEdit(env, chatId, callbackMessageId, buildMenuText(), mainMenuKeyboard());
   return Response.json({ ok: true, handled: 'fallback_menu' });
 }
 
-async function sendOperationalReport(env: Env, chatId: string | number): Promise<void> {
+async function sendReportSection(
+  env: Env,
+  chatId: string | number,
+  messageId: number | undefined,
+  section: OperationalReportSection,
+): Promise<void> {
   const reportUrl = new URL('https://telegram-admin.local/internal/report/ops?category=crypto');
   const report = await buildOperationalReport(env, reportUrl);
-  const text = formatOperationalReportForTelegram(report as any);
-  await sendTelegramMessage(env, chatId, text, menuKeyboard());
+  const text = formatOperationalReportForTelegram(report as any, section);
+  await replyOrEdit(env, chatId, messageId, text, reportSectionKeyboard(section));
 }
 
 function buildUnauthorizedText(userId: number | null): string {
@@ -97,20 +113,61 @@ function buildMenuText(): string {
   return [
     '🛠 <b>پنل مدیریت محتوا</b>',
     '',
-    'فعلاً این بات فقط گزارش read-only می‌دهد.',
-    'عملیات اجرایی مثل drain backlog یا publish due بعداً با تأیید دوم اضافه می‌شود.',
+    'گزارش‌ها دسته‌بندی شده‌اند. هر بخش فقط همان اطلاعات خودش را نشان می‌دهد.',
     '',
-    'یک گزینه را انتخاب کن:',
+    'یک بخش را انتخاب کن:',
   ].join('\n');
 }
 
-function menuKeyboard(): object {
+function mainMenuKeyboard(): object {
   return {
     inline_keyboard: [
-      [{ text: '📊 گزارش کامل عملیات', callback_data: 'report:ops' }],
-      [{ text: '🏠 منو', callback_data: 'menu' }],
+      [{ text: '📊 گزارش‌ها', callback_data: 'report:menu' }],
     ],
   };
+}
+
+function reportSectionKeyboard(active: OperationalReportSection): object {
+  const label = (section: OperationalReportSection, text: string) =>
+    section === active ? `● ${text}` : text;
+
+  return {
+    inline_keyboard: [
+      [
+        { text: label('overview', '📌 خلاصه'), callback_data: 'report:overview' },
+        { text: label('costs', '💵 هزینه‌ها'), callback_data: 'report:costs' },
+      ],
+      [
+        { text: label('pipeline', '🔁 قیف محتوا'), callback_data: 'report:pipeline' },
+        { text: label('publish', '📬 صف انتشار'), callback_data: 'report:publish' },
+      ],
+      [
+        { text: label('apify', '🕷 Apify'), callback_data: 'report:apify' },
+        { text: label('health', '⚠️ سلامت'), callback_data: 'report:health' },
+      ],
+      [
+        { text: label('sources', '🏷 منابع'), callback_data: 'report:sources' },
+      ],
+      [
+        { text: '🏠 منو', callback_data: 'menu' },
+      ],
+    ],
+  };
+}
+
+async function replyOrEdit(
+  env: Env,
+  chatId: string | number,
+  messageId: number | undefined,
+  text: string,
+  replyMarkup?: object,
+): Promise<void> {
+  if (messageId) {
+    await editTelegramMessage(env, chatId, messageId, text, replyMarkup);
+    return;
+  }
+
+  await sendTelegramMessage(env, chatId, text, replyMarkup);
 }
 
 async function sendTelegramMessage(
@@ -140,6 +197,39 @@ async function sendTelegramMessage(
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Telegram sendMessage failed ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+async function editTelegramMessage(
+  env: Env,
+  chatId: string | number,
+  messageId: number,
+  text: string,
+  replyMarkup?: object,
+): Promise<void> {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not configured');
+
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    if (body.includes('message is not modified')) return;
+    throw new Error(`Telegram editMessageText failed ${res.status}: ${body.slice(0, 300)}`);
   }
 }
 
