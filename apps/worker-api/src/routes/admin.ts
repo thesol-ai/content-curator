@@ -14,6 +14,7 @@ import { prepareTelegramCaptions } from '../services/telegram-publisher';
 import { sanitizeRunDebugId } from '../services/run-events';
 import { buildMarketSnapshotText, sendMarketSnapshotDirect } from '../services/market-snapshot';
 import { buildOperationalReport } from '../services/operational-report';
+import { formatOperationalReportForTelegram } from '../services/report-message-formatter';
 import { drainAICandidateQueue } from '../services/backlog-drain';
 import { runApifyRotation } from '../services/apify-rotation-runner';
 import {
@@ -179,6 +180,15 @@ export async function handleAdmin(
     // ── Full operational report for Telegram/admin dashboard (read-only) ──
     if (path === '/internal/report/ops' && m === 'GET') {
       return ok(await buildOperationalReport(env, url));
+    }
+
+    // ── Telegram-ready operational report preview (read-only) ─────────────
+    if (path === '/internal/report/ops/telegram-preview' && m === 'GET') {
+      const report = await buildOperationalReport(env, url);
+      return ok({
+        parse_mode: 'HTML',
+        text: formatOperationalReportForTelegram(report as any),
+      });
     }
 
     // ── Daily operational report (read-only) ───────────────────
