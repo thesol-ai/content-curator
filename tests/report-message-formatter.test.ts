@@ -73,9 +73,9 @@ describe('report-message-formatter', () => {
     expect(text).toContain('📊 <b>Overview</b>');
     expect(text).toContain('<b>Scope</b>');
     expect(text).toContain('crypto_fa_pilot');
-    expect(text).toContain('<b>Last 24h</b>');
-    expect(text).toContain('<b>Last 7d</b>');
-    expect(text).toContain('<b>Current State</b>');
+    expect(text).toContain('🗓 <b>Last 24h</b>');
+    expect(text).toContain('📆 <b>Last 7d</b>');
+    expect(text).toContain('🧭 <b>Current State</b>');
     expect(text).not.toContain('Content Funnel</b>');
     expect(text).not.toContain('Top Sources</b>');
   });
@@ -84,7 +84,7 @@ describe('report-message-formatter', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'costs');
 
     expect(text).toContain('💸 <b>Costs</b>');
-    expect(text).toContain('<b>Cost Windows</b>');
+    expect(text).toContain('💰 <b>Cost Windows</b>');
     expect(text).toContain('AI spent');
     expect(text).toContain('Apify spent');
             expect(text).not.toContain('Publish Queue</b>');
@@ -97,17 +97,17 @@ describe('report-message-formatter', () => {
     expect(text).toContain('fetched');
     expect(text).toContain('duplicate');
     expect(text).toContain('selected/rejected');
-    expect(text).not.toContain('<b>Cost Windows</b>');
+    expect(text).not.toContain('💰 <b>Cost Windows</b>');
   });
 
   it('formats the health section separately', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'health');
 
     expect(text).toContain('🩺 <b>System State</b>');
-    expect(text).toContain('<b>Attention Board</b>');
-    expect(text).toContain('<b>AI Backlog</b>');
-    expect(text).toContain('<b>Processing</b>');
-    expect(text).toContain('<b>Failures</b>');
+    expect(text).toContain('🩺 <b>Attention Board</b>');
+    expect(text).toContain('🧠 <b>AI Backlog</b>');
+    expect(text).toContain('⚙️ <b>Processing</b>');
+    expect(text).toContain('🚨 <b>Failures</b>');
     expect(text).toContain('run_1');
     expect(text).toContain('run_2');
     expect(text).not.toContain('Top Sources</b>');

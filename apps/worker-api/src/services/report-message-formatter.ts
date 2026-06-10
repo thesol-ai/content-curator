@@ -56,6 +56,7 @@ function appendHeader(lines: string[], report: AnyRecord, section: OperationalRe
   lines.push('');
 }
 
+
 function appendOverview(lines: string[], report: AnyRecord): void {
   const w24 = findWindow(report, '24h');
   const w7 = findWindow(report, '7d');
@@ -66,11 +67,11 @@ function appendOverview(lines: string[], report: AnyRecord): void {
   const recentFailed = Array.isArray(current.recent_failed_runs) ? current.recent_failed_runs : [];
   const apify = report.apify ?? {};
 
-  lines.push('<b>Snapshot</b>');
+  lines.push('📌 <b>Snapshot</b>');
   lines.push('');
 
   if (w24) {
-    lines.push('<b>Last 24h</b>');
+    lines.push('🗓 <b>Last 24h</b>');
     lines.push(`- Cost: AI <b>${usd(w24.ai?.total_cost_usd)}</b> · Apify <b>${usd(findApifyWindow(report, '24h')?.cost_usd)}</b>`);
     lines.push(`- Content: fresh <b>${int(w24.pipeline?.fresh)}</b> · duplicate <b>${int(w24.pipeline?.duplicate)}</b>`);
     lines.push(`- AI: selected <b>${int(w24.pipeline?.ai_selected)}</b> · rejected <b>${int(w24.pipeline?.ai_rejected)}</b>`);
@@ -79,7 +80,7 @@ function appendOverview(lines: string[], report: AnyRecord): void {
   }
 
   if (w7) {
-    lines.push('<b>Last 7d</b>');
+    lines.push('📆 <b>Last 7d</b>');
     lines.push(`- AI cost: <b>${usd(w7.ai?.total_cost_usd)}</b>`);
     lines.push(`- Fresh content: <b>${int(w7.pipeline?.fresh)}</b>`);
     lines.push(`- AI selected: <b>${int(w7.pipeline?.ai_selected)}</b>`);
@@ -87,7 +88,7 @@ function appendOverview(lines: string[], report: AnyRecord): void {
     lines.push('');
   }
 
-  lines.push('<b>Current State</b>');
+  lines.push('🧭 <b>Current State</b>');
   lines.push(`- Publish queue: <b>${int(activeQueue.scheduled)}</b> scheduled`);
   lines.push(`- AI backlog: <b>${int(backlog.queued)}</b> queued`);
   lines.push(`- Stuck runs: <b>${stuckRuns.length}</b>`);
@@ -97,12 +98,12 @@ function appendOverview(lines: string[], report: AnyRecord): void {
 
 
 function appendCosts(lines: string[], report: AnyRecord): void {
-  lines.push('<b>Cost Windows</b>');
+  lines.push('💰 <b>Cost Windows</b>');
   lines.push('');
 
   for (const window of getWindows(report)) {
     const apify = findApifyWindow(report, String(window.key));
-    lines.push(`<b>${windowLabel(window)}</b>`);
+    lines.push(`🕒 <b>${windowLabel(window)}</b>`);
     lines.push(`- AI spent: <b>${usd(window.ai?.total_cost_usd)}</b>`);
     lines.push(`- AI monthly projection: <b>${usd(window.ai?.projected_monthly_usd)}</b>`);
     if (apify) {
@@ -116,12 +117,12 @@ function appendCosts(lines: string[], report: AnyRecord): void {
 
 
 function appendPipeline(lines: string[], report: AnyRecord): void {
-  lines.push('<b>Funnel by Window</b>');
+  lines.push('🔄 <b>Funnel by Window</b>');
   lines.push('');
 
   for (const window of getWindows(report)) {
     const p = window.pipeline ?? {};
-    lines.push(`<b>${windowLabel(window)}</b>`);
+    lines.push(`🕒 <b>${windowLabel(window)}</b>`);
     lines.push(`- fetched: <b>${int(p.fetched)}</b>`);
     lines.push(`- fresh: <b>${int(p.fresh)}</b> (${pctText(p.fresh_rate_pct)})`);
     lines.push(`- duplicate: <b>${int(p.duplicate)}</b> (${pctText(p.duplicate_rate_pct)})`);
@@ -136,13 +137,13 @@ function appendPublish(lines: string[], report: AnyRecord): void {
   const current = report.current ?? {};
   const activeQueue = current.publish_queue_active ?? {};
 
-  lines.push('<b>Queue Now</b>');
+  lines.push('📬 <b>Queue Now</b>');
   lines.push(`- scheduled: <b>${int(activeQueue.scheduled)}</b>`);
   lines.push(`- retry: <b>${int(activeQueue.retry)}</b>`);
   lines.push(`- failed: <b>${int(activeQueue.failed)}</b>`);
   lines.push('');
 
-  lines.push('<b>Publish History</b>');
+  lines.push('🚀 <b>Publish History</b>');
   const windows = getWindows(report);
   for (const window of windows.slice(0, 3)) {
     const publish = window.publish ?? {};
@@ -158,7 +159,7 @@ function appendPublish(lines: string[], report: AnyRecord): void {
 function appendApify(lines: string[], report: AnyRecord): void {
   const apify = report.apify ?? {};
 
-  lines.push('<b>Runtime</b>');
+  lines.push('🕷 <b>Runtime</b>');
   lines.push(`- status: <b>${apify.available ? 'active' : 'inactive'}</b>`);
   lines.push(`- active_sources: <b>${int(apify.active_sources)}</b>`);
   lines.push(`- interval_hours: <b>${int(apify.rotation_interval_hours)}</b>`);
@@ -172,7 +173,7 @@ function appendApify(lines: string[], report: AnyRecord): void {
     return;
   }
 
-  lines.push('<b>Windows</b>');
+  lines.push('📊 <b>Windows</b>');
   const windows = Array.isArray(apify.windows) ? apify.windows : [];
   for (const row of windows.slice(0, 3)) {
     lines.push(`- ${windowLabel(row)}: <b>${int(row.runs)}</b> runs · <b>${usd(row.cost_usd)}</b>`);
@@ -190,18 +191,18 @@ function appendHealth(lines: string[], report: AnyRecord): void {
   const stuckRuns = Array.isArray(current.stuck_processing_runs) ? current.stuck_processing_runs : [];
   const failedRuns = Array.isArray(current.recent_failed_runs) ? current.recent_failed_runs : [];
 
-  lines.push('<b>Attention Board</b>');
+  lines.push('🩺 <b>Attention Board</b>');
   lines.push('Only actionable system state is shown here.');
   lines.push('');
 
-  lines.push('<b>AI Backlog</b>');
+  lines.push('🧠 <b>AI Backlog</b>');
   lines.push(`- queued: <b>${int(backlog.queued)}</b>`);
   lines.push(`- pending: <b>${int(backlog.pending)}</b>`);
   lines.push(`- rejected: <b>${int(backlog.ai_rejected)}</b>`);
   lines.push(`- failed: <b>${int(backlog.failed)}</b>`);
   lines.push('');
 
-  lines.push('<b>Processing</b>');
+  lines.push('⚙️ <b>Processing</b>');
   lines.push(`- stuck_runs: <b>${stuckRuns.length}</b>`);
   lines.push(stuckRuns.length > 0 ? '- action: inspect backlog drain / run_events' : '- action: none');
   for (const run of stuckRuns.slice(0, 3)) {
@@ -209,7 +210,7 @@ function appendHealth(lines: string[], report: AnyRecord): void {
   }
 
   lines.push('');
-  lines.push('<b>Failures</b>');
+  lines.push('🚨 <b>Failures</b>');
   lines.push(`- recent_failed_runs: <b>${failedRuns.length}</b>`);
   lines.push(failedRuns.length > 0 ? '- action: inspect failed datasets / Apify task mapping' : '- action: none');
   for (const run of failedRuns.slice(0, 3)) {
@@ -218,12 +219,11 @@ function appendHealth(lines: string[], report: AnyRecord): void {
 }
 
 
-
 function appendSources(lines: string[], report: AnyRecord): void {
   const window = findWindow(report, '7d') ?? findWindow(report, '24h') ?? getWindows(report)[0];
   const sources = Array.isArray(window?.top_sources) ? window.top_sources : [];
 
-  lines.push(`<b>Window</b>: ${escapeHtml(windowLabel(window))}`);
+  lines.push(`🪟 <b>Window</b>: ${escapeHtml(windowLabel(window))}`);
   lines.push('');
 
   if (sources.length === 0) {
@@ -233,7 +233,7 @@ function appendSources(lines: string[], report: AnyRecord): void {
 
   for (const [index, row] of sources.slice(0, 10).entries()) {
     const source = trimSource(row.source_account);
-    lines.push(`<b>${pad2(index + 1)}. ${source}</b>`);
+    lines.push(`🏷 <b>${pad2(index + 1)}. ${source}</b>`);
     lines.push(`- total <b>${int(row.total)}</b> · selected <b>${int(row.selected)}</b> · rate <b>${pctText(row.select_rate_pct)}</b>`);
     if (index < Math.min(sources.length, 10) - 1) lines.push('');
   }
