@@ -168,6 +168,68 @@ function datasetSyncReason(primaryDatasetId: string, effectiveDatasetId: string)
     : 'stale_primary_resolved_from_last_dataset_id';
 }
 
+function getApifyRawFetchLimit(env: Env, finalLimit: number): number {
+  const explicit = Number((env as any).APIFY_RAW_FETCH_LIMIT_PER_SOURCE);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(finalLimit, Math.min(Math.floor(explicit), 1000));
+  }
+
+  const multiplier = Number((env as any).APIFY_RAW_FETCH_MULTIPLIER ?? 5);
+  const safeMultiplier = Number.isFinite(multiplier) && multiplier > 0
+    ? Math.min(Math.floor(multiplier), 10)
+    : 5;
+
+  return Math.max(finalLimit, Math.min(finalLimit * safeMultiplier, 500));
+}
+
+function balanceNormalizedItemsBySourceAccount(items: NormalizedItem[]): NormalizedItem[] {
+  if (items.length <= 1) return items.slice();
+
+  const groups = new Map<string, NormalizedItem[]>();
+  const accountOrder: string[] = [];
+
+  for (const item of items) {
+    const account = normalizedSourceAccountKey(item);
+    if (!groups.has(account)) {
+      groups.set(account, []);
+      accountOrder.push(account);
+    }
+    groups.get(account)!.push(item);
+  }
+
+  if (accountOrder.length <= 1) return items.slice();
+
+  const balanced: NormalizedItem[] = [];
+  let madeProgress = true;
+
+  while (balanced.length < items.length && madeProgress) {
+    madeProgress = false;
+    for (const account of accountOrder) {
+      const next = groups.get(account)!.shift();
+      if (next) {
+        balanced.push(next);
+        madeProgress = true;
+      }
+    }
+  }
+
+  return balanced;
+}
+
+function normalizedSourceAccountKey(item: NormalizedItem): string {
+  const account = String(item.sourceAccount ?? '').trim().toLowerCase();
+  return account || '__unknown__';
+}
+
+function summarizeSourceAccounts(items: NormalizedItem[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const key = normalizedSourceAccountKey(item);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
 async function fetchSourceDatasetItems(
   env: Env,
   source: ApifySourceRow,
@@ -312,7 +374,7 @@ async function processSingleSource(
 
   try {
     await markPhase('fetch_dataset');
-    const fetched = await fetchSourceDatasetItems(env, source, effectiveDatasetId, maxItems, runId, category, t0);
+    const fetched = await fetchSourceDatasetItems(env, source, effectiveDatasetId, rawFetchLimit, runId, category, t0);
     const raw = fetched.raw;
     effectiveDatasetId = fetched.datasetId;
     itemsFetched = raw.length;
@@ -371,6 +433,9 @@ async function processSingleSource(
       normalized.push(item);
     }
 
+    const normalizedBeforeBalance = normalized.length;
+    const normalizedBalanced = balanceNormalizedItemsBySourceAccount(normalized).slice(0, maxItems);
+
     await recordRunEvent(env, {
       runId,
       eventType: 'normalize.complete',
@@ -382,7 +447,12 @@ async function processSingleSource(
       durationMs: Date.now() - t0,
       metadata: {
         rawCount: raw.length,
-        normalizedCount: normalized.length,
+        rawFetchLimit,
+        maxItems,
+        normalizedBeforeBalance,
+        normalizedCount: normalizedBalanced.length,
+        sourceAccountsBeforeBalance: summarizeSourceAccounts(normalized),
+        sourceAccountsAfterBalance: summarizeSourceAccounts(normalizedBalanced),
         droppedNormalizeNull,
         droppedMissingUrl,
         droppedShortTextNoSignal,
@@ -393,7 +463,7 @@ async function processSingleSource(
     await markPhase('dedupe_check');
     const fresh: NormalizedItem[] = [];
     const freshKeys: string[][] = [];
-    for (const item of normalized) {
+    for (const item of normalizedBalanced) {
       const keys = computeDedupeKeys(item);
       if (await isDuplicate(env, keys)) { itemsDuplicate++; }
       else { fresh.push(item); freshKeys.push(keys); }
