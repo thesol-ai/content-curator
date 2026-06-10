@@ -58,7 +58,7 @@ export function formatTelegramMessage(input: TelegramMessageFormatInput): Telegr
   if (remainingForBody >= 1) {
     const bodyResult = truncateEscapedText(escapedBody, remainingForBody);
     return {
-      html: joinBodyAndFooter(bodyResult.html, footer.html),
+      html: joinBodyAndFooter(bodyResult.html, footerHtml),
       truncated: bodyResult.truncated,
       footerIncluded: true,
       footerOmitted: false,
