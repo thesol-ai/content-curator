@@ -26,9 +26,12 @@ type TelegramCallbackQuery = {
   from?: { id?: number; username?: string; first_name?: string };
 };
 
+type AdminScreen = 'home' | 'channels' | 'platforms' | 'reports';
+
 type AdminSession = {
   channelId?: string;
   platform?: string;
+  screen?: AdminScreen;
 };
 
 export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Response> {
@@ -74,28 +77,37 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     return Response.json({ ok: true, handled: 'legacy_callback' });
   }
 
+
+  if (text === '⬅️ Back') {
+    const handled = await handleBack(env, chatId);
+    return Response.json({ ok: true, handled });
+  }
+
   if (text === '/start') {
     if (await shouldSuppressDuplicateStart(env, chatId)) {
       return Response.json({ ok: true, handled: 'duplicate_start_suppressed' });
     }
 
+    await saveSession(env, chatId, { screen: 'home' });
     await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
     return Response.json({ ok: true, handled: 'home' });
   }
 
   if (text === '/menu' || text === '🏠 Home') {
+    await saveSession(env, chatId, { screen: 'home' });
     await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
     return Response.json({ ok: true, handled: 'home' });
   }
 
-  if (text === '/report' || text === '/ops' || text === '📊 Open Reports' || text === '📣 Change Channel' || text === '🧭 Change Scope' || text === '📣 Change Channel') {
+  if (text === '/report' || text === '/ops' || text === '📊 Open Reports' || text === '📣 Change Channel' || text === '🧭 Change Scope') {
+    await saveSession(env, chatId, { screen: 'channels' });
     await sendTelegramMessage(env, chatId, buildChannelPickerText(), await channelKeyboard(env));
     return Response.json({ ok: true, handled: 'channels' });
   }
 
   if (text.startsWith('📣 ')) {
     const channelId = sanitizeCallbackId(text.slice('📣 '.length).trim(), 'crypto_fa_pilot');
-    await saveSession(env, chatId, { channelId, platform: 'all' });
+    await saveSession(env, chatId, { channelId, platform: 'all', screen: 'platforms' });
     await sendTelegramMessage(env, chatId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
     return Response.json({ ok: true, handled: 'platforms' });
   }
@@ -104,7 +116,7 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
   if (platform) {
     const session = await loadSession(env, chatId);
     const channelId = session.channelId ?? 'crypto_fa_pilot';
-    await saveSession(env, chatId, { channelId, platform });
+    await saveSession(env, chatId, { channelId, platform, screen: 'reports' });
     await sendReportSection(env, chatId, 'overview', channelId, platform);
     return Response.json({ ok: true, handled: 'report:overview' });
   }
@@ -112,12 +124,41 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
   const section = parseSectionButton(text);
   if (section) {
     const session = await loadSession(env, chatId);
+    await saveSession(env, chatId, { screen: 'reports' });
     await sendReportSection(env, chatId, section, session.channelId ?? 'crypto_fa_pilot', session.platform ?? 'all');
     return Response.json({ ok: true, handled: `report:${section}` });
   }
 
   await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
   return Response.json({ ok: true, handled: 'fallback_home' });
+}
+
+
+async function handleBack(env: Env, chatId: string | number): Promise<string> {
+  const session = await loadSession(env, chatId);
+
+  if (session.screen === 'reports') {
+    const channelId = session.channelId ?? 'crypto_fa_pilot';
+    await saveSession(env, chatId, { screen: 'platforms' });
+    await sendTelegramMessage(env, chatId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
+    return 'back:platforms';
+  }
+
+  if (session.screen === 'platforms') {
+    await saveSession(env, chatId, { screen: 'channels' });
+    await sendTelegramMessage(env, chatId, buildChannelPickerText(), await channelKeyboard(env));
+    return 'back:channels';
+  }
+
+  if (session.screen === 'channels') {
+    await saveSession(env, chatId, { screen: 'home' });
+    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+    return 'back:home';
+  }
+
+  await saveSession(env, chatId, { screen: 'home' });
+  await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+  return 'back:home';
 }
 
 async function handleLegacyCallback(env: Env, chatId: string | number, callbackData: string): Promise<void> {
@@ -133,14 +174,14 @@ async function handleLegacyCallback(env: Env, chatId: string | number, callbackD
 
   if (callbackData.startsWith('channel:')) {
     const channelId = sanitizeCallbackId(callbackData.slice('channel:'.length), 'crypto_fa_pilot');
-    await saveSession(env, chatId, { channelId, platform: 'all' });
+    await saveSession(env, chatId, { channelId, platform: 'all', screen: 'platforms' });
     await sendTelegramMessage(env, chatId, buildPlatformPickerText(channelId), await platformKeyboard(env, channelId));
     return;
   }
 
   if (callbackData.startsWith('reports:')) {
     const [, channelId = 'crypto_fa_pilot', platform = 'all'] = callbackData.split(':');
-    await saveSession(env, chatId, { channelId, platform });
+    await saveSession(env, chatId, { channelId, platform, screen: 'reports' });
     await sendReportSection(env, chatId, 'overview', channelId, platform);
     return;
   }
@@ -246,7 +287,7 @@ async function channelKeyboard(env: Env): Promise<object> {
 
   const channels = rows.length > 0 ? rows : [{ id: 'crypto_fa_pilot', category_id: 'crypto' }];
   const rowsForKeyboard = channels.map(row => [`📣 ${row.id}`]);
-  rowsForKeyboard.push(['🏠 Home']);
+  rowsForKeyboard.push(['⬅️ Back', '🏠 Home']);
 
   return replyKeyboard(rowsForKeyboard);
 }
@@ -282,7 +323,8 @@ async function platformKeyboard(env: Env, channelId: string): Promise<object> {
   const rowsForKeyboard = [
     ['🌐 All Platforms'],
     ...unique.map(platform => [platformLabel(platform)]),
-    ['📣 Change Channel', '🏠 Home'],
+    ['⬅️ Back', '📣 Change Channel'],
+    ['🏠 Home'],
   ];
 
   return replyKeyboard(rowsForKeyboard);
@@ -297,7 +339,8 @@ function reportSectionKeyboard(active: OperationalReportSection): object {
     [label('pipeline', '🔄 Funnel'), label('publish', '📬 Publish')],
     [label('apify', '🕷 Apify'), label('health', '🩺 System')],
     [label('sources', '🏆 Sources')],
-    ['📣 Change Channel', '🏠 Home'],
+    ['⬅️ Back', '📣 Change Channel'],
+    ['🏠 Home'],
   ]);
 }
 
