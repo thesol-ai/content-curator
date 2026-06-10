@@ -13,16 +13,33 @@ const ROTATION_SOURCE_IDS = new Set([
 ]);
 
 const NEWS_COHORTS = [
-  ['cointelegraph', 'coindesk'],
-  ['Utoday_en', 'beincrypto'],
-  ['bitcoinmagazine', 'blockworks', 'decryptmedia'],
+  ['cointelegraph'],
+  ['coindesk'],
+  ['Utoday_en'],
+  ['beincrypto'],
+  ['bitcoinmagazine'],
+  ['blockworks'],
+  ['decryptmedia'],
 ];
 
 const VOICES_COHORTS = [
-  ['rektcapital', 'scottmelker', 'KoroushAK', 'saylor'],
-  ['CryptoCapo_', 'Cobie', 'Pentosh1', 'HsakaTrades'],
-  ['Ansem', 'CryptoHayes', 'DegenSpartan', 'DefiIgnas'],
-  ['TheDeFinvestor', 'rektfencer', '0xngmi', 'AltcoinDailyio', 'alicharts'],
+  ['rektcapital'],
+  ['scottmelker'],
+  ['KoroushAK'],
+  ['saylor'],
+  ['CryptoCapo_'],
+  ['Cobie'],
+  ['Pentosh1'],
+  ['HsakaTrades'],
+  ['Ansem'],
+  ['CryptoHayes'],
+  ['DegenSpartan'],
+  ['DefiIgnas'],
+  ['TheDeFinvestor'],
+  ['rektfencer'],
+  ['0xngmi'],
+  ['AltcoinDailyio'],
+  ['alicharts'],
 ];
 
 type RotationMode = 'media' | 'text' | 'default';
