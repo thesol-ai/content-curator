@@ -13,6 +13,7 @@ import { getRuntimeConfig } from '../services/runtime-config';
 import { prepareTelegramCaptions } from '../services/telegram-publisher';
 import { sanitizeRunDebugId } from '../services/run-events';
 import { buildMarketSnapshotText, sendMarketSnapshotDirect } from '../services/market-snapshot';
+import { buildOperationalReport } from '../services/operational-report';
 import { drainAICandidateQueue } from '../services/backlog-drain';
 import { runApifyRotation } from '../services/apify-rotation-runner';
 import {
@@ -174,6 +175,11 @@ export async function handleAdmin(
       return ok({ settings: rows.results ?? [] });
     }
 
+
+    // ── Full operational report for Telegram/admin dashboard (read-only) ──
+    if (path === '/internal/report/ops' && m === 'GET') {
+      return ok(await buildOperationalReport(env, url));
+    }
 
     // ── Daily operational report (read-only) ───────────────────
     if (path === '/internal/report/daily' && m === 'GET') {
