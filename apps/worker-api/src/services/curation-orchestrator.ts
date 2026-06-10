@@ -464,10 +464,19 @@ async function processSingleSource(
     await markPhase('dedupe_check');
     const fresh: NormalizedItem[] = [];
     const freshKeys: string[][] = [];
+    const freshnessCutoffTs = Math.floor(Date.now() / 1000) - category.freshness_hours * 3600;
+    let staleBeforeAiCount = 0;
+
     for (const item of normalizedBalanced) {
       const keys = computeDedupeKeys(item);
-      if (await isDuplicate(env, keys)) { itemsDuplicate++; }
-      else { fresh.push(item); freshKeys.push(keys); }
+      if (await isDuplicate(env, keys)) {
+        itemsDuplicate++;
+      } else if (item.publishedAt < freshnessCutoffTs) {
+        staleBeforeAiCount++;
+      } else {
+        fresh.push(item);
+        freshKeys.push(keys);
+      }
     }
     itemsNew = fresh.length;
     await recordRunEvent(env, {
@@ -483,6 +492,8 @@ async function processSingleSource(
         normalizedCount: normalized.length,
         freshCount: fresh.length,
         duplicateCount: itemsDuplicate,
+          staleBeforeAiCount,
+          freshnessCutoffTs,
       },
     });
     await markPhase('dedupe_complete');
