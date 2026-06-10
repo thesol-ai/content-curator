@@ -47,14 +47,14 @@ export function formatOperationalReportForTelegram(
 }
 
 
+
 function appendHeader(lines: string[], report: AnyRecord, section: OperationalReportSection): void {
   lines.push(`${sectionIcon(section)} <b>${sectionTitle(section)}</b>`);
-  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push('');
   lines.push(`<b>Scope</b>: ${scopeText(report)}`);
-  lines.push(`<b>Time</b>: <code>${escapeHtml(formatTehranDate(report.generated_at ?? new Date().toISOString()))}</code>`);
+  lines.push(`<b>Time</b>: ${escapeHtml(formatTehranDate(report.generated_at ?? new Date().toISOString()))}`);
   lines.push('');
 }
-
 
 function appendOverview(lines: string[], report: AnyRecord): void {
   const w24 = findWindow(report, '24h');
@@ -218,6 +218,7 @@ function appendHealth(lines: string[], report: AnyRecord): void {
 }
 
 
+
 function appendSources(lines: string[], report: AnyRecord): void {
   const window = findWindow(report, '7d') ?? findWindow(report, '24h') ?? getWindows(report)[0];
   const sources = Array.isArray(window?.top_sources) ? window.top_sources : [];
@@ -231,9 +232,10 @@ function appendSources(lines: string[], report: AnyRecord): void {
   }
 
   for (const [index, row] of sources.slice(0, 10).entries()) {
-    lines.push(
-      `<code>${pad2(index + 1)} ${trimSource(row.source_account)} | total=${int(row.total)} | selected=${int(row.selected)} | rate=${pctText(row.select_rate_pct)}</code>`
-    );
+    const source = trimSource(row.source_account);
+    lines.push(`<b>${pad2(index + 1)}. ${source}</b>`);
+    lines.push(`- total <b>${int(row.total)}</b> · selected <b>${int(row.selected)}</b> · rate <b>${pctText(row.select_rate_pct)}</b>`);
+    if (index < Math.min(sources.length, 10) - 1) lines.push('');
   }
 }
 
@@ -276,11 +278,12 @@ function findApifyWindow(report: AnyRecord, key: string): AnyRecord | undefined 
   return windows.find((row: AnyRecord) => String(row.key) === key);
 }
 
+
 function scopeText(report: AnyRecord): string {
   const channel = report.channel_id ? String(report.channel_id) : 'all';
   const category = report.category_id ? String(report.category_id) : 'all';
   const platform = report.platform ? String(report.platform) : 'all';
-  return `<code>${escapeHtml(channel)} · ${escapeHtml(category)} · ${escapeHtml(platform)}</code>`;
+  return `<b>${escapeHtml(channel)}</b> · ${escapeHtml(category)} · ${escapeHtml(platform)}`;
 }
 
 function windowLabel(window: AnyRecord | undefined): string {

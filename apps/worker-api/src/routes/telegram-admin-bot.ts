@@ -88,7 +88,7 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     return Response.json({ ok: true, handled: 'home' });
   }
 
-  if (text === '/report' || text === '/ops' || text === '📊 Open Reports' || text === '📣 Change Channel' || text === '🧭 Change Scope') {
+  if (text === '/report' || text === '/ops' || text === '📊 Open Reports' || text === '📣 Change Channel' || text === '🧭 Change Scope' || text === '📣 Change Channel') {
     await sendTelegramMessage(env, chatId, buildChannelPickerText(), await channelKeyboard(env));
     return Response.json({ ok: true, handled: 'channels' });
   }
@@ -178,7 +178,6 @@ async function sendReportSection(
 function buildUnauthorizedText(userId: number | null): string {
   return [
     '🚫 <b>Access denied</b>',
-    '━━━━━━━━━━━━━━━━━━━━',
     '',
     'This bot is restricted to approved admin users.',
     '',
@@ -188,40 +187,39 @@ function buildUnauthorizedText(userId: number | null): string {
   ].join('\n');
 }
 
+
 function buildHomeText(): string {
   return [
     '📊 <b>Content Command Center</b>',
-    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    '- Reports are grouped by channel, platform, and section.',
-    '- Use the keyboard below to navigate.',
+    'Reports by channel, platform, and section.',
+    'Use the keyboard below.',
   ].join('\n');
 }
+
 
 function buildChannelPickerText(): string {
   return [
     '📣 <b>Select Channel</b>',
-    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    'Choose the publishing channel you want to inspect.',
+    'Choose a publishing channel.',
   ].join('\n');
 }
+
 
 function buildPlatformPickerText(channelId: string): string {
   return [
     '🌐 <b>Select Platform</b>',
-    '━━━━━━━━━━━━━━━━━━━━',
     '',
-    `📣 Channel: <code>${escapeHtml(channelId)}</code>`,
+    `<b>Channel</b>: ${escapeHtml(channelId)}`,
     '',
-    'Choose a platform scope for this report.',
+    'Choose a platform.',
   ].join('\n');
 }
 
 function buildReportPickerText(channelId: string, platform: string): string {
   return [
     '🧭 <b>Select Report Section</b>',
-    '━━━━━━━━━━━━━━━━━━━━',
     '',
     `<b>Channel</b>: <code>${escapeHtml(channelId)}</code>`,
     `<b>Platform</b>: <code>${escapeHtml(platform)}</code>`,
@@ -299,7 +297,7 @@ function reportSectionKeyboard(active: OperationalReportSection): object {
     [label('pipeline', '🔄 Funnel'), label('publish', '📬 Publish')],
     [label('apify', '🕷 Apify'), label('health', '🩺 System')],
     [label('sources', '🏆 Sources')],
-    ['🧭 Change Scope', '🏠 Home'],
+    ['📣 Change Channel', '🏠 Home'],
   ]);
 }
 
