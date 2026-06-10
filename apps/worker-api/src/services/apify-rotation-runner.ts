@@ -252,7 +252,7 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   const id = source.id;
 
   if (id === 'src_crypto_x_news_media') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'news', 'media', 24);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'news', 'media', 24);
   }
 
   if (id === 'src_crypto_x_news_text') {
@@ -260,7 +260,7 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'voices', 'media', 24);
+    return buildCohortPlan(source, VOICES_COHORTS, bucket + 8, 'voices', 'media', 24);
   }
 
   if (id === 'src_crypto_x_voices_text') {
