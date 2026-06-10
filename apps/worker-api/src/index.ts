@@ -12,6 +12,7 @@ import { getRuntimeConfig } from './services/runtime-config';
 import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
 import { drainAICandidateQueue } from './services/backlog-drain';
 import { runApifyRotation } from './services/apify-rotation-runner';
+import { handleTelegramAdminBot } from './routes/telegram-admin-bot';
 import {
   failMaxAttemptPendingCandidates,
   isCandidateBacklogEnabled,
@@ -166,6 +167,11 @@ async function routeRequest(
       { ok: false, error: 'maintenance_mode', message: 'System is in maintenance mode' },
       { status: 503 }
     );
+  }
+
+  // Telegram admin bot webhook — public URL, protected by Telegram secret header and allowed user ids
+  if (path === '/telegram/admin/webhook') {
+    return handleTelegramAdminBot(request, env);
   }
 
   // Apify webhook — accepts secret from header OR query param (header preferred)

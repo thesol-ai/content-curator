@@ -14,6 +14,9 @@ export interface Env {
   OPENAI_API_KEY: string;
   TELEGRAM_BOT_TOKEN: string;
   INTERNAL_API_SECRET: string;
+  TELEGRAM_ADMIN_BOT_ENABLED?: string;
+  TELEGRAM_ADMIN_BOT_SECRET?: string;
+  TELEGRAM_ADMIN_ALLOWED_USER_IDS?: string;
   // برای R2 public access (اگر bucket public نباشد)
   R2_PUBLIC_BASE_URL?: string;
 

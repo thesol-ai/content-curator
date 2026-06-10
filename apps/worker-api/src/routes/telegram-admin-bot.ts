@@ -1,0 +1,176 @@
+import type { Env } from '../types';
+import { buildOperationalReport } from '../services/operational-report';
+import { formatOperationalReportForTelegram } from '../services/report-message-formatter';
+
+type TelegramUpdate = {
+  update_id?: number;
+  message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
+};
+
+type TelegramMessage = {
+  message_id?: number;
+  text?: string;
+  chat?: { id?: number | string; type?: string };
+  from?: { id?: number; username?: string; first_name?: string };
+};
+
+type TelegramCallbackQuery = {
+  id?: string;
+  data?: string;
+  message?: TelegramMessage;
+  from?: { id?: number; username?: string; first_name?: string };
+};
+
+export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Response> {
+  if (env.TELEGRAM_ADMIN_BOT_ENABLED !== 'true') {
+    return Response.json({ ok: false, error: 'telegram_admin_bot_disabled' }, { status: 404 });
+  }
+
+  if (req.method !== 'POST') {
+    return Response.json({ ok: false, error: 'method_not_allowed' }, { status: 405 });
+  }
+
+  if (!verifyTelegramAdminSecret(req, env)) {
+    return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
+
+  const update = await req.json().catch(() => null) as TelegramUpdate | null;
+  if (!update || typeof update !== 'object') {
+    return Response.json({ ok: false, error: 'invalid_update' }, { status: 400 });
+  }
+
+  const actorId = getActorId(update);
+  const chatId = getChatId(update);
+
+  if (!chatId) {
+    return Response.json({ ok: true, ignored: true, reason: 'missing_chat_id' });
+  }
+
+  if (!isAllowedAdminUser(actorId, env)) {
+    console.warn(`[TelegramAdminBot] unauthorized user_id=${actorId ?? 'unknown'}`);
+    return Response.json({ ok: true, ignored: true, reason: 'user_not_allowed' });
+  }
+
+  if (update.callback_query?.id) {
+    await answerCallbackQuery(env, update.callback_query.id);
+  }
+
+  const text = update.message?.text?.trim() ?? '';
+  const callbackData = update.callback_query?.data?.trim() ?? '';
+
+  if (text === '/start' || text === '/menu' || callbackData === 'menu') {
+    await sendTelegramMessage(env, chatId, buildMenuText(), menuKeyboard());
+    return Response.json({ ok: true, handled: 'menu' });
+  }
+
+  if (text === '/report' || text === '/ops' || callbackData === 'report:ops') {
+    await sendOperationalReport(env, chatId);
+    return Response.json({ ok: true, handled: 'report:ops' });
+  }
+
+  await sendTelegramMessage(env, chatId, buildMenuText(), menuKeyboard());
+  return Response.json({ ok: true, handled: 'fallback_menu' });
+}
+
+async function sendOperationalReport(env: Env, chatId: string | number): Promise<void> {
+  const reportUrl = new URL('https://telegram-admin.local/internal/report/ops?category=crypto');
+  const report = await buildOperationalReport(env, reportUrl);
+  const text = formatOperationalReportForTelegram(report as any);
+  await sendTelegramMessage(env, chatId, text, menuKeyboard());
+}
+
+function buildMenuText(): string {
+  return [
+    '🛠 <b>پنل مدیریت محتوا</b>',
+    '',
+    'فعلاً این بات فقط گزارش read-only می‌دهد.',
+    'عملیات اجرایی مثل drain backlog یا publish due بعداً با تأیید دوم اضافه می‌شود.',
+    '',
+    'یک گزینه را انتخاب کن:',
+  ].join('\n');
+}
+
+function menuKeyboard(): object {
+  return {
+    inline_keyboard: [
+      [{ text: '📊 گزارش کامل عملیات', callback_data: 'report:ops' }],
+      [{ text: '🏠 منو', callback_data: 'menu' }],
+    ],
+  };
+}
+
+async function sendTelegramMessage(
+  env: Env,
+  chatId: string | number,
+  text: string,
+  replyMarkup?: object,
+): Promise<void> {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not configured');
+
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Telegram sendMessage failed ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+async function answerCallbackQuery(env: Env, callbackQueryId: string): Promise<void> {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) return;
+
+  await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackQueryId }),
+  }).catch(() => undefined);
+}
+
+function verifyTelegramAdminSecret(req: Request, env: Env): boolean {
+  const expected = env.TELEGRAM_ADMIN_BOT_SECRET?.trim();
+  if (!expected) return env.ENVIRONMENT === 'local';
+
+  const provided =
+    req.headers.get('X-Telegram-Bot-Api-Secret-Token') ??
+    req.headers.get('x-telegram-bot-api-secret-token') ??
+    new URL(req.url).searchParams.get('secret');
+
+  return provided === expected;
+}
+
+function isAllowedAdminUser(userId: number | null, env: Env): boolean {
+  const raw = env.TELEGRAM_ADMIN_ALLOWED_USER_IDS?.trim();
+  if (!raw) return env.ENVIRONMENT === 'local';
+  if (!userId) return false;
+
+  const allowed = raw
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  return allowed.includes(String(userId));
+}
+
+function getActorId(update: TelegramUpdate): number | null {
+  return update.callback_query?.from?.id ?? update.message?.from?.id ?? null;
+}
+
+function getChatId(update: TelegramUpdate): string | number | null {
+  const chatId = update.callback_query?.message?.chat?.id ?? update.message?.chat?.id;
+  return chatId ?? null;
+}
