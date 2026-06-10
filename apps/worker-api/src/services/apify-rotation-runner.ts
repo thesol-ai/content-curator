@@ -323,7 +323,11 @@ function buildCohortPlan(
 function buildTwitterContent(accounts: string[], mode: RotationMode): string {
   const accountQuery = accounts.map(account => `from:${account}`).join(' OR ');
   const mediaPart = mode === 'media' ? 'filter:media' : '-filter:media';
-  return `(${accountQuery}) ${mediaPart} -filter:replies`;
+  return `(${accountQuery}) ${mediaPart} -filter:replies since:${currentUtcDate()}`;
+}
+
+function currentUtcDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 async function runApifyTask(
