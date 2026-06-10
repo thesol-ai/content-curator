@@ -44,6 +44,7 @@ const CACHE_TTL_SECONDS = 15 * 60;
 const STALE_CACHE_TTL_SECONDS = 2 * 60 * 60;
 const DEFAULT_MARKET_SNAPSHOT_SLOTS = '09:00,12:30,15:30,18:30,21:30';
 const MARKET_SNAPSHOT_BLOCKED_WINDOW = '01:00-07:00';
+const MARKET_SNAPSHOT_RETRY_WINDOW_MINUTES = 10;
 
 export async function buildMarketSnapshotText(env: Env): Promise<string> {
   const data = await getMarketSnapshotData(env);
@@ -64,7 +65,8 @@ export async function buildMarketSnapshotText(env: Env): Promise<string> {
 export async function sendMarketSnapshotDirect(
   env: Env,
   channelId = getMarketSnapshotChannelId(env),
-  force = false
+  force = false,
+  slotOverride?: string
 ): Promise<{
   ok: boolean;
   sent: boolean;
@@ -81,7 +83,10 @@ export async function sendMarketSnapshotDirect(
     return { ok: true, sent: false, skipped: true, reason: 'channel_disabled', slotKey: currentMarketSlotKey(channel.timezone) };
   }
 
-  const slotKey = currentMarketSlotKey(channel.timezone || 'Asia/Tehran');
+  const timezone = channel.timezone || 'Asia/Tehran';
+  const slotKey = slotOverride && isValidTimeSlot(slotOverride)
+    ? marketSlotKeyForSlot(timezone, slotOverride)
+    : currentMarketSlotKey(timezone);
   const sentKey = marketSentKey(channel.id, slotKey);
 
   if (!force) {
@@ -95,7 +100,17 @@ export async function sendMarketSnapshotDirect(
     }
   }
 
-  const text = await buildMarketSnapshotText(env);
+  let text: string;
+  try {
+    text = await buildMarketSnapshotText(env);
+  } catch (error) {
+    return {
+      ok: false,
+      sent: false,
+      slotKey,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   const result = await sendMarketSnapshotTelegram(env, channel, text);
 
@@ -146,18 +161,19 @@ export async function maybeSendMarketSnapshotDirect(env: Env): Promise<{
   const channel = await loadChannel(env, channelId);
   const timezone = channel?.timezone || 'Asia/Tehran';
   const parts = tehranDateParts(new Date(), timezone);
-  const slot = formatMarketSnapshotSlot(parts.hour, parts.minute);
+  const currentSlot = formatMarketSnapshotSlot(parts.hour, parts.minute);
   const schedule = getMarketSnapshotSchedule(env);
+  const dueSlot = findDueMarketSnapshotSlot(currentSlot, schedule.allowedSlots);
 
-  if (isTimeInBlockedWindow(slot, MARKET_SNAPSHOT_BLOCKED_WINDOW)) {
-    return { shouldRun: false, reason: `blocked_window_${slot}` };
+  if (isTimeInBlockedWindow(currentSlot, MARKET_SNAPSHOT_BLOCKED_WINDOW)) {
+    return { shouldRun: false, reason: `blocked_window_${currentSlot}` };
   }
 
-  if (!schedule.allowedSlots.includes(slot)) {
-    return { shouldRun: false, reason: `not_market_snapshot_slot_${slot}` };
+  if (!dueSlot) {
+    return { shouldRun: false, reason: `not_market_snapshot_slot_${currentSlot}` };
   }
 
-  const result = await sendMarketSnapshotDirect(env, channelId, false);
+  const result = await sendMarketSnapshotDirect(env, channelId, false, dueSlot);
 
   return {
     shouldRun: true,
@@ -188,6 +204,18 @@ function getMarketSnapshotSchedule(env: Env): { allowedSlots: string[] } {
 
 function formatMarketSnapshotSlot(hour: number, minute: number): string {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function findDueMarketSnapshotSlot(currentSlot: string, allowedSlots: string[]): string | null {
+  if (!isValidTimeSlot(currentSlot)) return null;
+
+  const currentMinute = minutesSinceMidnight(currentSlot);
+
+  return allowedSlots
+    .filter(isValidTimeSlot)
+    .map((slot) => ({ slot, minute: minutesSinceMidnight(slot) }))
+    .filter(({ minute }) => currentMinute >= minute && currentMinute - minute <= MARKET_SNAPSHOT_RETRY_WINDOW_MINUTES)
+    .sort((a, b) => b.minute - a.minute)[0]?.slot ?? null;
 }
 
 function isValidTimeSlot(value: string): boolean {
@@ -390,25 +418,15 @@ function utf16Length(value: string): number {
 }
 
 async function getMarketSnapshotData(env: Env): Promise<MarketSnapshotData> {
-  const now = Math.floor(Date.now() / 1000);
-  const cached = await readCachedSnapshot(env);
+  const fresh = await fetchMarketSnapshotData();
 
-  if (cached && now - cached.cachedAt <= CACHE_TTL_SECONDS && hasCompleteMarketSnapshotData(cached.data)) {
-    return cached.data;
-  }
+  // Cache is kept only for diagnostics/debugging.
+  // Market snapshots must never publish stale cached prices.
+  await writeCachedSnapshot(env, fresh).catch((error) => {
+    console.warn('[MarketSnapshot] Cache write skipped:', error instanceof Error ? error.message : String(error));
+  });
 
-  try {
-    const fresh = await fetchMarketSnapshotData();
-    await writeCachedSnapshot(env, fresh);
-    return fresh;
-  } catch (error) {
-    if (cached && now - cached.cachedAt <= STALE_CACHE_TTL_SECONDS) {
-      console.warn('[MarketSnapshot] Using stale cached data after fetch failure:', error instanceof Error ? error.message : String(error));
-      return cached.data;
-    }
-
-    throw error;
-  }
+  return fresh;
 }
 
 async function fetchMarketSnapshotData(): Promise<MarketSnapshotData> {
@@ -729,6 +747,11 @@ function formatTehranTime(unixSec: number): string {
 function currentMarketSlotKey(timezone: string): string {
   const parts = tehranDateParts(new Date(), timezone || 'Asia/Tehran');
   return `${parts.year}${parts.month}${parts.day}_${String(parts.hour).padStart(2, '0')}${String(parts.minute).padStart(2, '0')}`;
+}
+
+function marketSlotKeyForSlot(timezone: string, slot: string): string {
+  const parts = tehranDateParts(new Date(), timezone || 'Asia/Tehran');
+  return `${parts.year}${parts.month}${parts.day}_${slot.replace(':', '')}`;
 }
 
 function tehranDateParts(date: Date, timezone: string): { year: string; month: string; day: string; hour: number; minute: number } {
