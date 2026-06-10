@@ -41,7 +41,9 @@ export function formatTelegramMessage(input: TelegramMessageFormatInput): Telegr
   const cleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
   const footer = buildFooterHtml(input);
   const escapedBody = applyTelegramDirection(escapeHtml(cleanedBody), input.language);
-  const footerHtml = applyTelegramDirection(footer.html, input.language);
+  // Direction marks are applied only to the translated body.
+  // Source links, signatures, and channel IDs must remain neutral/LTR so @handles and links render correctly.
+  const footerHtml = footer.html;
 
   if (!footerHtml) {
     return truncateHtmlText(escapedBody, maxLength, false);

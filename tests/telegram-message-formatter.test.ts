@@ -109,7 +109,9 @@ describe('telegram-message-formatter', () => {
       maxLength: 4096,
     });
 
-    expect(result.html).toContain('\u200Fمتن خبر\n\n\u200F<a href="https://example.com/post">منبع</a>\n\u200F— The &lt;Sol&gt; Crypto\n\u200F@thesolxcrypto_fa');
+    expect(result.html).toContain('\u200Fمتن خبر\n\n<a href="https://example.com/post">منبع</a>\n— The &lt;Sol&gt; Crypto\n@thesolxcrypto_fa');
+    expect(result.html).not.toContain('\n\u200F<a href="https://example.com/post">منبع</a>');
+    expect(result.html).not.toContain('\n\u200F@thesolxcrypto_fa');
   });
 
   it('keeps source and channel footer adjacent without an empty line', () => {
