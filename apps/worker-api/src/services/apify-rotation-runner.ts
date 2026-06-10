@@ -106,24 +106,38 @@ export async function runApifyRotation(
     };
   }
 
-  if (!options.force) {
-    const claimed = await claimRotationBucket(env, bucket);
-    if (!claimed) {
-      return {
-        ok: true,
-        skipped: true,
-        reason: 'rotation_bucket_already_claimed',
-        bucket,
-        rotationRunId,
-        plans: [],
-      };
-    }
-  }
-
   const sources = await loadRotationSources(env, options.onlySourceId);
-  const plans = sources
+  const allPlans = sources
     .map(source => buildRotationPlan(source, bucket))
     .filter((plan): plan is RotationPlan => Boolean(plan));
+
+  const maxSourcesPerTick = options.force || options.dryRun
+    ? allPlans.length
+    : getMaxSourcesPerTick(env);
+
+  const plans: RotationPlan[] = [];
+  for (const plan of allPlans) {
+    if (plans.length >= maxSourcesPerTick) break;
+
+    if (options.force || options.dryRun) {
+      plans.push(plan);
+      continue;
+    }
+
+    const claimed = await claimRotationSourceBucket(env, bucket, plan.source.id);
+    if (claimed) plans.push(plan);
+  }
+
+  if (plans.length === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'rotation_bucket_sources_already_claimed',
+      bucket,
+      rotationRunId,
+      plans: [],
+    };
+  }
 
   await recordRunEvent(env, {
     runId: rotationRunId,
@@ -134,6 +148,8 @@ export async function runApifyRotation(
       bucket,
       intervalHours,
       dryRun: options.dryRun === true,
+      maxSourcesPerTick,
+      remainingPlannedSources: allPlans.length,
       plannedSources: plans.map(plan => ({
         sourceId: plan.source.id,
         cohortName: plan.cohortName,
@@ -357,26 +373,16 @@ async function loadRotationSources(env: Env, onlySourceId?: string): Promise<Sou
     .filter(row => !onlySourceId || row.id === onlySourceId);
 }
 
-async function claimRotationBucket(env: Env, bucket: number): Promise<boolean> {
-  const key = 'apify_rotation_last_bucket_crypto';
-  const value = String(bucket);
+async function claimRotationSourceBucket(env: Env, bucket: number, sourceId: string): Promise<boolean> {
+  const key = `apify_rotation_bucket_${bucket}_${sourceId}`;
+  const value = 'claimed';
 
-  const current = await env.DB
-    .prepare('SELECT value FROM settings WHERE key=?')
-    .bind(key)
-    .first<{ value: string }>();
-
-  if (current?.value === value) return false;
-
-  await env.DB.prepare(`
-    INSERT INTO settings (key, value, updated_at)
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
     VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(key) DO UPDATE SET
-      value=excluded.value,
-      updated_at=CURRENT_TIMESTAMP
   `).bind(key, value).run();
 
-  return true;
+  return (result.meta.changes ?? 0) > 0;
 }
 
 function isRotationEnabled(env: Env): boolean {
@@ -391,6 +397,11 @@ function getRotationIntervalHours(env: Env): number {
 function getWaitForFinishSeconds(env: Env): number {
   const value = Number(env.APIFY_ROTATION_WAIT_FOR_FINISH_SECONDS ?? 60);
   return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 60) : 60;
+}
+
+function getMaxSourcesPerTick(env: Env): number {
+  const value = Number(env.APIFY_ROTATION_MAX_SOURCES_PER_TICK ?? 2);
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 6) : 2;
 }
 
 function positiveModulo(value: number, size: number): number {
