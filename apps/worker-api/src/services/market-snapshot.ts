@@ -4,6 +4,7 @@ import { publishToTelegram } from './telegram-publisher';
 interface CoinConfig {
   symbol: string;
   binanceSymbol: string;
+  coinGeckoId: string;
 }
 
 interface MarketSnapshotData {
@@ -14,14 +15,14 @@ interface MarketSnapshotData {
 }
 
 const COINS: CoinConfig[] = [
-  { symbol: 'BTC', binanceSymbol: 'BTCUSDT' },
-  { symbol: 'ETH', binanceSymbol: 'ETHUSDT' },
-  { symbol: 'SOL', binanceSymbol: 'SOLUSDT' },
-  { symbol: 'XRP', binanceSymbol: 'XRPUSDT' },
-  { symbol: 'BNB', binanceSymbol: 'BNBUSDT' },
-  { symbol: 'ADA', binanceSymbol: 'ADAUSDT' },
-  { symbol: 'TON', binanceSymbol: 'TONUSDT' },
-  { symbol: 'DOGE', binanceSymbol: 'DOGEUSDT' },
+  { symbol: 'BTC', binanceSymbol: 'BTCUSDT', coinGeckoId: 'bitcoin' },
+  { symbol: 'ETH', binanceSymbol: 'ETHUSDT', coinGeckoId: 'ethereum' },
+  { symbol: 'SOL', binanceSymbol: 'SOLUSDT', coinGeckoId: 'solana' },
+  { symbol: 'XRP', binanceSymbol: 'XRPUSDT', coinGeckoId: 'ripple' },
+  { symbol: 'BNB', binanceSymbol: 'BNBUSDT', coinGeckoId: 'binancecoin' },
+  { symbol: 'ADA', binanceSymbol: 'ADAUSDT', coinGeckoId: 'cardano' },
+  { symbol: 'TON', binanceSymbol: 'TONUSDT', coinGeckoId: 'the-open-network' },
+  { symbol: 'DOGE', binanceSymbol: 'DOGEUSDT', coinGeckoId: 'dogecoin' },
 ];
 
 type TelegramEntity = {
@@ -412,7 +413,7 @@ async function getMarketSnapshotData(env: Env): Promise<MarketSnapshotData> {
 
 async function fetchMarketSnapshotData(): Promise<MarketSnapshotData> {
   const [priceData, globalData] = await Promise.all([
-    fetchBinancePrices(),
+    fetchPriceLinesWithFallback(),
     fetchCoinGeckoGlobalOptional(),
   ]);
 
@@ -422,6 +423,35 @@ async function fetchMarketSnapshotData(): Promise<MarketSnapshotData> {
     totalMarketCapUsd: globalData.totalMarketCapUsd,
     btcDominance: globalData.btcDominance,
   };
+}
+
+async function fetchPriceLinesWithFallback(): Promise<string[]> {
+  try {
+    return await fetchBinancePrices();
+  } catch (error) {
+    console.warn('[MarketSnapshot] Binance prices failed; trying CoinGecko fallback:', error instanceof Error ? error.message : String(error));
+    return fetchCoinGeckoPrices();
+  }
+}
+
+async function fetchCoinGeckoPrices(): Promise<string[]> {
+  const ids = COINS.map((coin) => coin.coinGeckoId).join(',');
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd&include_24hr_change=true`;
+
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`CoinGecko price fallback error: ${res.status}`);
+
+  const data = await res.json<any>();
+
+  return COINS.map((coin) => {
+    const row = data?.[coin.coinGeckoId];
+    const price = Number(row?.usd);
+    const change = Number(row?.usd_24h_change);
+    return formatMarketLine(coin.symbol, price, change);
+  });
 }
 
 async function fetchBinancePrices(): Promise<string[]> {
