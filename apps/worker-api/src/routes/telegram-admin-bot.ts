@@ -49,7 +49,8 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
 
   if (!isAllowedAdminUser(actorId, env)) {
     console.warn(`[TelegramAdminBot] unauthorized user_id=${actorId ?? 'unknown'}`);
-    return Response.json({ ok: true, ignored: true, reason: 'user_not_allowed' });
+    await sendTelegramMessage(env, chatId, buildUnauthorizedText(actorId), undefined);
+    return Response.json({ ok: true, ignored: true, reason: 'user_not_allowed', user_id: actorId ?? null });
   }
 
   if (update.callback_query?.id) {
@@ -78,6 +79,18 @@ async function sendOperationalReport(env: Env, chatId: string | number): Promise
   const report = await buildOperationalReport(env, reportUrl);
   const text = formatOperationalReportForTelegram(report as any);
   await sendTelegramMessage(env, chatId, text, menuKeyboard());
+}
+
+function buildUnauthorizedText(userId: number | null): string {
+  return [
+    '⛔️ <b>دسترسی مجاز نیست</b>',
+    '',
+    'این bot فقط برای ادمین‌های ثبت‌شده فعال است.',
+    '',
+    `user_id شما: <code>${userId ?? 'unknown'}</code>`,
+    '',
+    'این عدد باید در TELEGRAM_ADMIN_ALLOWED_USER_IDS اضافه شود.',
+  ].join('\n');
 }
 
 function buildMenuText(): string {

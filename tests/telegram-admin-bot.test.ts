@@ -62,7 +62,7 @@ describe('telegram admin bot', () => {
     vi.unstubAllGlobals();
   });
 
-  it('ignores unauthorized Telegram users without sending messages', async () => {
+  it('shows unauthorized users their Telegram user_id for onboarding', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -79,7 +79,14 @@ describe('telegram admin bot', () => {
     expect(res.status).toBe(200);
     expect(body.ignored).toBe(true);
     expect(body.reason).toBe('user_not_allowed');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(body.user_id).toBe(999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(payload.chat_id).toBe(222);
+    expect(payload.text).toContain('user_id شما');
+    expect(payload.text).toContain('<code>999</code>');
+    expect(payload.text).not.toContain('گزارش کامل عملیات');
 
     vi.unstubAllGlobals();
   });
