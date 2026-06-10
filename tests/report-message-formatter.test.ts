@@ -83,10 +83,10 @@ describe('report-message-formatter', () => {
   it('formats the costs section separately', () => {
     const text = formatOperationalReportForTelegram(sampleReport, 'costs');
 
-    expect(text).toContain('💸 <b>Costs</b>');
-    expect(text).toContain('💰 <b>Cost Windows</b>');
-    expect(text).toContain('AI spent');
-    expect(text).toContain('Apify spent');
+    expect(text).toContain('💸 <b>Cost Summary</b>');
+    expect(text).toContain('AI scope: global');
+    expect(text).toContain('- AI:');
+    expect(text).toContain('- Apify:');
             expect(text).not.toContain('Publish Queue</b>');
   });
 

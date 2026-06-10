@@ -90,7 +90,9 @@ describe('telegram admin bot', () => {
     expect(fetchMock.mock.calls[0][0]).toContain('/sendMessage');
     expect(payload.chat_id).toBe(222);
     expect(payload.text).toContain('📊 <b>Content Command Center</b>');
-    expect(payload.reply_markup.keyboard[0][0].text).toBe('📊 Open Reports');
+    const homeButtons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+    expect(homeButtons).toContain('🟢 Monitoring');
+    expect(homeButtons).toContain('📈 Reporting');
     expect(payload.reply_markup.resize_keyboard).toBe(true);
 
     vi.unstubAllGlobals();
@@ -177,7 +179,7 @@ describe('telegram admin bot', () => {
 
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(payload.text).toContain('📊 <b>Overview</b>');
-    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('● 📊 Overview');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('📊 Overview');
     expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('💸 Costs');
 
     vi.unstubAllGlobals();
@@ -199,12 +201,14 @@ describe('telegram admin bot', () => {
     const body: any = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.handled).toBe('report:costs');
+    expect(body.handled).toBe('costs_menu');
 
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(fetchMock.mock.calls[0][0]).toContain('/sendMessage');
     expect(payload.text).toContain('💸 <b>Costs</b>');
-    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('🔄 Funnel');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('💸 Summary');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('🤖 AI Providers');
+    expect(payload.reply_markup.keyboard.flat().map((b: any) => b.text)).toContain('🕷 Apify');
 
     vi.unstubAllGlobals();
   });
