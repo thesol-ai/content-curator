@@ -210,7 +210,7 @@ describe('telegram-message-formatter', () => {
 
     expect(result.footerIncluded).toBe(false);
     expect(result.footerOmitted).toBe(true);
-    expect(result.html).toBe('abcdefg');
+    expect(result.html).toBe('\u200Fabcdefg');
     expect(result.html).not.toContain('<a href=');
   });
 
@@ -225,6 +225,20 @@ describe('telegram-message-formatter', () => {
 
     expect(result.html).not.toMatch(/&(?:a|am|amp)$/);
     expect(result.html).toContain('…');
+  });
+
+  it('prefixes Persian Telegram captions with RTL marks even when they start with emoji or English text', () => {
+    const result = formatTelegramMessage({
+      body: '🚀 Ondo Perps نسخه بتای عمومی خود را راه‌اندازی کرد.\nETF بیت‌کوین دوباره در مرکز توجه است.',
+      sourceUrl: 'https://example.com/post',
+      language: 'fa',
+      channel: channel(),
+      maxLength: 4096,
+    });
+
+    expect(result.html.charCodeAt(0)).toBe(8207);
+    expect(result.html).toContain('\n\u200FETF بیت‌کوین');
+    expect(result.html).toContain('\n\n\u200F<a href="https://example.com/post">منبع</a>');
   });
 
   it('keeps the small standalone helpers stable', () => {

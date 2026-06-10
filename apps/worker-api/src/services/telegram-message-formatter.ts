@@ -33,23 +33,26 @@ const DEFAULT_SOURCE_LABELS: Record<string, string> = {
 
 const ELLIPSIS = '…';
 const FOOTER_SEPARATOR = '\n\n';
+const RTL_MARK = '\u200F';
+const RTL_LANGUAGES = new Set(['fa', 'ar', 'he', 'ur']);
 
 export function formatTelegramMessage(input: TelegramMessageFormatInput): TelegramMessageFormatResult {
   const maxLength = normalizeMaxLength(input.maxLength);
   const cleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
   const footer = buildFooterHtml(input);
-  const escapedBody = escapeHtml(cleanedBody);
+  const escapedBody = applyTelegramDirection(escapeHtml(cleanedBody), input.language);
+  const footerHtml = applyTelegramDirection(footer.html, input.language);
 
-  if (!footer.html) {
+  if (!footerHtml) {
     return truncateHtmlText(escapedBody, maxLength, false);
   }
 
-  const fullHtml = joinBodyAndFooter(escapedBody, footer.html);
+  const fullHtml = joinBodyAndFooter(escapedBody, footerHtml);
   if (fullHtml.length <= maxLength) {
     return { html: fullHtml, truncated: false, footerIncluded: true, footerOmitted: false };
   }
 
-  const reserved = FOOTER_SEPARATOR.length + footer.html.length;
+  const reserved = FOOTER_SEPARATOR.length + footerHtml.length;
   const remainingForBody = maxLength - reserved;
 
   if (remainingForBody >= 1) {
@@ -194,6 +197,24 @@ function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
     html: blocks.join(String.fromCharCode(10, 10)),
     visibleParts: blocks.length,
   };
+}
+
+function applyTelegramDirection(html: string, language: string): string {
+  if (!isRtlLanguage(language)) return html;
+  const value = String(html ?? '');
+  if (!value) return value;
+
+  return value
+    .split('\n')
+    .map((line) => {
+      if (!line.trim()) return line;
+      return line.startsWith(RTL_MARK) ? line : `${RTL_MARK}${line}`;
+    })
+    .join('\n');
+}
+
+function isRtlLanguage(language: string): boolean {
+  return RTL_LANGUAGES.has(String(language ?? '').trim().toLowerCase());
 }
 
 function truncateHtmlText(escapedBody: string, maxLength: number, footerOmitted: boolean): TelegramMessageFormatResult {
