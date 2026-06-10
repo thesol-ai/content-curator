@@ -36,7 +36,10 @@ const FOOTER_SEPARATOR = '\n\n';
 
 export function formatTelegramMessage(input: TelegramMessageFormatInput): TelegramMessageFormatResult {
   const maxLength = normalizeMaxLength(input.maxLength);
-  const cleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
+  const cleanedBody = ensurePersianCaptionStartsNaturally(
+    removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim(),
+    input.language
+  );
   const footer = buildFooterHtml(input);
   // Do not inject Unicode direction marks.
   // Telegram boxes, numeric tables, tickers, links, and @handles can break badly when the whole message is forced RTL.
@@ -154,6 +157,29 @@ export function removeVisibleHashtagLines(body: string): string {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function ensurePersianCaptionStartsNaturally(body: string, language: string): string {
+  const value = String(body ?? '').trim();
+  if (!value || String(language ?? '').trim().toLowerCase() !== 'fa') return value;
+
+  // Structured market snapshots must remain untouched; they intentionally start with a Persian title
+  // followed by LTR ticker/price rows.
+  if (value.includes('نمای بازار کریپتو') || value.includes('BTC  $') || value.includes('BTC $')) {
+    return value;
+  }
+
+  const firstMeaningful = value.replace(/^[\s"'“”‘’()[\]{}<>«»]+/u, '');
+  if (!firstMeaningful) return value;
+
+  // Only rewrite mixed Persian captions. Pure Latin/debug/test text should remain untouched.
+  if (!/[\p{Script=Arabic}]/u.test(firstMeaningful)) return value;
+
+  // If the first visible character is Persian/Arabic-script text, Telegram usually chooses the right paragraph direction.
+  if (/^[\p{Script=Arabic}]/u.test(firstMeaningful)) return value;
+
+  // If it starts with emoji, Latin ticker/name, number, or symbol, add a Persian lead-in.
+  return `گزارش تازه: ${value}`;
 }
 
 function buildFooterHtml(input: TelegramMessageFormatInput): FooterBuildResult {
