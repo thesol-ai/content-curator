@@ -1,0 +1,30 @@
+{
+  "name": "content-curator",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@10.9.2",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.toml",
+    "build": "wrangler deploy --dry-run --outdir dist --config wrangler.toml",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint apps/worker-api/src --ext .ts",
+    "test": "vitest run",
+    "deploy": "wrangler deploy --env production --config wrangler.toml",
+    "db:migrate:local": "wrangler d1 migrations apply content-curator-db-v2 --local --config wrangler.toml",
+    "db:migrate:remote": "wrangler d1 migrations apply content-curator-db-v2 --remote --env production --config wrangler.toml",
+    "test:watch": "vitest",
+    "validate": "npm run typecheck && npm test && npm run build",
+    "validate:phase11": "node scripts/phase11-validation.mjs",
+    "validate:e2e": "npm run validate && npm run validate:phase11",
+    "validate:media": "vitest run tests/media-qa.test.ts tests/media-resolver.test.ts tests/e2e-validation.test.ts",
+    "validate:release": "node scripts/release-hardening-check.mjs",
+    "validate:release:strict": "RELEASE_STRICT=1 node scripts/release-hardening-check.mjs",
+    "validate:audit": "npm audit --audit-level=moderate"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250523.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.98.0"
+  }
+}

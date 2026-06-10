@@ -1,0 +1,790 @@
+import type { Env, ChannelRow } from '../types';
+import { publishToTelegram } from './telegram-publisher';
+
+interface CoinConfig {
+  symbol: string;
+  binanceSymbol: string;
+  coinGeckoId: string;
+}
+
+interface MarketSnapshotData {
+  generatedAt: number;
+  lines: string[];
+  totalMarketCapUsd?: number;
+  btcDominance?: number;
+}
+
+const COINS: CoinConfig[] = [
+  { symbol: 'BTC', binanceSymbol: 'BTCUSDT', coinGeckoId: 'bitcoin' },
+  { symbol: 'ETH', binanceSymbol: 'ETHUSDT', coinGeckoId: 'ethereum' },
+  { symbol: 'SOL', binanceSymbol: 'SOLUSDT', coinGeckoId: 'solana' },
+  { symbol: 'XRP', binanceSymbol: 'XRPUSDT', coinGeckoId: 'ripple' },
+  { symbol: 'BNB', binanceSymbol: 'BNBUSDT', coinGeckoId: 'binancecoin' },
+  { symbol: 'ADA', binanceSymbol: 'ADAUSDT', coinGeckoId: 'cardano' },
+  { symbol: 'TON', binanceSymbol: 'TONUSDT', coinGeckoId: 'the-open-network' },
+  { symbol: 'DOGE', binanceSymbol: 'DOGEUSDT', coinGeckoId: 'dogecoin' },
+];
+
+type TelegramEntity = {
+  type: 'custom_emoji' | 'text_link';
+  offset: number;
+  length: number;
+  custom_emoji_id?: string;
+  url?: string;
+};
+
+const MARKET_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'ADA', 'TON', 'DOGE'] as const;
+type MarketSymbol = typeof MARKET_SYMBOLS[number];
+
+
+const SNAPSHOT_SOURCE_URL = 'https://www.binance.com/en/markets';
+const DEFAULT_CHANNEL_ID = 'crypto_fa_pilot';
+const CACHE_KEY = 'market_snapshot_cache_v2';
+const CACHE_TTL_SECONDS = 15 * 60;
+const STALE_CACHE_TTL_SECONDS = 2 * 60 * 60;
+const DEFAULT_MARKET_SNAPSHOT_SLOTS = '09:00,12:30,15:30,18:30,21:30';
+const MARKET_SNAPSHOT_BLOCKED_WINDOW = '01:00-07:00';
+const MARKET_SNAPSHOT_RETRY_WINDOW_MINUTES = 10;
+
+export async function buildMarketSnapshotText(env: Env): Promise<string> {
+  const data = await getMarketSnapshotData(env);
+
+  const body = [
+    '📊 نمای بازار کریپتو',
+    '',
+    ...data.lines,
+  ];
+
+  body.push('');
+  body.push(`🌐 ارزش کل بازار: ${formatUsdCompact(data.totalMarketCapUsd)}`);
+  body.push(`سهم بیت‌کوین: ${formatPercent(data.btcDominance)}`);
+
+  return body.join('\n').trim();
+}
+
+export async function sendMarketSnapshotDirect(
+  env: Env,
+  channelId = getMarketSnapshotChannelId(env),
+  force = false,
+  slotOverride?: string
+): Promise<{
+  ok: boolean;
+  sent: boolean;
+  skipped?: boolean;
+  reason?: string;
+  slotKey: string;
+  messageId?: string;
+  error?: string;
+  text?: string;
+}> {
+  const channel = await loadChannel(env, channelId);
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+  if (!isEnabled(channel.enabled) || !isEnabled(channel.publish_enabled)) {
+    return { ok: true, sent: false, skipped: true, reason: 'channel_disabled', slotKey: currentMarketSlotKey(channel.timezone) };
+  }
+
+  const timezone = channel.timezone || 'Asia/Tehran';
+  const slotKey = slotOverride && isValidTimeSlot(slotOverride)
+    ? marketSlotKeyForSlot(timezone, slotOverride)
+    : currentMarketSlotKey(timezone);
+  const sentKey = marketSentKey(channel.id, slotKey);
+
+  if (!force) {
+    const alreadySent = await env.DB
+      .prepare('SELECT value FROM settings WHERE key=? LIMIT 1')
+      .bind(sentKey)
+      .first<{ value: string }>();
+
+    if (alreadySent) {
+      return { ok: true, sent: false, skipped: true, reason: 'already_sent_for_slot', slotKey };
+    }
+  }
+
+  let text: string;
+  try {
+    text = await buildMarketSnapshotText(env);
+  } catch (error) {
+    return {
+      ok: false,
+      sent: false,
+      slotKey,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const result = await sendMarketSnapshotTelegram(env, channel, text);
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      sent: false,
+      slotKey,
+      error: result.error || 'telegram_publish_failed',
+      text,
+    };
+  }
+
+  await env.DB
+    .prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value=excluded.value,
+        updated_at=CURRENT_TIMESTAMP
+    `)
+    .bind(sentKey, JSON.stringify({ sentAt: Math.floor(Date.now() / 1000), messageId: result.messageId ?? null }))
+    .run();
+
+  return {
+    ok: true,
+    sent: true,
+    slotKey,
+    messageId: result.messageId,
+    text,
+  };
+}
+
+export async function maybeSendMarketSnapshotDirect(env: Env): Promise<{
+  shouldRun: boolean;
+  sent?: boolean;
+  skipped?: boolean;
+  reason?: string;
+  slotKey?: string;
+  messageId?: string;
+  error?: string;
+}> {
+  if (!isMarketSnapshotEnabled(env)) {
+    return { shouldRun: false, reason: 'market_snapshot_disabled' };
+  }
+
+  const channelId = getMarketSnapshotChannelId(env);
+  const channel = await loadChannel(env, channelId);
+  const timezone = channel?.timezone || 'Asia/Tehran';
+  const parts = tehranDateParts(new Date(), timezone);
+  const currentSlot = formatMarketSnapshotSlot(parts.hour, parts.minute);
+  const schedule = getMarketSnapshotSchedule(env);
+  const dueSlot = findDueMarketSnapshotSlot(currentSlot, schedule.allowedSlots);
+
+  if (isTimeInBlockedWindow(currentSlot, MARKET_SNAPSHOT_BLOCKED_WINDOW)) {
+    return { shouldRun: false, reason: `blocked_window_${currentSlot}` };
+  }
+
+  if (!dueSlot) {
+    return { shouldRun: false, reason: `not_market_snapshot_slot_${currentSlot}` };
+  }
+
+  const result = await sendMarketSnapshotDirect(env, channelId, false, dueSlot);
+
+  return {
+    shouldRun: true,
+    sent: result.sent,
+    skipped: result.skipped,
+    reason: result.reason,
+    slotKey: result.slotKey,
+    messageId: result.messageId,
+    error: result.error,
+  };
+}
+
+function isMarketSnapshotEnabled(env: Env): boolean {
+  return String(env.MARKET_SNAPSHOT_ENABLED ?? 'false').toLowerCase() === 'true';
+}
+
+function getMarketSnapshotSchedule(env: Env): { allowedSlots: string[] } {
+  const allowedSlots = String(env.MARKET_SNAPSHOT_SLOTS || DEFAULT_MARKET_SNAPSHOT_SLOTS)
+    .split(',')
+    .map(slot => slot.trim())
+    .filter(isValidTimeSlot)
+    .slice(0, 5);
+
+  return {
+    allowedSlots: allowedSlots.length > 0 ? allowedSlots : DEFAULT_MARKET_SNAPSHOT_SLOTS.split(','),
+  };
+}
+
+function formatMarketSnapshotSlot(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function findDueMarketSnapshotSlot(currentSlot: string, allowedSlots: string[]): string | null {
+  if (!isValidTimeSlot(currentSlot)) return null;
+
+  const currentMinute = minutesSinceMidnight(currentSlot);
+
+  return allowedSlots
+    .filter(isValidTimeSlot)
+    .map((slot) => ({ slot, minute: minutesSinceMidnight(slot) }))
+    .filter(({ minute }) => currentMinute >= minute && currentMinute - minute <= MARKET_SNAPSHOT_RETRY_WINDOW_MINUTES)
+    .sort((a, b) => b.minute - a.minute)[0]?.slot ?? null;
+}
+
+function isValidTimeSlot(value: string): boolean {
+  const m = value.match(/^(\d{2}):(\d{2})$/);
+  if (!m) return false;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+}
+
+function isTimeInBlockedWindow(slot: string, window: string): boolean {
+  if (!isValidTimeSlot(slot)) return false;
+  const m = window.match(/^(\d{2}:\d{2})-(\d{2}:\d{2})$/);
+  if (!m) return false;
+
+  const startSlot = m[1];
+  const endSlot = m[2];
+  if (!startSlot || !endSlot) return false;
+
+  const current = minutesSinceMidnight(slot);
+  const start = minutesSinceMidnight(startSlot);
+  const end = minutesSinceMidnight(endSlot);
+
+  if (start === end) return false;
+  if (start < end) return current >= start && current < end;
+  return current >= start || current < end;
+}
+
+function minutesSinceMidnight(slot: string): number {
+  const [hourText = '0', minuteText = '0'] = slot.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  return hour * 60 + minute;
+}
+
+function getMarketSnapshotChannelId(env: Env): string {
+  return String(env.MARKET_SNAPSHOT_CHANNEL_ID || DEFAULT_CHANNEL_ID).trim() || DEFAULT_CHANNEL_ID;
+}
+
+async function sendMarketSnapshotTelegram(
+  env: Env,
+  channel: ChannelRow,
+  bodyText: string
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  if (isCustomEmojiEnabled(env)) {
+    return sendMarketSnapshotTelegramWithEntities(env, channel, bodyText);
+  }
+
+  const result = await publishToTelegram(env, {
+    chatId: channel.telegram_chat_id,
+    captionShort: bodyText,
+    captionFull: bodyText,
+    sourceUrl: SNAPSHOT_SOURCE_URL,
+    method: 'sendMessage',
+    language: channel.language || 'fa',
+    channel,
+    mediaUrls: [],
+    mediaTypes: [],
+  });
+
+  return {
+    ok: result.ok,
+    messageId: result.messageId,
+    error: result.error,
+  };
+}
+
+async function sendMarketSnapshotTelegramWithEntities(
+  env: Env,
+  channel: ChannelRow,
+  bodyText: string
+): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured' };
+
+  const emojiMap = getCustomEmojiMap(env);
+  const built = buildMarketSnapshotTextWithEntities(bodyText, emojiMap, channel);
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: channel.telegram_chat_id,
+      text: built.text,
+      entities: built.entities,
+      link_preview_options: { is_disabled: true },
+    }),
+  });
+
+  const json: any = await res.json().catch(() => null);
+
+  if (!res.ok || json?.ok !== true) {
+    return {
+      ok: false,
+      error: json?.description || `Telegram sendMessage failed: ${res.status}`,
+    };
+  }
+
+  return {
+    ok: true,
+    messageId: String(json?.result?.message_id ?? ''),
+  };
+}
+
+function buildMarketSnapshotTextWithEntities(
+  bodyText: string,
+  emojiMap: Partial<Record<MarketSymbol, { id: string; fallback: string }>>,
+  channel: ChannelRow
+): { text: string; entities: TelegramEntity[] } {
+  const lines = bodyText.split('\n');
+  const outputLines: string[] = [];
+  const entities: TelegramEntity[] = [];
+
+  for (const line of lines) {
+    const symbolMatch = line.match(/^(BTC|ETH|SOL|XRP|BNB|ADA|TON|DOGE):\s/);
+    if (!symbolMatch) {
+      outputLines.push(line);
+      continue;
+    }
+
+    const symbol = symbolMatch[1] as MarketSymbol;
+    const customEmoji = emojiMap[symbol];
+
+    if (!customEmoji) {
+      outputLines.push(line);
+      continue;
+    }
+
+    const placeholder = customEmoji.fallback;
+    const prefix = `${placeholder} `;
+    const lineStartOffset = utf16Length(outputLines.join('\n')) + (outputLines.length > 0 ? 1 : 0);
+
+    outputLines.push(`${prefix}${line}`);
+
+    entities.push({
+      type: 'custom_emoji',
+      offset: lineStartOffset,
+      length: utf16Length(placeholder),
+      custom_emoji_id: customEmoji.id,
+    });
+  }
+
+  if (isEnabled(channel.source_enabled)) {
+    outputLines.push('');
+
+    const sourcePrefix = '🌏 ';
+    const sourceLabel = 'Source';
+    const sourceLine = `${sourcePrefix}${sourceLabel}`;
+    const sourceLineStart = utf16Length(outputLines.join('\n')) + (outputLines.length > 0 ? 1 : 0);
+
+    outputLines.push(sourceLine);
+
+    entities.push({
+      type: 'text_link',
+      offset: sourceLineStart + utf16Length(sourcePrefix),
+      length: utf16Length(sourceLabel),
+      url: SNAPSHOT_SOURCE_URL,
+    });
+  }
+
+  if (isEnabled(channel.channel_id_footer_enabled)) {
+    const footer = String(channel.channel_id_footer_text || '').trim();
+    if (footer) outputLines.push(footer);
+  }
+
+  return {
+    text: outputLines.join('\n').trim(),
+    entities,
+  };
+}
+
+function isCustomEmojiEnabled(env: Env): boolean {
+  return String(env.MARKET_SNAPSHOT_CUSTOM_EMOJIS_ENABLED ?? 'false').toLowerCase() === 'true';
+}
+
+function getCustomEmojiMap(env: Env): Partial<Record<MarketSymbol, { id: string; fallback: string }>> {
+  return {
+    BTC: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_BTC), '🥇'),
+    ETH: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_ETH), '💩'),
+    SOL: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_SOL), '💀'),
+    XRP: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_XRP), '👤'),
+    BNB: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_BNB), '🌧'),
+    ADA: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_ADA), '😭'),
+    TON: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_TON), '🌽'),
+    DOGE: customEmoji(cleanEmojiId(env.MARKET_SNAPSHOT_EMOJI_DOGE), '🐶'),
+  };
+}
+
+function customEmoji(id: string | undefined, fallback: string): { id: string; fallback: string } | undefined {
+  return id ? { id, fallback } : undefined;
+}
+
+function cleanEmojiId(value: unknown): string | undefined {
+  const text = String(value ?? '').trim();
+  return text || undefined;
+}
+
+function utf16Length(value: string): number {
+  return [...value].reduce((length, char) => length + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+}
+
+async function getMarketSnapshotData(env: Env): Promise<MarketSnapshotData> {
+  const fresh = await fetchMarketSnapshotData();
+
+  // Cache is kept only for diagnostics/debugging.
+  // Market snapshots must never publish stale cached prices.
+  await writeCachedSnapshot(env, fresh).catch((error) => {
+    console.warn('[MarketSnapshot] Cache write skipped:', error instanceof Error ? error.message : String(error));
+  });
+
+  return fresh;
+}
+
+async function fetchMarketSnapshotData(): Promise<MarketSnapshotData> {
+  const [priceData, globalData] = await Promise.all([
+    fetchPriceLinesWithFallback(),
+    fetchCoinGeckoGlobalOptional(),
+  ]);
+
+  return {
+    generatedAt: Math.floor(Date.now() / 1000),
+    lines: priceData,
+    totalMarketCapUsd: globalData.totalMarketCapUsd,
+    btcDominance: globalData.btcDominance,
+  };
+}
+
+async function fetchPriceLinesWithFallback(): Promise<string[]> {
+  const providers: Array<[string, () => Promise<string[]>]> = [
+    ['binance', fetchBinancePrices],
+    ['cryptocompare', fetchCryptoComparePrices],
+    ['coinlore', fetchCoinLorePrices],
+    ['coingecko', fetchCoinGeckoPrices],
+  ];
+
+  const errors: string[] = [];
+
+  for (const [name, fn] of providers) {
+    try {
+      const lines = await fn();
+      if (hasCompletePriceLines(lines)) return lines;
+      errors.push(`${name}: incomplete_price_lines`);
+    } catch (error) {
+      errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  throw new Error(`all_price_providers_failed: ${errors.join(' | ')}`);
+}
+
+async function fetchCryptoComparePrices(): Promise<string[]> {
+  const symbols = COINS.map((coin) => coin.symbol).join(',');
+  const url = `https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(symbols)}&tsyms=USD`;
+
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`CryptoCompare price error: ${res.status}`);
+
+  const data = await res.json<any>();
+  const raw = data?.RAW ?? {};
+
+  return COINS.map((coin) => {
+    const row = raw?.[coin.symbol]?.USD;
+    const price = Number(row?.PRICE);
+    const change = Number(row?.CHANGEPCT24HOUR);
+    return formatMarketLine(coin.symbol, price, change);
+  });
+}
+
+async function fetchCoinLorePrices(): Promise<string[]> {
+  const res = await fetch('https://api.coinlore.net/api/tickers/?start=0&limit=100', {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`CoinLore price error: ${res.status}`);
+
+  const data = await res.json<any>();
+  const rows = Array.isArray(data?.data) ? data.data : [];
+  const bySymbol = new Map<string, any>();
+
+  for (const row of rows) {
+    const symbol = String(row?.symbol ?? '').toUpperCase();
+    if (symbol && !bySymbol.has(symbol)) bySymbol.set(symbol, row);
+  }
+
+  return COINS.map((coin) => {
+    const row = bySymbol.get(coin.symbol);
+    const price = Number(row?.price_usd);
+    const change = Number(row?.percent_change_24h);
+    return formatMarketLine(coin.symbol, price, change);
+  });
+}
+
+function hasCompletePriceLines(lines: string[]): boolean {
+  return Array.isArray(lines)
+    && lines.length === COINS.length
+    && lines.every((line) => typeof line === 'string' && !line.includes('$—'));
+}
+
+async function fetchCoinGeckoPrices(): Promise<string[]> {
+  const ids = COINS.map((coin) => coin.coinGeckoId).join(',');
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd&include_24hr_change=true`;
+
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`CoinGecko price fallback error: ${res.status}`);
+
+  const data = await res.json<any>();
+
+  return COINS.map((coin) => {
+    const row = data?.[coin.coinGeckoId];
+    const price = Number(row?.usd);
+    const change = Number(row?.usd_24h_change);
+    return formatMarketLine(coin.symbol, price, change);
+  });
+}
+
+async function fetchBinancePrices(): Promise<string[]> {
+  const symbols = encodeURIComponent(JSON.stringify(COINS.map((coin) => coin.binanceSymbol)));
+  const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${symbols}`;
+
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`Binance price error: ${res.status}`);
+
+  const rows = await res.json<any[]>();
+  const bySymbol = new Map<string, any>();
+  for (const row of rows) bySymbol.set(String(row.symbol), row);
+
+  return COINS.map((coin) => {
+    const row = bySymbol.get(coin.binanceSymbol);
+    const price = Number(row?.lastPrice);
+    const change = Number(row?.priceChangePercent);
+    return formatMarketLine(coin.symbol, price, change);
+  });
+}
+
+async function fetchCoinGeckoGlobalOptional(): Promise<{ totalMarketCapUsd?: number; btcDominance?: number }> {
+  const coingecko = await fetchCoinGeckoGlobal();
+  if (hasUsableGlobalMarketData(coingecko)) return coingecko;
+
+  const coinlore = await fetchCoinLoreGlobalOptional();
+  if (hasUsableGlobalMarketData(coinlore)) return coinlore;
+
+  return coingecko;
+}
+
+async function fetchCoinGeckoGlobal(): Promise<{ totalMarketCapUsd?: number; btcDominance?: number }> {
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/global', {
+      headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+    });
+
+    if (!res.ok) {
+      console.warn(`[MarketSnapshot] CoinGecko global skipped: ${res.status}`);
+      return {};
+    }
+
+    const global = await res.json<any>();
+    return normalizeGlobalMarketData({
+      totalMarketCapUsd: global?.data?.total_market_cap?.usd,
+      btcDominance: global?.data?.market_cap_percentage?.btc,
+    });
+  } catch (error) {
+    console.warn('[MarketSnapshot] CoinGecko global failed:', error instanceof Error ? error.message : String(error));
+    return {};
+  }
+}
+
+async function fetchCoinLoreGlobalOptional(): Promise<{ totalMarketCapUsd?: number; btcDominance?: number }> {
+  try {
+    const res = await fetch('https://api.coinlore.net/api/global/', {
+      headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+    });
+
+    if (!res.ok) {
+      console.warn(`[MarketSnapshot] CoinLore global skipped: ${res.status}`);
+      return {};
+    }
+
+    const global = await res.json<any>();
+    const row = Array.isArray(global) ? global[0] : global?.data?.[0] ?? global?.data ?? global;
+
+    return normalizeGlobalMarketData({
+      totalMarketCapUsd: row?.total_mcap ?? row?.totalMarketCap ?? row?.total_market_cap,
+      btcDominance: row?.btc_d ?? row?.btcDominance ?? row?.btc_dominance,
+    });
+  } catch (error) {
+    console.warn('[MarketSnapshot] CoinLore global failed:', error instanceof Error ? error.message : String(error));
+    return {};
+  }
+}
+
+function normalizeGlobalMarketData(input: { totalMarketCapUsd?: unknown; btcDominance?: unknown }): { totalMarketCapUsd?: number; btcDominance?: number } {
+  const totalMarketCapUsd = Number(input.totalMarketCapUsd);
+  const btcDominance = Number(input.btcDominance);
+
+  return {
+    totalMarketCapUsd: Number.isFinite(totalMarketCapUsd) && totalMarketCapUsd > 0 ? totalMarketCapUsd : undefined,
+    btcDominance: Number.isFinite(btcDominance) && btcDominance > 0 ? btcDominance : undefined,
+  };
+}
+
+function hasUsableGlobalMarketData(data: { totalMarketCapUsd?: number; btcDominance?: number }): boolean {
+  return Number.isFinite(data.totalMarketCapUsd) && Number.isFinite(data.btcDominance);
+}
+
+function hasCompleteMarketSnapshotData(data: MarketSnapshotData): boolean {
+  return Array.isArray(data.lines)
+    && data.lines.length > 0
+    && Number.isFinite(data.totalMarketCapUsd)
+    && Number.isFinite(data.btcDominance);
+}
+
+async function readCachedSnapshot(env: Env): Promise<{ cachedAt: number; data: MarketSnapshotData } | null> {
+  const row = await env.DB
+    .prepare('SELECT value FROM settings WHERE key=? LIMIT 1')
+    .bind(CACHE_KEY)
+    .first<{ value: string }>();
+
+  if (!row?.value) return null;
+
+  try {
+    const parsed = JSON.parse(row.value);
+    if (!Number.isFinite(Number(parsed.cachedAt))) return null;
+    if (!parsed.data || !Array.isArray(parsed.data.lines)) return null;
+    return {
+      cachedAt: Number(parsed.cachedAt),
+      data: parsed.data as MarketSnapshotData,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedSnapshot(env: Env, data: MarketSnapshotData): Promise<void> {
+  const payload = JSON.stringify({
+    cachedAt: Math.floor(Date.now() / 1000),
+    data,
+  });
+
+  await env.DB
+    .prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value=excluded.value,
+        updated_at=CURRENT_TIMESTAMP
+    `)
+    .bind(CACHE_KEY, payload)
+    .run();
+}
+
+async function loadChannel(env: Env, channelId: string): Promise<ChannelRow | null> {
+  const row = await env.DB
+    .prepare('SELECT * FROM channels WHERE id=? LIMIT 1')
+    .bind(channelId)
+    .first<ChannelRow>();
+  return row ?? null;
+}
+
+function isEnabled(value: unknown): boolean {
+  if (value === false || value === 0 || value === '0') return false;
+  if (typeof value === 'string' && value.toLowerCase() === 'false') return false;
+  return true;
+}
+
+function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return '$—';
+  if (value >= 1000) return `$${Math.round(value).toLocaleString('en-US')}`;
+  if (value >= 1) return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+  return `$${value.toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
+}
+
+function formatUsdCompact(value?: number): string {
+  if (!Number.isFinite(value)) return '$—';
+  const n = Number(value);
+  if (n >= 1_000_000_000_000) return `$${(n / 1_000_000_000_000).toFixed(2)}T`;
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  return `$${Math.round(n).toLocaleString('en-US')}`;
+}
+
+function formatMarketLine(symbol: string, price: number, change: number): string {
+  const symbolText = symbol.padEnd(5, ' ');
+  const priceText = formatUsd(price).padEnd(9, ' ');
+
+  if (!Number.isFinite(change)) {
+    return `⚪ ${symbolText}${priceText} (• —)`;
+  }
+
+  if (change < 0) {
+    return `🔴 ${symbolText}${priceText} (▼ ${Math.abs(change).toFixed(1)}%)`;
+  }
+
+  if (change > 0) {
+    return `🟢 ${symbolText}${priceText} (▲ ${change.toFixed(1)}%)`;
+  }
+
+  return `⚪ ${symbolText}${priceText} (• 0.0%)`;
+}
+
+function formatSignedPercent(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}${value.toFixed(1)}%`;
+}
+
+function formatPercent(value?: number): string {
+  if (!Number.isFinite(value)) return '—';
+  return `${Number(value).toFixed(1)}%`;
+}
+
+function formatTehranTime(unixSec: number): string {
+  return new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
+    timeZone: 'Asia/Tehran',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(unixSec * 1000));
+}
+
+function currentMarketSlotKey(timezone: string): string {
+  const parts = tehranDateParts(new Date(), timezone || 'Asia/Tehran');
+  return `${parts.year}${parts.month}${parts.day}_${String(parts.hour).padStart(2, '0')}${String(parts.minute).padStart(2, '0')}`;
+}
+
+function marketSlotKeyForSlot(timezone: string, slot: string): string {
+  const parts = tehranDateParts(new Date(), timezone || 'Asia/Tehran');
+  return `${parts.year}${parts.month}${parts.day}_${slot.replace(':', '')}`;
+}
+
+function tehranDateParts(date: Date, timezone: string): { year: string; month: string; day: string; hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone || 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: Number(get('hour')),
+    minute: Number(get('minute')),
+  };
+}
+
+function marketSentKey(channelId: string, slotKey: string): string {
+  return `market_snapshot_sent_${channelId}_${slotKey}`;
+}
+
+function stableHash(input: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `market_${(h >>> 0).toString(16)}`;
+}
