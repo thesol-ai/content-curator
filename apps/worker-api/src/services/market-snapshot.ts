@@ -426,12 +426,77 @@ async function fetchMarketSnapshotData(): Promise<MarketSnapshotData> {
 }
 
 async function fetchPriceLinesWithFallback(): Promise<string[]> {
-  try {
-    return await fetchBinancePrices();
-  } catch (error) {
-    console.warn('[MarketSnapshot] Binance prices failed; trying CoinGecko fallback:', error instanceof Error ? error.message : String(error));
-    return fetchCoinGeckoPrices();
+  const providers: Array<[string, () => Promise<string[]>]> = [
+    ['binance', fetchBinancePrices],
+    ['cryptocompare', fetchCryptoComparePrices],
+    ['coinlore', fetchCoinLorePrices],
+    ['coingecko', fetchCoinGeckoPrices],
+  ];
+
+  const errors: string[] = [];
+
+  for (const [name, fn] of providers) {
+    try {
+      const lines = await fn();
+      if (hasCompletePriceLines(lines)) return lines;
+      errors.push(`${name}: incomplete_price_lines`);
+    } catch (error) {
+      errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+
+  throw new Error(`all_price_providers_failed: ${errors.join(' | ')}`);
+}
+
+async function fetchCryptoComparePrices(): Promise<string[]> {
+  const symbols = COINS.map((coin) => coin.symbol).join(',');
+  const url = `https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(symbols)}&tsyms=USD`;
+
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`CryptoCompare price error: ${res.status}`);
+
+  const data = await res.json<any>();
+  const raw = data?.RAW ?? {};
+
+  return COINS.map((coin) => {
+    const row = raw?.[coin.symbol]?.USD;
+    const price = Number(row?.PRICE);
+    const change = Number(row?.CHANGEPCT24HOUR);
+    return formatMarketLine(coin.symbol, price, change);
+  });
+}
+
+async function fetchCoinLorePrices(): Promise<string[]> {
+  const res = await fetch('https://api.coinlore.net/api/tickers/?start=0&limit=100', {
+    headers: { accept: 'application/json', 'user-agent': 'content-curator/market-snapshot' },
+  });
+
+  if (!res.ok) throw new Error(`CoinLore price error: ${res.status}`);
+
+  const data = await res.json<any>();
+  const rows = Array.isArray(data?.data) ? data.data : [];
+  const bySymbol = new Map<string, any>();
+
+  for (const row of rows) {
+    const symbol = String(row?.symbol ?? '').toUpperCase();
+    if (symbol && !bySymbol.has(symbol)) bySymbol.set(symbol, row);
+  }
+
+  return COINS.map((coin) => {
+    const row = bySymbol.get(coin.symbol);
+    const price = Number(row?.price_usd);
+    const change = Number(row?.percent_change_24h);
+    return formatMarketLine(coin.symbol, price, change);
+  });
+}
+
+function hasCompletePriceLines(lines: string[]): boolean {
+  return Array.isArray(lines)
+    && lines.length === COINS.length
+    && lines.every((line) => typeof line === 'string' && !line.includes('$—'));
 }
 
 async function fetchCoinGeckoPrices(): Promise<string[]> {
