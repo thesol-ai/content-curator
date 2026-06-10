@@ -26,7 +26,18 @@ type TelegramCallbackQuery = {
   from?: { id?: number; username?: string; first_name?: string };
 };
 
-type AdminScreen = 'home' | 'monitoring' | 'channels' | 'platforms' | 'reports' | 'costs' | 'ai_costs';
+type AdminScreen =
+  | 'home'
+  | 'monitoring'
+  | 'channels'
+  | 'platforms'
+  | 'reports'
+  | 'costs'
+  | 'ai_costs'
+  | 'operations'
+  | 'settings'
+  | 'audit'
+  | 'help';
 
 type AdminSession = {
   channelId?: string;
@@ -87,14 +98,12 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
       return Response.json({ ok: true, handled: 'duplicate_start_suppressed' });
     }
 
-    await saveSession(env, chatId, { screen: 'home' });
-    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+    await sendHome(env, chatId);
     return Response.json({ ok: true, handled: 'home' });
   }
 
   if (text === '/menu' || text === '🏠 Home') {
-    await saveSession(env, chatId, { screen: 'home' });
-    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+    await sendHome(env, chatId);
     return Response.json({ ok: true, handled: 'home' });
   }
 
@@ -110,11 +119,56 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     return Response.json({ ok: true, handled: 'channels' });
   }
 
+  if (text === '🛠 Operations') {
+    await saveSession(env, chatId, { screen: 'operations' });
+    await sendTelegramMessage(env, chatId, buildOperationsText(), operationsKeyboard());
+    return Response.json({ ok: true, handled: 'operations' });
+  }
+
+  if (text === '⚙️ Settings') {
+    await saveSession(env, chatId, { screen: 'settings' });
+    await sendTelegramMessage(env, chatId, buildSettingsText(), settingsKeyboard());
+    return Response.json({ ok: true, handled: 'settings' });
+  }
+
+  if (text === '🧾 Audit Log') {
+    await saveSession(env, chatId, { screen: 'audit' });
+    await sendTelegramMessage(env, chatId, buildAuditText(), auditKeyboard());
+    return Response.json({ ok: true, handled: 'audit' });
+  }
+
+  if (text === '❓ Help') {
+    await saveSession(env, chatId, { screen: 'help' });
+    await sendTelegramMessage(env, chatId, buildHelpText(), helpKeyboard());
+    return Response.json({ ok: true, handled: 'help' });
+  }
+
   const monitoringSection = parseMonitoringButton(text);
   if (monitoringSection) {
     await saveSession(env, chatId, { screen: 'monitoring' });
     await sendReportSection(env, chatId, monitoringSection, 'crypto_fa_pilot', 'all', monitoringKeyboard());
     return Response.json({ ok: true, handled: `monitoring:${monitoringSection}` });
+  }
+
+  const operationText = parseOperationButton(text);
+  if (operationText) {
+    await saveSession(env, chatId, { screen: 'operations' });
+    await sendTelegramMessage(env, chatId, buildOperationDisabledText(operationText), operationsKeyboard());
+    return Response.json({ ok: true, handled: 'operation_disabled' });
+  }
+
+  const settingsText = parseSettingsButton(text);
+  if (settingsText) {
+    await saveSession(env, chatId, { screen: 'settings' });
+    await sendTelegramMessage(env, chatId, settingsText, settingsKeyboard());
+    return Response.json({ ok: true, handled: 'settings_detail' });
+  }
+
+  const auditText = parseAuditButton(text);
+  if (auditText) {
+    await saveSession(env, chatId, { screen: 'audit' });
+    await sendTelegramMessage(env, chatId, auditText, auditKeyboard());
+    return Response.json({ ok: true, handled: 'audit_detail' });
   }
 
   if (text === '📊 Reports') {
@@ -172,15 +226,13 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     return Response.json({ ok: true, handled: `report:${section}` });
   }
 
-  await saveSession(env, chatId, { screen: 'home' });
-  await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+  await sendHome(env, chatId);
   return Response.json({ ok: true, handled: 'fallback_home' });
 }
 
 async function handleLegacyCallback(env: Env, chatId: string | number, callbackData: string): Promise<void> {
   if (callbackData === 'home') {
-    await saveSession(env, chatId, { screen: 'home' });
-    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+    await sendHome(env, chatId);
     return;
   }
 
@@ -212,8 +264,7 @@ async function handleLegacyCallback(env: Env, chatId: string | number, callbackD
     return;
   }
 
-  await saveSession(env, chatId, { screen: 'home' });
-  await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
+  await sendHome(env, chatId);
 }
 
 async function handleBack(env: Env, chatId: string | number): Promise<string> {
@@ -245,15 +296,13 @@ async function handleBack(env: Env, chatId: string | number): Promise<string> {
     return 'back:channels';
   }
 
-  if (session.screen === 'channels' || session.screen === 'monitoring') {
-    await saveSession(env, chatId, { screen: 'home' });
-    await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
-    return 'back:home';
-  }
+  await sendHome(env, chatId);
+  return 'back:home';
+}
 
+async function sendHome(env: Env, chatId: string | number): Promise<void> {
   await saveSession(env, chatId, { screen: 'home' });
   await sendTelegramMessage(env, chatId, buildHomeText(), homeKeyboard());
-  return 'back:home';
 }
 
 async function sendReportSection(
@@ -294,68 +343,61 @@ function buildHomeText(): string {
 }
 
 function buildMonitoringText(): string {
+  return ['🟢 <b>Monitoring</b>', '', 'Live operational checks and alerts.'].join('\n');
+}
+
+function buildOperationsText(): string {
+  return ['🛠 <b>Operations</b>', '', 'Operational actions are intentionally read-only for now.', 'This protects the publishing pipeline until confirmation flows and audit logs are added.'].join('\n');
+}
+
+function buildSettingsText(): string {
+  return ['⚙️ <b>Settings</b>', '', 'Read-only configuration overview.'].join('\n');
+}
+
+function buildAuditText(): string {
+  return ['🧾 <b>Audit Log</b>', '', 'Audit storage is not enabled yet.', 'Unauthorized users are still logged in Worker logs.'].join('\n');
+}
+
+function buildHelpText(): string {
   return [
-    '🟢 <b>Monitoring</b>',
+    '❓ <b>Help</b>',
     '',
-    'Live operational checks and alerts.',
+    '🟢 Monitoring: live health and alerts.',
+    '📈 Reporting: historical analytics by channel/platform.',
+    '🛠 Operations: disabled until confirmation and audit are implemented.',
+    '⚙️ Settings: read-only configuration overview.',
   ].join('\n');
 }
 
 function buildChannelPickerText(): string {
-  return [
-    '📣 <b>Select Channel</b>',
-    '',
-    'Choose a publishing channel.',
-  ].join('\n');
+  return ['📣 <b>Select Channel</b>', '', 'Choose a publishing channel.'].join('\n');
 }
 
 function buildPlatformPickerText(channelId: string): string {
-  return [
-    '🌐 <b>Select Platform</b>',
-    '',
-    `<b>Channel</b>: ${escapeHtml(channelId)}`,
-    '',
-    'Choose a platform.',
-  ].join('\n');
+  return ['🌐 <b>Select Platform</b>', '', `<b>Channel</b>: ${escapeHtml(channelId)}`, '', 'Choose a platform.'].join('\n');
 }
 
 function buildReportSectionsText(channelId: string, platform: string): string {
-  return [
-    '📈 <b>Reporting</b>',
-    '',
-    `<b>Channel</b>: ${escapeHtml(channelId)}`,
-    `<b>Platform</b>: ${escapeHtml(platform)}`,
-    '',
-    'Choose a report category.',
-  ].join('\n');
+  return ['📈 <b>Reporting</b>', '', `<b>Channel</b>: ${escapeHtml(channelId)}`, `<b>Platform</b>: ${escapeHtml(platform)}`, '', 'Choose a report category.'].join('\n');
 }
 
 function buildCostMenuText(channelId: string, platform: string): string {
-  return [
-    '💸 <b>Costs</b>',
-    '',
-    `<b>Channel</b>: ${escapeHtml(channelId)}`,
-    `<b>Platform</b>: ${escapeHtml(platform)}`,
-    '',
-    'Costs are grouped so the keyboard stays readable.',
-  ].join('\n');
+  return ['💸 <b>Costs</b>', '', `<b>Channel</b>: ${escapeHtml(channelId)}`, `<b>Platform</b>: ${escapeHtml(platform)}`, '', 'Costs are grouped so the keyboard stays readable.'].join('\n');
 }
 
 function buildAIProviderMenuText(channelId: string, platform: string): string {
-  return [
-    '🤖 <b>AI Provider Costs</b>',
-    '',
-    `<b>Channel</b>: ${escapeHtml(channelId)}`,
-    `<b>Platform</b>: ${escapeHtml(platform)}`,
-    '',
-    'AI cost is currently global, not scoped to this channel.',
-  ].join('\n');
+  return ['🤖 <b>AI Provider Costs</b>', '', `<b>Channel</b>: ${escapeHtml(channelId)}`, `<b>Platform</b>: ${escapeHtml(platform)}`, '', 'AI cost is currently global, not scoped to this channel.'].join('\n');
+}
+
+function buildOperationDisabledText(label: string): string {
+  return ['🛠 <b>Operation disabled</b>', '', `<b>Action</b>: ${escapeHtml(label)}`, '', 'This button is intentionally read-only. Add a confirmation flow and audit log before enabling write operations.'].join('\n');
 }
 
 function homeKeyboard(): object {
   return replyKeyboard([
     ['🟢 Monitoring', '📈 Reporting'],
-    ['🏠 Home'],
+    ['🛠 Operations', '⚙️ Settings'],
+    ['🧾 Audit Log', '❓ Help'],
   ]);
 }
 
@@ -363,7 +405,41 @@ function monitoringKeyboard(): object {
   return replyKeyboard([
     ['🟢 Status', '📬 Queue'],
     ['🚨 Failures', '🕷 Apify Runtime'],
-    ['💰 Cost Watch'],
+    ['🤖 AI Health', '💰 Cost Watch'],
+    ['📡 Source Health', '⏱ Scheduler'],
+    ['⬅️ Back', '🏠 Home'],
+  ]);
+}
+
+function operationsKeyboard(): object {
+  return replyKeyboard([
+    ['🧠 Drain Backlog', '🔁 Retry Failed'],
+    ['📬 Publish Due', '📈 Force Snapshot'],
+    ['⏸ Pause Publishing', '▶️ Resume Publishing'],
+    ['⬅️ Back', '🏠 Home'],
+  ]);
+}
+
+function settingsKeyboard(): object {
+  return replyKeyboard([
+    ['📣 Channels', '📡 Sources'],
+    ['💰 Budgets', '👥 Admin Access'],
+    ['⏱ Schedules'],
+    ['⬅️ Back', '🏠 Home'],
+  ]);
+}
+
+function auditKeyboard(): object {
+  return replyKeyboard([
+    ['👁 Views', '🛠 Actions'],
+    ['🚨 Errors', '🔐 Access Denied'],
+    ['⬅️ Back', '🏠 Home'],
+  ]);
+}
+
+function helpKeyboard(): object {
+  return replyKeyboard([
+    ['🟢 Monitoring', '📈 Reporting'],
     ['⬅️ Back', '🏠 Home'],
   ]);
 }
@@ -425,6 +501,8 @@ function reportSectionKeyboard(): object {
     ['📊 Overview', '💸 Costs'],
     ['🔄 Funnel', '📬 Publishing'],
     ['🩺 System', '🏆 Sources'],
+    ['🧠 AI Quality', '📰 Editorial'],
+    ['📈 Market Snapshot'],
     ['⬅️ Back', '📣 Change Channel'],
     ['🏠 Home'],
   ]);
@@ -434,6 +512,7 @@ function costMenuKeyboard(): object {
   return replyKeyboard([
     ['💸 Summary'],
     ['🤖 AI Providers', '🕷 Apify'],
+    ['📊 Cost Trend', '🚨 Budget Alerts'],
     ['⬅️ Back', '📊 Reports'],
     ['🏠 Home'],
   ]);
@@ -458,11 +537,39 @@ function replyKeyboard(rows: string[][]): object {
 
 function parseMonitoringButton(text: string): OperationalReportSection | null {
   const map: Record<string, OperationalReportSection> = {
-    '🟢 Status': 'overview',
-    '📬 Queue': 'publish',
-    '🚨 Failures': 'health',
+    '🟢 Status': 'monitoring_status',
+    '📬 Queue': 'monitoring_queue',
+    '🚨 Failures': 'monitoring_failures',
     '🕷 Apify Runtime': 'apify',
-    '💰 Cost Watch': 'costs',
+    '🤖 AI Health': 'monitoring_ai',
+    '💰 Cost Watch': 'monitoring_cost_watch',
+    '📡 Source Health': 'source_health',
+    '⏱ Scheduler': 'scheduler',
+  };
+  return map[text] ?? null;
+}
+
+function parseOperationButton(text: string): string | null {
+  return ['🧠 Drain Backlog', '🔁 Retry Failed', '📬 Publish Due', '📈 Force Snapshot', '⏸ Pause Publishing', '▶️ Resume Publishing'].includes(text) ? text : null;
+}
+
+function parseSettingsButton(text: string): string | null {
+  const map: Record<string, string> = {
+    '📣 Channels': '📣 <b>Channels</b>\n\nChannel configuration is read-only here. Use Reporting to inspect channel-scoped output.',
+    '📡 Sources': '📡 <b>Sources</b>\n\nSource health is available under Monitoring → Source Health.',
+    '💰 Budgets': '💰 <b>Budgets</b>\n\nBudget thresholds are not configured yet. Cost Watch remains read-only.',
+    '👥 Admin Access': '👥 <b>Admin Access</b>\n\nAccess is controlled by TELEGRAM_ADMIN_ALLOWED_USER_IDS.',
+    '⏱ Schedules': '⏱ <b>Schedules</b>\n\nCron, Apify rotation, and market snapshot status are shown under Monitoring → Scheduler.',
+  };
+  return map[text] ?? null;
+}
+
+function parseAuditButton(text: string): string | null {
+  const map: Record<string, string> = {
+    '👁 Views': '👁 <b>View Audit</b>\n\nDetailed view audit storage is not enabled yet.',
+    '🛠 Actions': '🛠 <b>Action Audit</b>\n\nWrite actions are disabled, so there are no bot actions to audit yet.',
+    '🚨 Errors': '🚨 <b>Error Audit</b>\n\nUse Monitoring → Failures for operational failures.',
+    '🔐 Access Denied': '🔐 <b>Access Denied</b>\n\nUnauthorized user ids are logged in Worker logs and shown to the user for onboarding.',
   };
   return map[text] ?? null;
 }
@@ -474,6 +581,8 @@ function parseCostSectionButton(text: string): OperationalReportSection | null {
     '🟣 Anthropic': 'costs_anthropic',
     '🔵 Gemini': 'costs_gemini',
     '🕷 Apify': 'costs_apify',
+    '📊 Cost Trend': 'cost_trend',
+    '🚨 Budget Alerts': 'budget_alerts',
   };
   return map[normalized] ?? null;
 }
@@ -487,6 +596,9 @@ function parseSectionButton(text: string): OperationalReportSection | null {
     '📬 Publishing': 'publish',
     '🩺 System': 'health',
     '🏆 Sources': 'sources',
+    '🧠 AI Quality': 'ai_quality',
+    '📰 Editorial': 'editorial',
+    '📈 Market Snapshot': 'market_snapshot',
   };
   return map[normalized] ?? null;
 }
