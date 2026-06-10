@@ -11,6 +11,7 @@ import { cleanupOldDedupeKeys } from './services/dedupe';
 import { getRuntimeConfig } from './services/runtime-config';
 import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
 import { drainAICandidateQueue } from './services/backlog-drain';
+import { runApifyRotation } from './services/apify-rotation-runner';
 import {
   failMaxAttemptPendingCandidates,
   isCandidateBacklogEnabled,
@@ -70,6 +71,28 @@ export default {
             selected: r.itemsAiSelected,
             queued: r.itemsQueued,
           })));
+        }
+
+        // 1.5. Controlled Apify rotation. Disabled by default until native
+        // Apify schedules are turned off, otherwise costs can double.
+        if (env.APIFY_ROTATION_ENABLED === 'true') {
+          try {
+            const rotationResult = await runApifyRotation(env);
+            if (!rotationResult.skipped) {
+              console.log('[Scheduled] Apify rotation:', {
+                ok: rotationResult.ok,
+                bucket: rotationResult.bucket,
+                plans: rotationResult.plans.map(plan => ({
+                  sourceId: plan.sourceId,
+                  status: plan.status,
+                  dataset: plan.defaultDatasetId,
+                  cohort: plan.cohortName,
+                })),
+              });
+            }
+          } catch (err) {
+            console.error('[Scheduled] Apify rotation failed:', err instanceof Error ? err.message : String(err));
+          }
         }
 
         // 2. Enqueue hourly market snapshot, then publish due items

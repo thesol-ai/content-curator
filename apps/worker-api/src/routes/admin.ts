@@ -14,6 +14,7 @@ import { prepareTelegramCaptions } from '../services/telegram-publisher';
 import { sanitizeRunDebugId } from '../services/run-events';
 import { buildMarketSnapshotText, sendMarketSnapshotDirect } from '../services/market-snapshot';
 import { drainAICandidateQueue } from '../services/backlog-drain';
+import { runApifyRotation } from '../services/apify-rotation-runner';
 import {
   getCandidateBacklogDrainLimit,
   getCandidateMaxAgeHours,
@@ -144,6 +145,17 @@ export async function handleAdmin(
         .prepare("UPDATE publish_queue SET status='scheduled', retry_count=0, scheduled_at=?, publish_error=NULL WHERE id=? AND status IN ('failed','retry')")
         .bind(now + 60, queueId).run();
       return ok({ retried: queueId, affected: result.meta.changes ?? 0 });
+    }
+
+    // ── Apify controlled rotation trigger ─────────────────────
+    if (path === '/internal/apify/rotation/run' && m === 'POST') {
+      const body: any = await req.json().catch(() => ({}));
+      const result = await runApifyRotation(env, {
+        force: body.force === true || body.force === 'true',
+        dryRun: body.dryRun === true || body.dry_run === true || body.dryRun === 'true' || body.dry_run === 'true',
+        onlySourceId: typeof body.onlySourceId === 'string' ? body.onlySourceId : undefined,
+      });
+      return ok(result);
     }
 
     // ── Curation trigger ──────────────────────────────────────
