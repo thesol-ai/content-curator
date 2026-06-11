@@ -412,6 +412,150 @@ function postIdLookupKey(raw: string): string {
   return `post_id:${String(raw ?? '').trim()}`;
 }
 
+
+type TranslationValue = { captionShort: string; captionFull: string; hashtags: string[] };
+
+function isRtlLanguage(language: string): boolean {
+  return language === 'fa' || language === 'ar';
+}
+
+function firstMeaningfulCaptionChar(text: string): string {
+  for (const ch of Array.from(String(text ?? '').trim())) {
+    if (!ch.trim()) continue;
+
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0xfe0f || cp === 0x200c || cp === 0x200d) continue;
+    if (cp >= 0x1f000 || (cp >= 0x2600 && cp <= 0x27bf)) continue;
+    if (/^[\s"'“”‘’«»()[\]{}<>.,:;،؛.!?؟\-–—_+*=|\\/@#$]+$/u.test(ch)) continue;
+
+    return ch;
+  }
+
+  return '';
+}
+
+export function hasValidRtlCaptionLead(text: string, language: string): boolean {
+  if (!isRtlLanguage(language)) return true;
+
+  const ch = firstMeaningfulCaptionChar(text);
+  if (!ch) return true;
+
+  return /\p{Script=Arabic}/u.test(ch);
+}
+
+function needsRtlLeadRepair(target: TranslationTarget, translation: TranslationValue): boolean {
+  if (!isRtlLanguage(target.language)) return false;
+
+  const shortBad = Boolean(translation.captionShort.trim()) && !hasValidRtlCaptionLead(translation.captionShort, target.language);
+  const fullBad = Boolean(translation.captionFull.trim()) && !hasValidRtlCaptionLead(translation.captionFull, target.language);
+
+  return shortBad || fullBad;
+}
+
+function extractLooseJsonObject(text: string): Record<string, any> | null {
+  const cleaned = String(text ?? '')
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
+
+  try {
+    const parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildRtlLeadRepairSystem(target: TranslationTarget): string {
+  const languageName = LANG_NAMES[target.language] ?? target.language;
+
+  return [
+    `You repair Telegram captions for ${languageName}.`,
+    'Return ONLY JSON with this exact structure: {"caption_short":"...","caption_full":"..."}',
+    'Preserve the exact meaning, facts, names, numbers, entities, and tone.',
+    'Do not add facts. Do not remove important details.',
+    'Do not add a fixed or static prefix.',
+    'Fix only the opening phrasing when needed so the caption starts cleanly for RTL.',
+    'The first real word after any emoji/spacing MUST be in the target RTL language.',
+    'The caption must never start with English, a Latin brand name, ticker, number, @handle, URL, hashtag, or punctuation-led English phrase.',
+    target.language === 'fa'
+      ? 'For Persian, if natural, you may use one formal relevant leading emoji from this set only: 📌 📊 ⚖️ 🏦 🔐 🚨 🔎. Do not force emoji.'
+      : 'For Arabic, do not force emoji; use at most one formal relevant emoji only if natural.',
+    'No markdown. No explanation.',
+  ].join('\n');
+}
+
+function buildRtlLeadRepairUser(translation: TranslationValue): string {
+  return JSON.stringify({
+    caption_short: translation.captionShort,
+    caption_full: translation.captionFull,
+  });
+}
+
+async function callTranslationProviderForRepair(
+  env: Env,
+  cfg: Config,
+  provider: Config['translationProvider'],
+  system: string,
+  user: string,
+): Promise<string> {
+  if (provider === 'gemini') return callGemini(env, cfg.translationModel, system, user);
+  if (provider === 'openai') return callOpenAI(env, cfg.translationModel, system, user);
+  return callClaude(env, cfg.translationModel || cfg.scoringModel, system, user);
+}
+
+async function repairRtlTranslationLeadIfNeeded(
+  env: Env,
+  cfg: Config,
+  target: TranslationTarget,
+  translation: TranslationValue,
+  provider: Config['translationProvider'],
+): Promise<TranslationValue | null> {
+  if (!needsRtlLeadRepair(target, translation)) return translation;
+
+  try {
+    const responseText = await callTranslationProviderForRepair(
+      env,
+      cfg,
+      provider,
+      buildRtlLeadRepairSystem(target),
+      buildRtlLeadRepairUser(translation),
+    );
+
+    const parsed = extractLooseJsonObject(responseText);
+    if (!parsed) {
+      console.warn(`[Translation] RTL lead repair returned invalid JSON for target=${target.key}. preview=${debugPreview(responseText)}`);
+      return null;
+    }
+
+    const repaired: TranslationValue = {
+      captionShort: typeof parsed.caption_short === 'string'
+        ? parsed.caption_short.slice(0, target.captionShortMaxChars)
+        : translation.captionShort,
+      captionFull: typeof parsed.caption_full === 'string'
+        ? parsed.caption_full.slice(0, target.captionMaxChars)
+        : translation.captionFull,
+      hashtags: translation.hashtags,
+    };
+
+    if (needsRtlLeadRepair(target, repaired)) {
+      console.warn(`[Translation] RTL lead repair still invalid for target=${target.key}; translation omitted to avoid bad RTL publish.`);
+      return null;
+    }
+
+    console.warn(`[Translation] RTL lead repaired for target=${target.key}`);
+    return repaired;
+  } catch (e) {
+    console.warn(`[Translation] RTL lead repair failed for target=${target.key}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+
 function engagementRate(likes: number, shares: number, views: number): number {
   const safeViews = Number.isFinite(views) && views > 0 ? views : 0;
   if (safeViews <= 0) return 0;
@@ -530,13 +674,20 @@ async function runTranslationChunk(
     for (const target of cfg.translationTargets) {
       const t = p.translations?.[target.key];
       if (t && (t.caption_short || t.caption_full)) {
-        translations[target.key] = {
+        const translation: TranslationValue = {
           captionShort: String(t.caption_short ?? '').slice(0, target.captionShortMaxChars),
           captionFull: String(t.caption_full ?? '').slice(0, target.captionMaxChars),
           hashtags: Array.isArray(t.hashtags)
             ? t.hashtags.filter((h: any) => typeof h === 'string').slice(0, 10)
             : [],
         };
+
+        const repaired = await repairRtlTranslationLeadIfNeeded(env, cfg, target, translation, provider);
+        if (repaired) {
+          translations[target.key] = repaired;
+        } else {
+          missingCount++;
+        }
       } else {
         missingCount++;
       }

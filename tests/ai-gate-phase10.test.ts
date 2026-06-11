@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runAIGate } from '../apps/worker-api/src/services/ai-gate';
+import { hasValidRtlCaptionLead, runAIGate } from '../apps/worker-api/src/services/ai-gate';
 import type { CategoryRow, Env, NormalizedItem } from '../apps/worker-api/src/types';
 
 function category(overrides: Partial<CategoryRow> = {}): CategoryRow {
@@ -156,4 +156,71 @@ describe('phase 10 AI reliability and cost guardrails', () => {
     expect(result.translations.en).toBeUndefined();
     expect(result.riskFlags).toContain('translation_missing:en');
   });
+
+  it('repairs Persian translations that start with English before publishing them', async () => {
+    const { env } = makeEnv({ callsToday: 0, tokensToday: 0 });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('anthropic.com')) {
+        return Response.json({
+          usage: { input_tokens: 10, output_tokens: 5 },
+          content: [{ text: JSON.stringify({ items: [{
+            url: 'https://x.com/marketwatch/status/123',
+            post_id: '123',
+            publish: true,
+            score: 90,
+            risk_level: 'low',
+            risk_flags: [],
+            topic_fingerprint: 'bitcoin-etf-flow',
+            publish_priority: 'normal',
+          }] }) }],
+        });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      const systemText = body?.system_instruction?.parts?.[0]?.text ?? '';
+
+      if (systemText.includes('repair Telegram captions')) {
+        return Response.json({
+          usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 12 },
+          candidates: [{ content: { parts: [{ text: JSON.stringify({
+            caption_short: 'بیت‌کوین دوباره خبرساز شد',
+            caption_full: 'بیت‌کوین با رشد تقاضای صندوق‌های ETF دوباره در مرکز توجه بازار قرار گرفته است.',
+          }) }] } }],
+        });
+      }
+
+      return Response.json({
+        usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 },
+        candidates: [{ content: { parts: [{ text: JSON.stringify({ items: [{
+          url: 'https://x.com/marketwatch/status/123',
+          post_id: '123',
+          translations: {
+            fa: {
+              caption_short: 'Bitcoin دوباره خبرساز شد',
+              caption_full: 'Bitcoin با رشد تقاضای صندوق‌های ETF دوباره در مرکز توجه بازار قرار گرفته است.',
+              hashtags: ['کریپتو'],
+            },
+          },
+        }] }) }] } }],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const [result] = await runAIGate(env, [item()], category(), [], []);
+
+    expect(result.publish).toBe(true);
+    expect(result.translations.fa.captionShort).toBe('بیت‌کوین دوباره خبرساز شد');
+    expect(result.translations.fa.captionFull).toContain('بیت‌کوین');
+    expect(hasValidRtlCaptionLead(result.translations.fa.captionShort, 'fa')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('detects invalid RTL caption starts after optional emoji and punctuation', () => {
+    expect(hasValidRtlCaptionLead('📊 بیت‌کوین رشد کرد', 'fa')).toBe(true);
+    expect(hasValidRtlCaptionLead('📊 Bitcoin rallied', 'fa')).toBe(false);
+    expect(hasValidRtlCaptionLead('$BTC rallied', 'fa')).toBe(false);
+    expect(hasValidRtlCaptionLead('«بیت‌کوین» رشد کرد', 'fa')).toBe(true);
+    expect(hasValidRtlCaptionLead('Bitcoin rallied', 'en')).toBe(true);
+  });
+
 });
