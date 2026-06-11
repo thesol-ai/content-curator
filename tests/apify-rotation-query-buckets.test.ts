@@ -74,6 +74,11 @@ describe('Phase 3B trusted Apify rotation queries', () => {
       expect(plan.inputOverride.query).toBe(plan.inputOverride.twitterContent);
       expect(plan.inputOverride.searchTerms).toBeUndefined();
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
+
+      const query = String(plan.inputOverride.query);
+      expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
+      expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
+      expect((query.match(/min_faves:/g) ?? []).length).toBe(1);
     }
   });
 

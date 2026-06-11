@@ -453,9 +453,6 @@ function buildTokenProjectWatchTopicGate(): string {
     '-scam',
     '-fake',
     '-phishing',
-    '-filter:replies',
-    'lang:en',
-    'min_faves:40',
   ].join(' ');
 }
 
