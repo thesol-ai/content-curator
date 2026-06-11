@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildTranslationSystem, type TranslationTarget } from '../apps/worker-api/src/services/ai-gate';
-import { findRecentStoryDuplicate, normalizeStoryFingerprint } from '../apps/worker-api/src/services/story-dedupe';
+import { findRecentStoryDuplicate, normalizeStoryFamilyKey, normalizeStoryFingerprint } from '../apps/worker-api/src/services/story-dedupe';
 import type { CategoryRow, Env } from '../apps/worker-api/src/types';
 
 function target(): TranslationTarget {
@@ -64,6 +64,47 @@ describe('Phase 9A discovery quality', () => {
     expect(normalizeStoryFingerprint('crypto-news')).toBeNull();
     expect(normalizeStoryFingerprint('fp-123456789')).toBeNull();
     expect(normalizeStoryFingerprint('ns-123456789')).toBeNull();
+  });
+
+  it('builds conservative family keys for funding story variants', () => {
+    expect(normalizeStoryFamilyKey('tether-neura-robotics-series-c')).toBe('tether-neura-robotics-funding');
+    expect(normalizeStoryFamilyKey('tether-neura-robotics-funding')).toBe('tether-neura-robotics-funding');
+    expect(normalizeStoryFamilyKey('ethereum-funding-rate-spike')).toBe('ethereum-funding-rate-spike');
+    expect(normalizeStoryFamilyKey('us-clarity-act-senate-vote-push')).toBe('us-clarity-act-senate-vote-push');
+  });
+
+  it('finds funding story duplicates even when fingerprints differ', async () => {
+    const first = vi.fn(async () => null);
+    const all = vi.fn(async () => ({
+      results: [{
+        queue_id: 'q_old',
+        item_id: 'item_old',
+        status: 'scheduled',
+        published_at: null,
+        scheduled_at: 1781150000,
+        source_account: 'Cointelegraph',
+        topic_fingerprint: 'tether-neura-robotics-series-c',
+      }],
+    }));
+
+    const env = {
+      DB: {
+        prepare: vi.fn((sql: string) => ({
+          bind: vi.fn(() => sql.includes('lower(d.topic_fingerprint) =')
+            ? { first }
+            : { all }
+          ),
+        })),
+      },
+    } as unknown as Env;
+
+    const result = await findRecentStoryDuplicate(env, 'crypto_fa_pilot', 'tether-neura-robotics-funding', 168);
+
+    expect(result.duplicate).toBe(true);
+    expect(result.matchType).toBe('family');
+    expect(result.storyDedupeKey).toBe('tether-neura-robotics-funding');
+    expect(result.existingTopicFingerprint).toBe('tether-neura-robotics-series-c');
+    expect(result.queueId).toBe('q_old');
   });
 
   it('finds a recent scheduled or published story duplicate', async () => {
