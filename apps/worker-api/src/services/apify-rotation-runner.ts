@@ -13,25 +13,23 @@ const ROTATION_SOURCE_IDS = new Set([
 ]);
 
 const NEWS_COHORTS = [
-  ['cointelegraph'],
-  ['coindesk'],
-  ['Utoday_en'],
-  ['beincrypto'],
-  ['bitcoinmagazine'],
-  ['blockworks'],
-  ['decryptmedia'],
+  ['CoinDesk', 'Cointelegraph'],
+  ['TheBlock__', 'WuBlockchain'],
+  ['decryptmedia', 'BitcoinMagazine'],
+  ['DefiantNews', 'DLNewsInfo'],
+  ['WatcherGuru', 'News_Of_Alpha'],
 ];
 
 // 8 cohorts match a 3-hour rotation day: 8 buckets/day.
 const VOICES_COHORTS = [
-  ['scottmelker'],
-  ['rektcapital', 'KoroushAK'],
-  ['saylor', 'CryptoCapo_'],
-  ['Cobie', 'Ansem'],
-  ['Pentosh1', 'HsakaTrades'],
-  ['CryptoHayes', 'DegenSpartan'],
-  ['DefiIgnas', 'TheDeFinvestor'],
-  ['rektfencer', '0xngmi', 'AltcoinDailyio', 'alicharts'],
+  ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
+  ['lookonchain', 'whale_alert', 'glassnode', 'cryptoquant_com'],
+  ['Pentosh1', 'CryptoCred', 'CryptoHayes', 'RaoulGMI'],
+  ['DefiLlama', 'BanklessHQ', 'TheDefiantNews'],
+  ['VitalikButerin', 'ethereum'],
+  ['solana', 'base', 'chainlink'],
+  ['CoinbaseAssets', 'binance'],
+  ['WatcherGuru', 'Tree_of_Alpha', 'News_Of_Alpha'],
 ];
 
 type RotationMode = 'media' | 'text' | 'default';
@@ -260,26 +258,26 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   const id = source.id;
 
   if (id === 'src_crypto_x_news_media') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'news', 'media', 24);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 24, buildCoreNewsTopicGate(), 25);
   }
 
   if (id === 'src_crypto_x_news_text') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'news', 'text', 24);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 24, buildCoreNewsTopicGate(), 25);
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket + 8, 'voices', 'media', 24);
+    return buildSecurityAlertPlan(source, 24);
   }
 
   if (id === 'src_crypto_x_voices_text') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'voices', 'text', 24);
+    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 24, buildExpertSignalsTopicGate(), 30);
   }
 
   // Query-first market impact discovery. Cost-neutral: same source ids, cadence, and maxItems.
   // We pass both query and twitterContent because existing Apify task configs use query,
   // while older worker rotation events used twitterContent.
   if (id === 'src_market_trending_x_media') {
-    return buildMarketImpactPlan(source, 'media', 24);
+    return buildTokenProjectWatchPlan(source, 24);
   }
 
   if (id === 'src_market_trending_x_text') {
@@ -296,22 +294,71 @@ function buildCohortPlan(
   family: string,
   mode: RotationMode,
   maxItems: number,
+  topicGate?: string,
+  minFaves?: number,
 ): RotationPlan {
   const index = positiveModulo(bucket, cohorts.length);
   const accounts = cohorts[index] ?? cohorts[0]!;
+  const query = topicGate
+    ? buildProfileTopicContent(accounts, mode, topicGate, minFaves)
+    : buildTwitterContent(accounts, mode);
+
   return {
     source,
     cohortName: `${family}_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(buildTwitterContent(accounts, mode), maxItems),
+    inputOverride: buildSearchInputOverride(query, maxItems),
   };
 }
 
 function buildTwitterContent(accounts: string[], mode: RotationMode): string {
+  return buildProfileTopicContent(accounts, mode);
+}
+
+function buildProfileTopicContent(
+  accounts: string[],
+  mode: RotationMode,
+  topicGate?: string,
+  minFaves = 0,
+): string {
   const accountQuery = accounts.map(account => `from:${account}`).join(' OR ');
-  const mediaPart = mode === 'media' ? 'filter:media' : '-filter:media';
-  return `(${accountQuery}) ${mediaPart} -filter:replies lang:en since:${currentUtcDate()}`;
+  const parts = [`(${accountQuery})`];
+
+  if (topicGate) parts.push(topicGate);
+  if (mode === 'media') parts.push('filter:media');
+  if (mode === 'text') parts.push('-filter:media');
+
+  parts.push('-filter:replies', 'lang:en');
+  if (minFaves > 0) parts.push(`min_faves:${minFaves}`);
+
+  return parts.join(' ');
+}
+
+function buildCoreNewsTopicGate(): string {
+  return [
+    '(',
+    'crypto OR bitcoin OR ethereum OR XRP OR ripple OR dogecoin OR DOGE OR SHIB OR TON OR',
+    'stablecoin OR USDT OR Tether OR ETF OR DeFi OR RWA OR tokenization OR exchange OR treasury',
+    ')',
+    '(',
+    'SEC OR CFTC OR regulation OR lawsuit OR approval OR filing OR',
+    'launch OR partnership OR acquisition OR funding OR',
+    'hack OR exploit OR upgrade OR mainnet OR',
+    'listing OR "Binance listing" OR "Coinbase listing" OR "Bybit listing" OR "MEXC listing"',
+    ')',
+  ].join(' ');
+}
+
+function buildExpertSignalsTopicGate(): string {
+  return [
+    '(',
+    'BTC OR bitcoin OR ETH OR ethereum OR XRP OR DOGE OR SHIB OR TON OR',
+    'ETF OR SEC OR CFTC OR liquidity OR liquidation OR liquidations OR',
+    '"funding rate" OR "open interest" OR onchain OR whale OR USDT OR Tether OR',
+    'DeFi OR RWA OR listing OR hack OR exploit OR governance OR upgrade OR mainnet',
+    ')',
+  ].join(' ');
 }
 
 function buildMarketImpactPlan(source: SourceRow, mode: RotationMode, maxItems: number): RotationPlan {
@@ -328,15 +375,85 @@ function buildMarketImpactContent(mode: RotationMode): string {
   const mediaPart = mode === 'media' ? 'filter:media' : '-filter:media';
   return [
     '(',
-    'bitcoin OR BTC OR ethereum OR ETH OR crypto OR stablecoin OR ETF OR "ETF flows" OR',
-    'liquidation OR liquidations OR "open interest" OR funding OR onchain OR "rate cut" OR',
-    'Fed OR CPI OR inflation OR dollar OR treasury OR "risk off" OR DeFi OR RWA',
+    'bitcoin OR BTC OR ethereum OR ETH OR XRP OR DOGE OR SHIB OR TON OR',
+    'crypto OR "crypto market"',
+    ')',
+    '(',
+    '"ETF flows" OR liquidation OR liquidations OR "open interest" OR',
+    '"funding rate" OR "exchange reserves" OR onchain OR whale OR',
+    '"stablecoin supply" OR USDT OR Tether OR',
+    'CPI OR Fed OR dollar OR treasury OR "risk off" OR',
+    '"exchange inflow" OR "exchange outflow"',
     ')',
     mediaPart,
     '-filter:replies',
     'lang:en',
     'min_faves:75',
-    `since:${currentUtcDate()}`,
+  ].join(' ');
+}
+
+function buildTokenProjectWatchPlan(source: SourceRow, maxItems: number): RotationPlan {
+  return {
+    source,
+    cohortName: 'token_project_watch_text',
+    cohortIndex: null,
+    accounts: [],
+    inputOverride: buildSearchInputOverride(buildTokenProjectWatchContent(), maxItems),
+  };
+}
+
+function buildTokenProjectWatchContent(): string {
+  return [
+    '(',
+    '"mainnet" OR "testnet" OR "token launch" OR TGE OR',
+    'listing OR "Binance listing" OR "Coinbase listing" OR "Bybit listing" OR "MEXC listing" OR',
+    '"protocol upgrade" OR governance OR exploit OR hack OR "security incident" OR',
+    '"funding round" OR "Series A" OR "Series B" OR "Series C" OR RWA OR "stablecoin launch" OR',
+    'airdrop OR "token generation" OR "tap to earn" OR TON OR Notcoin OR DOGS OR "Hamster Kombat"',
+    ')',
+    '(',
+    'crypto OR blockchain OR DeFi OR Ethereum OR Solana OR Base OR',
+    'Bitcoin OR token OR protocol OR Telegram',
+    ')',
+    '-giveaway',
+    '-presale',
+    '-"airdrop claim"',
+    '-referral',
+    '-"mint now"',
+    '-whitelist',
+    '-scam',
+    '-fake',
+    '-phishing',
+    '-filter:replies',
+    'lang:en',
+    'min_faves:40',
+  ].join(' ');
+}
+
+function buildSecurityAlertPlan(source: SourceRow, maxItems: number): RotationPlan {
+  return {
+    source,
+    cohortName: 'security_alert_text',
+    cohortIndex: null,
+    accounts: [],
+    inputOverride: buildSearchInputOverride(buildSecurityAlertContent(), maxItems),
+  };
+}
+
+function buildSecurityAlertContent(): string {
+  return [
+    '(',
+    'hack OR hacked OR exploit OR exploited OR "security incident" OR',
+    '"rug pull" OR scam OR phishing OR "private key" OR',
+    '"smart contract vulnerability" OR "bridge attack" OR drain OR drained',
+    ')',
+    '(',
+    'crypto OR DeFi OR protocol OR wallet OR exchange OR',
+    'blockchain OR web3 OR NFT',
+    ')',
+    '-filter:replies',
+    'lang:en',
+    'min_faves:15',
   ].join(' ');
 }
 
@@ -347,11 +464,12 @@ function buildSearchInputOverride(query: string, maxItems: number): Record<strin
     maxItems,
     queryType: 'Latest',
     lang: 'en',
+    since_time: currentSinceTimeSeconds(),
   };
 }
 
-function currentUtcDate(): string {
-  return new Date().toISOString().slice(0, 10);
+function currentSinceTimeSeconds(hoursBack = 24): string {
+  return String(Math.floor(Date.now() / 1000) - hoursBack * 60 * 60);
 }
 
 async function runApifyTask(
