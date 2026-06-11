@@ -32,6 +32,24 @@ const VOICES_COHORTS = [
   ['WatcherGuru', 'Tree_of_Alpha', 'News_Of_Alpha'],
 ];
 
+const SECURITY_ALERT_COHORTS = [
+  ['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts'],
+];
+
+const TOKEN_PROJECT_COHORTS = [
+  ['CoinbaseAssets', 'binance', 'WatcherGuru', 'News_Of_Alpha'],
+  ['ethereum', 'solana', 'base', 'chainlink'],
+  ['DefiLlama', 'BanklessHQ', 'TheDefiantNews', 'Tree_of_Alpha'],
+];
+
+const MARKET_IMPACT_COHORTS = [
+  ['lookonchain', 'whale_alert', 'glassnode', 'cryptoquant_com'],
+  ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
+  ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
+  ['VitalikButerin', 'ethereum', 'solana', 'base', 'chainlink'],
+];
+
+
 type RotationMode = 'media' | 'text' | 'default';
 
 interface SourceRow {
@@ -266,7 +284,7 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    return buildSecurityAlertPlan(source, 24);
+    return buildSecurityAlertPlan(source, bucket + 4, 12);
   }
 
   if (id === 'src_crypto_x_voices_text') {
@@ -277,11 +295,11 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   // We pass both query and twitterContent because existing Apify task configs use query,
   // while older worker rotation events used twitterContent.
   if (id === 'src_market_trending_x_media') {
-    return buildTokenProjectWatchPlan(source, 24);
+    return buildTokenProjectWatchPlan(source, bucket + 5, 12);
   }
 
   if (id === 'src_market_trending_x_text') {
-    return buildMarketImpactPlan(source, 'text', 24);
+    return buildMarketImpactPlan(source, bucket + 6, 'text', 16);
   }
 
   return null;
@@ -361,48 +379,59 @@ function buildExpertSignalsTopicGate(): string {
   ].join(' ');
 }
 
-function buildMarketImpactPlan(source: SourceRow, mode: RotationMode, maxItems: number): RotationPlan {
+function buildMarketImpactPlan(source: SourceRow, bucket: number, mode: RotationMode, maxItems: number): RotationPlan {
+  const index = positiveModulo(bucket, MARKET_IMPACT_COHORTS.length);
+  const accounts = MARKET_IMPACT_COHORTS[index] ?? MARKET_IMPACT_COHORTS[0]!;
+  const query = buildProfileTopicContent(accounts, mode, buildMarketImpactTopicGate(), 50);
+
   return {
     source,
-    cohortName: `market_impact_${mode}`,
-    cohortIndex: null,
-    accounts: [],
-    inputOverride: buildSearchInputOverride(buildMarketImpactContent(mode), maxItems),
+    cohortName: `market_impact_${mode}_${index}`,
+    cohortIndex: index,
+    accounts,
+    inputOverride: buildSearchInputOverride(query, maxItems),
   };
 }
 
-function buildMarketImpactContent(mode: RotationMode): string {
-  const mediaPart = mode === 'media' ? 'filter:media' : '-filter:media';
+function buildMarketImpactTopicGate(): string {
   return [
     '(',
-    'bitcoin OR BTC OR ethereum OR ETH OR XRP OR DOGE OR SHIB OR TON OR',
-    'crypto OR "crypto market"',
+    'BTC OR bitcoin OR ETH OR ethereum OR XRP OR DOGE OR SHIB OR TON OR',
+    'ETF OR "spot ETF" OR "ETF flows" OR USDT OR Tether OR stablecoin OR',
+    '"stablecoin supply" OR onchain OR whale OR liquidation OR liquidations OR',
+    '"open interest" OR "funding rate" OR "exchange reserves" OR',
+    '"exchange inflow" OR "exchange outflow" OR CPI OR Fed OR treasury',
     ')',
-    '(',
-    '"ETF flows" OR liquidation OR liquidations OR "open interest" OR',
-    '"funding rate" OR "exchange reserves" OR onchain OR whale OR',
-    '"stablecoin supply" OR USDT OR Tether OR',
-    'CPI OR Fed OR dollar OR treasury OR "risk off" OR',
-    '"exchange inflow" OR "exchange outflow"',
-    ')',
-    mediaPart,
-    '-filter:replies',
-    'lang:en',
-    'min_faves:75',
+    '-giveaway',
+    '-presale',
+    '-airdrop',
+    '-memecoin',
+    '-meme',
+    '-parabolic',
+    '-moon',
+    '-100x',
+    '-lottery',
+    '-casino',
+    '-prediction',
+    '-astrology',
   ].join(' ');
 }
 
-function buildTokenProjectWatchPlan(source: SourceRow, maxItems: number): RotationPlan {
+function buildTokenProjectWatchPlan(source: SourceRow, bucket: number, maxItems: number): RotationPlan {
+  const index = positiveModulo(bucket, TOKEN_PROJECT_COHORTS.length);
+  const accounts = TOKEN_PROJECT_COHORTS[index] ?? TOKEN_PROJECT_COHORTS[0]!;
+  const query = buildProfileTopicContent(accounts, 'text', buildTokenProjectWatchTopicGate(), 25);
+
   return {
     source,
-    cohortName: 'token_project_watch_text',
-    cohortIndex: null,
-    accounts: [],
-    inputOverride: buildSearchInputOverride(buildTokenProjectWatchContent(), maxItems),
+    cohortName: `token_project_watch_text_${index}`,
+    cohortIndex: index,
+    accounts,
+    inputOverride: buildSearchInputOverride(query, maxItems),
   };
 }
 
-function buildTokenProjectWatchContent(): string {
+function buildTokenProjectWatchTopicGate(): string {
   return [
     '(',
     '"mainnet" OR "testnet" OR "token launch" OR TGE OR',
@@ -430,30 +459,41 @@ function buildTokenProjectWatchContent(): string {
   ].join(' ');
 }
 
-function buildSecurityAlertPlan(source: SourceRow, maxItems: number): RotationPlan {
+function buildSecurityAlertPlan(source: SourceRow, bucket: number, maxItems: number): RotationPlan {
+  const index = positiveModulo(bucket, SECURITY_ALERT_COHORTS.length);
+  const accounts = SECURITY_ALERT_COHORTS[index] ?? SECURITY_ALERT_COHORTS[0]!;
+  const query = buildProfileTopicContent(accounts, 'text', buildSecurityAlertTopicGate(), 20);
+
   return {
     source,
-    cohortName: 'security_alert_text',
-    cohortIndex: null,
-    accounts: [],
-    inputOverride: buildSearchInputOverride(buildSecurityAlertContent(), maxItems),
+    cohortName: `security_alert_text_${index}`,
+    cohortIndex: index,
+    accounts,
+    inputOverride: buildSearchInputOverride(query, maxItems),
   };
 }
 
-function buildSecurityAlertContent(): string {
+function buildSecurityAlertTopicGate(): string {
   return [
     '(',
     'hack OR hacked OR exploit OR exploited OR "security incident" OR',
-    '"rug pull" OR scam OR phishing OR "private key" OR',
-    '"smart contract vulnerability" OR "bridge attack" OR drain OR drained',
+    '"rug pull" OR phishing OR "private key" OR "seed phrase" OR',
+    '"smart contract vulnerability" OR "bridge attack" OR drained OR drain',
     ')',
     '(',
-    'crypto OR DeFi OR protocol OR wallet OR exchange OR',
-    'blockchain OR web3 OR NFT',
+    'crypto OR DeFi OR protocol OR wallet OR exchange OR blockchain OR web3',
     ')',
-    '-filter:replies',
-    'lang:en',
-    'min_faves:15',
+    '-airdrop',
+    '-giveaway',
+    '-presale',
+    '-referral',
+    '-"drain your wallet"',
+    '-"saved me"',
+    '-potato',
+    '-fridge',
+    '-recipe',
+    '-NSFW',
+    '-adult',
   ].join(' ');
 }
 
