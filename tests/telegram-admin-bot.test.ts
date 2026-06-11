@@ -221,9 +221,12 @@ describe('telegram admin bot scoped entry', () => {
     expect(payload.text).toContain('📈 <b>Reporting</b>');
     expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
     expect(buttons).toContain('🧾 Channel Audit');
+    expect(buttons).toContain('📜 Channel Logs');
     expect(buttons).toContain('📊 Overview');
     expect(buttons).toContain('💸 Costs');
     expect(buttons).toContain('🧠 AI Quality');
+    expect(buttons).toContain('🩺 Publisher Diagnostics');
+    expect(buttons).toContain('🧪 Data Validation');
     expect(buttons).toContain('📰 Editorial');
     expect(buttons).toContain('📈 Market Snapshot');
 
@@ -389,6 +392,92 @@ describe('telegram admin bot scoped entry', () => {
     expect(payload.text).toContain('🧾 <b>Channel Audit</b>');
     expect(payload.text).toContain('Queue Now');
     expect(payload.text).toContain('Last 24h Funnel');
+
+    vi.unstubAllGlobals();
+  });
+
+
+
+
+  it('opens data validation from the reporting menu', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🧪 Data Validation', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:data_validation');
+    expect(payload.text).toContain('🧪 <b>Data Validation</b>');
+    expect(payload.text).toContain('Channel Config');
+    expect(payload.text).toContain('Queue Checks');
+    expect(payload.text).toContain('Validation Results');
+    expect(payload.text).toContain('Pipeline 24h');
+    expect(payload.text).toContain('read-only');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens channel logs timeline from the reporting menu', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '📜 Channel Logs', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:channel_logs');
+    expect(payload.text).toContain('📜 <b>Channel Logs</b>');
+    expect(payload.text).toContain('Summary 48h');
+    expect(payload.text).toContain('Timeline');
+    expect(payload.text).toContain('read-only');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens publisher diagnostics for due queue and delivery blockers', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    env.TELEGRAM_FINAL_PUBLISH_ENABLED = 'true';
+    env.TELEGRAM_PUBLISH_SCHEDULER_ENABLED = 'true';
+    env.TELEGRAM_PUBLISH_DUE_LIMIT = '4';
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🩺 Publisher Diagnostics', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:publisher_diagnostics');
+    expect(payload.text).toContain('🩺 <b>Publisher Diagnostics</b>');
+    expect(payload.text).toContain('Publish Switches');
+    expect(payload.text).toContain('Due Queue');
+    expect(payload.text).toContain('Diagnosis');
+    expect(payload.text).toContain('Last Published');
+    expect(payload.text).toContain('Recent Failed Queue Rows');
 
     vi.unstubAllGlobals();
   });

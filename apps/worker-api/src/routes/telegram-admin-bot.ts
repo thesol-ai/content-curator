@@ -327,7 +327,7 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
 
     const report = await buildScopedOperationalReport(env, scoped);
     await saveSession(env, chatId, { ...scoped, screen: 'reports' });
-    await sendTelegramMessage(env, chatId, buildReportingDetailText(reportingDetail, report, scoped, env), reportSectionKeyboard());
+    await sendTelegramMessage(env, chatId, await buildReportingDetailText(reportingDetail, report, scoped, env), reportSectionKeyboard());
     return Response.json({ ok: true, handled: `report:${reportingDetail}` });
   }
 
@@ -909,10 +909,11 @@ async function platformKeyboard(env: Env, categoryId: string): Promise<object> {
 
 function reportSectionKeyboard(): object {
   return replyKeyboard([
-    ['🧾 Channel Audit'],
+    ['🧾 Channel Audit', '📜 Channel Logs'],
     ['📊 Overview', '💸 Costs'],
     ['🔄 Funnel', '📬 Publishing'],
     ['🩺 System', '🏆 Sources'],
+    ['🩺 Publisher Diagnostics', '🧪 Data Validation'],
     ['🧠 AI Quality', '📰 Editorial'],
     ['📈 Market Snapshot'],
     ['⬅️ Back'],
@@ -1159,11 +1160,14 @@ function parseSectionButton(text: string): OperationalReportSection | null {
   return map[normalized] ?? null;
 }
 
-type ReportingDetail = 'channel_audit' | 'ai_quality' | 'editorial' | 'market_snapshot';
+type ReportingDetail = 'channel_audit' | 'channel_logs' | 'publisher_diagnostics' | 'data_validation' | 'ai_quality' | 'editorial' | 'market_snapshot';
 
 function parseReportingDetailButton(text: string): ReportingDetail | null {
   const map: Record<string, ReportingDetail> = {
     '🧾 Channel Audit': 'channel_audit',
+    '📜 Channel Logs': 'channel_logs',
+    '🩺 Publisher Diagnostics': 'publisher_diagnostics',
+    '🧪 Data Validation': 'data_validation',
     '🧠 AI Quality': 'ai_quality',
     '📰 Editorial': 'editorial',
     '📈 Market Snapshot': 'market_snapshot',
@@ -1171,8 +1175,11 @@ function parseReportingDetailButton(text: string): ReportingDetail | null {
   return map[text] ?? null;
 }
 
-function buildReportingDetailText(detail: ReportingDetail, report: any, scope: ScopedSession, env: Env): string {
+async function buildReportingDetailText(detail: ReportingDetail, report: any, scope: ScopedSession, env: Env): Promise<string> {
   if (detail === 'channel_audit') return buildChannelAuditText(report, scope);
+  if (detail === 'channel_logs') return buildChannelLogsText(env, report, scope);
+  if (detail === 'publisher_diagnostics') return buildPublisherDiagnosticsText(env, report, scope);
+  if (detail === 'data_validation') return buildDataValidationText(env, report, scope);
   if (detail === 'ai_quality') return buildAIQualityText(report, scope);
   if (detail === 'editorial') return buildEditorialText(report, scope);
   return buildMarketSnapshotText(report, scope, env);
@@ -1317,6 +1324,629 @@ function positiveNumber(value: unknown): number | null {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
+}
+
+type ValidationIssue = {
+  severity: 'ok' | 'warning' | 'error';
+  label: string;
+  detail: string;
+};
+
+async function buildDataValidationText(env: Env, report: any, scope: ScopedSession): Promise<string> {
+  const channel = await safeFirst<any>(env, `
+    SELECT id, category_id, telegram_chat_id, language, timezone, allowed_windows, blocked_windows,
+           max_per_day, max_per_hour, min_gap_minutes, publish_enabled, enabled
+    FROM channels
+    WHERE id=?
+    LIMIT 1
+  `, [scope.channelId], null);
+
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const oneHourAgo = nowUnix - 3600;
+  const last24h = nowUnix - 24 * 3600;
+
+  const [
+    activeQueueRows,
+    queueIntegrityRows,
+    nextRows,
+    published24,
+    publishedHour,
+    discoveryRows,
+    itemRows,
+    aiRows,
+  ] = await Promise.all([
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT status, COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id=?
+        AND status IN ('scheduled','retry','publishing','failed')
+      GROUP BY status
+      ORDER BY status
+    `, [scope.channelId]),
+
+    safeAll<{ issue: string; count: number }>(env, `
+      SELECT issue, COUNT(*) AS count
+      FROM (
+        SELECT 'missing_scheduled_at' AS issue FROM publish_queue
+        WHERE channel_id=? AND status IN ('scheduled','retry','publishing') AND (scheduled_at IS NULL OR scheduled_at <= 0)
+
+        UNION ALL
+
+        SELECT 'missing_item_join' AS issue FROM publish_queue pq
+        LEFT JOIN discovery_items di ON di.id = pq.item_id
+        WHERE pq.channel_id=? AND di.id IS NULL
+
+        UNION ALL
+
+        SELECT 'missing_caption' AS issue FROM publish_queue
+        WHERE channel_id=? AND status IN ('scheduled','retry','publishing')
+          AND COALESCE(caption_short, caption_full, '') = ''
+
+        UNION ALL
+
+        SELECT 'bad_status' AS issue FROM publish_queue
+        WHERE channel_id=? AND status NOT IN ('scheduled','retry','publishing','published','failed','skipped')
+      )
+      GROUP BY issue
+      ORDER BY issue
+    `, [scope.channelId, scope.channelId, scope.channelId, scope.channelId]),
+
+    safeAll<any>(env, `
+      SELECT pq.id, pq.status, pq.scheduled_at, pq.created_at
+      FROM publish_queue pq
+      LEFT JOIN discovery_items di ON di.id = pq.item_id
+      WHERE pq.channel_id=?
+        AND pq.status IN ('scheduled','retry','publishing')
+        AND (?='all' OR di.platform=?)
+      ORDER BY COALESCE(pq.scheduled_at, 0) ASC, pq.created_at ASC
+      LIMIT 30
+    `, [scope.channelId, scope.platform, scope.platform]),
+
+    safeFirst<{ count: number }>(env, `
+      SELECT COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id=?
+        AND status='published'
+        AND published_at >= ?
+    `, [scope.channelId, last24h], { count: 0 }),
+
+    safeFirst<{ count: number }>(env, `
+      SELECT COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id=?
+        AND status='published'
+        AND published_at >= ?
+    `, [scope.channelId, oneHourAgo], { count: 0 }),
+
+    safeFirst<any>(env, `
+      SELECT
+        COUNT(*) AS runs,
+        COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0) AS failed,
+        MAX(created_at) AS last_run_at
+      FROM discovery_runs
+      WHERE category_id=?
+        AND (?='all' OR platform=?)
+        AND created_at >= datetime('now','-24 hours')
+    `, [scope.categoryId, scope.platform, scope.platform], { runs: 0, failed: 0, last_run_at: null }),
+
+    safeAll<{ status: string; count: number }>(env, `
+      SELECT status, COUNT(*) AS count
+      FROM discovery_items
+      WHERE category_id=?
+        AND (?='all' OR platform=?)
+        AND created_at >= datetime('now','-24 hours')
+      GROUP BY status
+      ORDER BY status
+    `, [scope.categoryId, scope.platform, scope.platform]),
+
+    safeFirst<any>(env, `
+      SELECT
+        COUNT(*) AS calls,
+        COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END), 0) AS success,
+        COALESCE(SUM(CASE WHEN status!='success' THEN 1 ELSE 0 END), 0) AS failed
+      FROM ai_usage
+      WHERE created_at >= datetime('now','-24 hours')
+    `, [], { calls: 0, success: 0, failed: 0 }),
+  ]);
+
+  const activeQueue = countRowsToSimpleObject(activeQueueRows);
+  const integrity = countIssueRowsToObject(queueIntegrityRows);
+  const maxPerDay = positiveNumber(channel?.max_per_day);
+  const maxPerHour = positiveNumber(channel?.max_per_hour);
+  const minGap = positiveNumber(channel?.min_gap_minutes);
+  const channelFound = Boolean(channel?.id);
+  const publishEnabled = isTruthy(channel?.publish_enabled);
+  const channelEnabled = isTruthy(channel?.enabled);
+  const chatConfigured = Boolean(String(channel?.telegram_chat_id ?? '').trim());
+  const activeScheduled = Number(activeQueue.scheduled ?? 0) + Number(activeQueue.retry ?? 0) + Number(activeQueue.publishing ?? 0);
+  const dueNow = nextRows.filter(row => Number(row.scheduled_at ?? 0) > 0 && Number(row.scheduled_at) <= nowUnix).length;
+  const spacingViolations = countSpacingViolations(nextRows, minGap);
+  const overDailyCapacity = maxPerDay === null ? false : Number(published24.count ?? 0) > maxPerDay;
+  const overHourlyCapacity = maxPerHour === null ? false : Number(publishedHour.count ?? 0) > maxPerHour;
+
+  const issues: ValidationIssue[] = [
+    check(channelFound, 'channel row exists', channelFound ? scope.channelId : 'missing channel config'),
+    check(channelEnabled, 'channel enabled', `enabled=${formatOptional(channel?.enabled)}`),
+    check(publishEnabled, 'channel publish enabled', `publish_enabled=${formatOptional(channel?.publish_enabled)}`),
+    check(chatConfigured, 'telegram chat configured', chatConfigured ? 'telegram_chat_id is set' : 'telegram_chat_id missing'),
+    check(maxPerDay !== null && maxPerDay > 0, 'daily capacity configured', `max_per_day=${formatOptional(channel?.max_per_day)}`),
+    check(maxPerHour !== null && maxPerHour > 0, 'hourly capacity configured', `max_per_hour=${formatOptional(channel?.max_per_hour)}`),
+    check(minGap !== null && minGap >= 0, 'min gap configured', `min_gap_minutes=${formatOptional(channel?.min_gap_minutes)}`),
+    check(Number(integrity.missing_scheduled_at ?? 0) === 0, 'queue scheduled_at integrity', `${int(integrity.missing_scheduled_at)} invalid row(s)`),
+    check(Number(integrity.missing_item_join ?? 0) === 0, 'queue item joins', `${int(integrity.missing_item_join)} missing discovery item(s)`),
+    check(Number(integrity.missing_caption ?? 0) === 0, 'queue captions', `${int(integrity.missing_caption)} missing caption row(s)`),
+    check(Number(integrity.bad_status ?? 0) === 0, 'queue statuses', `${int(integrity.bad_status)} bad status row(s)`),
+    check(spacingViolations === 0, 'scheduled spacing', `${int(spacingViolations)} min-gap violation(s) in next 30`),
+    check(!overDailyCapacity, 'daily capacity usage', `published24=${int(published24.count)} max/day=${maxPerDay === null ? 'n/a' : int(maxPerDay)}`),
+    check(!overHourlyCapacity, 'hourly capacity usage', `publishedHour=${int(publishedHour.count)} max/hour=${maxPerHour === null ? 'n/a' : int(maxPerHour)}`),
+  ];
+
+  const errorCount = issues.filter(issue => issue.severity === 'error').length;
+  const warningCount = issues.filter(issue => issue.severity === 'warning').length;
+  const overall = errorCount > 0 ? 'Needs Fix' : warningCount > 0 ? 'Warnings' : 'OK';
+
+  const lines = [
+    '🧪 <b>Data Validation</b>',
+    '',
+    scopeLine(scope),
+    `<b>Time</b>: ${escapeHtml(formatTehranDate(new Date().toISOString()))}`,
+    '',
+    `Overall: <b>${escapeHtml(overall)}</b>`,
+    `Errors: <b>${int(errorCount)}</b> · Warnings: <b>${int(warningCount)}</b>`,
+    '',
+    '📣 <b>Channel Config</b>',
+    `- timezone: <code>${escapeHtml(channel?.timezone ?? 'n/a')}</code>`,
+    `- language: <code>${escapeHtml(channel?.language ?? 'n/a')}</code>`,
+    `- allowed windows: <code>${escapeHtml(channel?.allowed_windows ?? 'n/a')}</code>`,
+    `- blocked windows: <code>${escapeHtml(channel?.blocked_windows ?? 'n/a')}</code>`,
+    '',
+    '📬 <b>Queue Checks</b>',
+    `- active scheduled/retry/publishing: <b>${int(activeScheduled)}</b>`,
+    `- due now: <b>${int(dueNow)}</b>`,
+    `- published last 24h: <b>${int(published24.count)}</b>`,
+    `- published last hour: <b>${int(publishedHour.count)}</b>`,
+    `- next rows scanned: <b>${int(nextRows.length)}</b>`,
+    '',
+    '🔎 <b>Validation Results</b>',
+  ];
+
+  for (const issue of issues) {
+    lines.push(`${validationIcon(issue.severity)} <b>${escapeHtml(issue.label)}</b> — ${escapeHtml(issue.detail)}`);
+  }
+
+  lines.push('');
+  lines.push('🧠 <b>Pipeline 24h</b>');
+  lines.push(`- discovery runs: <b>${int(discoveryRows.runs)}</b>`);
+  lines.push(`- failed discovery runs: <b>${int(discoveryRows.failed)}</b>`);
+  lines.push(`- last run: <code>${escapeHtml(discoveryRows.last_run_at ?? 'n/a')}</code>`);
+  lines.push(`- discovery item statuses: ${escapeHtml(formatStatusCounts(itemRows))}`);
+  lines.push(`- AI calls: <b>${int(aiRows.calls)}</b> · success <b>${int(aiRows.success)}</b> · failed <b>${int(aiRows.failed)}</b>`);
+  lines.push('');
+  lines.push('This view is read-only and does not change queue or settings.');
+
+  return lines.join('\n');
+}
+
+function check(ok: boolean, label: string, detail: string): ValidationIssue {
+  return {
+    severity: ok ? 'ok' : 'error',
+    label,
+    detail,
+  };
+}
+
+function validationIcon(severity: ValidationIssue['severity']): string {
+  if (severity === 'error') return '🚨';
+  if (severity === 'warning') return '⚠️';
+  return '✅';
+}
+
+function countIssueRowsToObject(rows: Array<{ issue: string; count: number }>): Record<string, number> {
+  return rows.reduce((acc: Record<string, number>, row) => {
+    acc[String(row.issue)] = Number(row.count ?? 0);
+    return acc;
+  }, {});
+}
+
+function countSpacingViolations(rows: any[], minGapMinutes: number | null): number {
+  if (minGapMinutes === null || minGapMinutes <= 0) return 0;
+
+  const sorted = rows
+    .map(row => Number(row.scheduled_at ?? 0))
+    .filter(value => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+
+  let violations = 0;
+  const minSeconds = minGapMinutes * 60;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] - sorted[i - 1] < minSeconds) violations++;
+  }
+  return violations;
+}
+
+function formatStatusCounts(rows: Array<{ status: string; count: number }>): string {
+  if (rows.length === 0) return 'none';
+  return rows.map(row => `${row.status}:${int(row.count)}`).join(' · ');
+}
+
+type ChannelLogEntry = {
+  ts: number;
+  source: 'publish_queue' | 'discovery_run' | 'run_event';
+  severity: 'info' | 'warning' | 'error';
+  title: string;
+  detail?: string | null;
+};
+
+async function buildChannelLogsText(env: Env, report: any, scope: ScopedSession): Promise<string> {
+  const [publishRows, discoveryRows, runEventRows] = await Promise.all([
+    safeAll<any>(env, `
+      SELECT
+        pq.id,
+        pq.status,
+        pq.scheduled_at,
+        pq.published_at,
+        pq.retry_count,
+        pq.publish_error,
+        pq.telegram_message_id,
+        COALESCE(NULLIF(di.source_account,''), '__unknown__') AS source_account,
+        di.platform AS platform
+      FROM publish_queue pq
+      LEFT JOIN discovery_items di ON di.id = pq.item_id
+      WHERE pq.channel_id=?
+        AND (?='all' OR di.platform=?)
+      ORDER BY COALESCE(pq.published_at, pq.scheduled_at, CAST(strftime('%s', pq.created_at) AS INTEGER), 0) DESC
+      LIMIT 18
+    `, [scope.channelId, scope.platform, scope.platform]),
+
+    safeAll<any>(env, `
+      SELECT id, category_id, platform, status, error_message, items_fetched, items_ai_selected, items_queued, created_at, completed_at
+      FROM discovery_runs
+      WHERE category_id=?
+        AND (?='all' OR platform=?)
+      ORDER BY created_at DESC
+      LIMIT 12
+    `, [scope.categoryId, scope.platform, scope.platform]),
+
+    safeAll<any>(env, `
+      SELECT event_type, phase, severity, message, source_id, dataset_id, created_at
+      FROM run_events
+      WHERE created_at >= datetime('now','-48 hours')
+        AND (
+          message LIKE ?
+          OR source_id LIKE ?
+          OR dataset_id LIKE ?
+          OR event_type LIKE ?
+        )
+      ORDER BY created_at DESC
+      LIMIT 12
+    `, [
+      `%${scope.categoryId}%`,
+      `%${scope.categoryId}%`,
+      `%${scope.categoryId}%`,
+      `%${scope.categoryId}%`,
+    ]),
+  ]);
+
+  const entries: ChannelLogEntry[] = [
+    ...publishRows.map(row => publishQueueLogEntry(row)),
+    ...discoveryRows.map(row => discoveryRunLogEntry(row)),
+    ...runEventRows.map(row => runEventLogEntry(row)),
+  ]
+    .filter(entry => Number.isFinite(entry.ts) && entry.ts > 0)
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 20);
+
+  const failedPublish = publishRows.filter(row => row.status === 'failed').length;
+  const overdue = publishRows.filter(row => {
+    const scheduledAt = Number(row.scheduled_at ?? 0);
+    return row.status !== 'published' && scheduledAt > 0 && Math.floor(Date.now() / 1000) - scheduledAt >= 15 * 60;
+  }).length;
+  const failedDiscovery = discoveryRows.filter(row => row.status === 'failed').length;
+  const errorEvents = runEventRows.filter(row => String(row.severity ?? '').toLowerCase() === 'error').length;
+
+  const lines = [
+    '📜 <b>Channel Logs</b>',
+    '',
+    scopeLine(scope),
+    `<b>Time</b>: ${escapeHtml(formatTehranDate(new Date().toISOString()))}`,
+    '',
+    '📌 <b>Summary 48h</b>',
+    `- publish rows scanned: <b>${int(publishRows.length)}</b>`,
+    `- overdue publish rows: <b>${int(overdue)}</b>`,
+    `- failed publish rows: <b>${int(failedPublish)}</b>`,
+    `- failed discovery runs: <b>${int(failedDiscovery)}</b>`,
+    `- error run events: <b>${int(errorEvents)}</b>`,
+    '',
+    '🧾 <b>Timeline</b>',
+  ];
+
+  if (entries.length === 0) {
+    lines.push('- no recent channel log entries found');
+  } else {
+    for (const entry of entries) {
+      const icon = logSeverityIcon(entry.severity);
+      const when = escapeHtml(formatTehranDate(new Date(entry.ts * 1000).toISOString()));
+      lines.push(`${icon} <b>${when}</b> · ${escapeHtml(entry.title)}`);
+      if (entry.detail) lines.push(`  <code>${escapeHtml(String(entry.detail).slice(0, 180))}</code>`);
+    }
+  }
+
+  lines.push('');
+  lines.push('This view is read-only. It does not retry or mutate queue rows.');
+
+  return lines.join('\n');
+}
+
+function publishQueueLogEntry(row: any): ChannelLogEntry {
+  const status = String(row.status ?? 'unknown');
+  const ts = Number(row.published_at ?? row.scheduled_at ?? 0);
+  const source = trimSource(row.source_account ?? '__unknown__');
+  const retry = Number(row.retry_count ?? 0);
+  const title = `publish ${status} · ${source} · ${formatQueueId(row.id)}`;
+
+  return {
+    ts,
+    source: 'publish_queue',
+    severity: status === 'failed' ? 'error' : retry > 0 ? 'warning' : 'info',
+    title,
+    detail: row.publish_error ?? (row.telegram_message_id ? `telegram_message_id=${row.telegram_message_id}` : null),
+  };
+}
+
+function discoveryRunLogEntry(row: any): ChannelLogEntry {
+  const ts = parseSqliteDateToUnix(row.completed_at ?? row.created_at);
+  const status = String(row.status ?? 'unknown');
+  return {
+    ts,
+    source: 'discovery_run',
+    severity: status === 'failed' ? 'error' : status === 'processing' ? 'warning' : 'info',
+    title: `discovery ${status} · ${escapeHtml(row.platform ?? 'n/a')} · ${formatQueueId(row.id)}`,
+    detail: row.error_message ?? `fetched=${int(row.items_fetched)} selected=${int(row.items_ai_selected)} queued=${int(row.items_queued)}`,
+  };
+}
+
+function runEventLogEntry(row: any): ChannelLogEntry {
+  const severity = normalizeLogSeverity(row.severity);
+  return {
+    ts: parseSqliteDateToUnix(row.created_at),
+    source: 'run_event',
+    severity,
+    title: `event ${String(row.event_type ?? 'unknown')} · ${String(row.phase ?? 'n/a')}`,
+    detail: row.message ?? row.source_id ?? row.dataset_id ?? null,
+  };
+}
+
+function normalizeLogSeverity(value: unknown): ChannelLogEntry['severity'] {
+  const raw = String(value ?? '').toLowerCase();
+  if (raw === 'error' || raw === 'fatal') return 'error';
+  if (raw === 'warn' || raw === 'warning') return 'warning';
+  return 'info';
+}
+
+function logSeverityIcon(severity: ChannelLogEntry['severity']): string {
+  if (severity === 'error') return '🚨';
+  if (severity === 'warning') return '⚠️';
+  return 'ℹ️';
+}
+
+function parseSqliteDateToUnix(value: unknown): number {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z';
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
+type PublisherDiagnosticsChannelRow = {
+  id?: string;
+  telegram_chat_id?: string | null;
+  publish_enabled?: number | string | boolean | null;
+  max_per_day?: number | null;
+  max_per_hour?: number | null;
+  min_gap_minutes?: number | null;
+  timezone?: string | null;
+};
+
+type PublishFailureRow = {
+  id: string;
+  status: string;
+  scheduled_at: number | null;
+  retry_count: number | null;
+  publish_error: string | null;
+  source_account?: string | null;
+  post_id?: string | null;
+  created_at?: string | null;
+};
+
+async function buildPublisherDiagnosticsText(env: Env, report: any, scope: ScopedSession): Promise<string> {
+  const channel = await safeFirst<PublisherDiagnosticsChannelRow | null>(env, `
+    SELECT id, telegram_chat_id, publish_enabled, max_per_day, max_per_hour, min_gap_minutes, timezone
+    FROM channels
+    WHERE id=?
+    LIMIT 1
+  `, [scope.channelId], null);
+
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const dueRows = await safeAll<PublishFailureRow>(env, `
+    SELECT
+      pq.id,
+      pq.status,
+      pq.scheduled_at,
+      pq.retry_count,
+      pq.publish_error,
+      COALESCE(NULLIF(di.source_account,''), '__unknown__') AS source_account,
+      di.post_id AS post_id,
+      pq.created_at AS created_at
+    FROM publish_queue pq
+    LEFT JOIN discovery_items di ON di.id = pq.item_id
+    WHERE pq.channel_id=?
+      AND pq.status IN ('scheduled','retry','publishing')
+      AND pq.scheduled_at <= ?
+      AND (?='all' OR di.platform=?)
+    ORDER BY pq.scheduled_at ASC
+    LIMIT 20
+  `, [scope.channelId, nowUnix, scope.platform, scope.platform]);
+
+  const overdueRows = dueRows.filter(row => Number(row.scheduled_at ?? 0) > 0 && nowUnix - Number(row.scheduled_at) >= 15 * 60);
+
+  const failedRows = await safeAll<PublishFailureRow>(env, `
+    SELECT
+      pq.id,
+      pq.status,
+      pq.scheduled_at,
+      pq.retry_count,
+      pq.publish_error,
+      COALESCE(NULLIF(di.source_account,''), '__unknown__') AS source_account,
+      di.post_id AS post_id,
+      pq.created_at AS created_at
+    FROM publish_queue pq
+    LEFT JOIN discovery_items di ON di.id = pq.item_id
+    WHERE pq.channel_id=?
+      AND pq.status='failed'
+      AND (?='all' OR di.platform=?)
+    ORDER BY COALESCE(pq.scheduled_at, 0) DESC, pq.created_at DESC
+    LIMIT 8
+  `, [scope.channelId, scope.platform, scope.platform]);
+
+  const lastPublished = await safeAll<any>(env, `
+    SELECT
+      pq.id,
+      pq.published_at,
+      pq.telegram_message_id,
+      COALESCE(NULLIF(di.source_account,''), '__unknown__') AS source_account,
+      di.post_id AS post_id
+    FROM publish_queue pq
+    LEFT JOIN discovery_items di ON di.id = pq.item_id
+    WHERE pq.channel_id=?
+      AND pq.status='published'
+      AND (?='all' OR di.platform=?)
+    ORDER BY COALESCE(pq.published_at, 0) DESC
+    LIMIT 5
+  `, [scope.channelId, scope.platform, scope.platform]);
+
+  const publishEnvEnabled = env.TELEGRAM_FINAL_PUBLISH_ENABLED === 'true';
+  const schedulerEnvEnabled = env.TELEGRAM_PUBLISH_SCHEDULER_ENABLED === 'true';
+  const dueLimit = Number((env as any).TELEGRAM_PUBLISH_DUE_LIMIT ?? 0);
+  const channelEnabled = isTruthy(channel?.publish_enabled);
+  const chatConfigured = Boolean(String(channel?.telegram_chat_id ?? '').trim());
+
+  const diagnosis = diagnosePublisher({
+    publishEnvEnabled,
+    schedulerEnvEnabled,
+    channelEnabled,
+    chatConfigured,
+    dueNow: dueRows.length,
+    overdue: overdueRows.length,
+    failed: failedRows.length,
+  });
+
+  const lines = [
+    '🩺 <b>Publisher Diagnostics</b>',
+    '',
+    scopeLine(scope),
+    `<b>Time</b>: ${escapeHtml(formatTehranDate(new Date().toISOString()))}`,
+    '',
+    '🚦 <b>Publish Switches</b>',
+    `- TELEGRAM_FINAL_PUBLISH_ENABLED: <b>${publishEnvEnabled ? 'true' : 'false'}</b>`,
+    `- TELEGRAM_PUBLISH_SCHEDULER_ENABLED: <b>${schedulerEnvEnabled ? 'true' : 'false'}</b>`,
+    `- channel publish_enabled: <b>${channelEnabled ? 'true' : 'false'}</b>`,
+    `- Telegram chat id: <b>${chatConfigured ? 'configured' : 'missing'}</b>`,
+    `- due limit/tick: <b>${Number.isFinite(dueLimit) && dueLimit > 0 ? int(dueLimit) : 'n/a'}</b>`,
+    '',
+    '📬 <b>Due Queue</b>',
+    `- due now: <b>${int(dueRows.length)}</b>`,
+    `- overdue 15m+: <b>${int(overdueRows.length)}</b>`,
+    `- failed rows: <b>${int(failedRows.length)}</b>`,
+    '',
+    '🧠 <b>Diagnosis</b>',
+    ...diagnosis.map(line => `- ${line}`),
+    '',
+    '⏰ <b>Due / Overdue Items</b>',
+  ];
+
+  if (dueRows.length === 0) {
+    lines.push('- no due items found');
+  } else {
+    for (const row of dueRows.slice(0, 8)) {
+      const secondsLate = Math.max(0, nowUnix - Number(row.scheduled_at ?? nowUnix));
+      lines.push(`- ${escapeHtml(formatAge(secondsLate))} late · ${escapeHtml(row.status)} · ${formatQueueId(row.id)} · ${trimSource(row.source_account)}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('✅ <b>Last Published</b>');
+  if (lastPublished.length === 0) {
+    lines.push('- no published rows found for this scope');
+  } else {
+    for (const row of lastPublished.slice(0, 5)) {
+      const when = row.published_at ? formatTehranDate(new Date(Number(row.published_at) * 1000).toISOString()) : 'unknown';
+      const tg = row.telegram_message_id ? ` · tg ${escapeHtml(row.telegram_message_id)}` : '';
+      lines.push(`- ${escapeHtml(when)} · ${formatQueueId(row.id)}${tg} · ${trimSource(row.source_account)}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('🚨 <b>Recent Failed Queue Rows</b>');
+  if (failedRows.length === 0) {
+    lines.push('- no failed rows found');
+  } else {
+    for (const row of failedRows.slice(0, 5)) {
+      lines.push(`- ${formatQueueId(row.id)} · retry <b>${int(row.retry_count)}</b> · ${trimSource(row.source_account)}`);
+      if (row.publish_error) lines.push(`  <code>${escapeHtml(String(row.publish_error).slice(0, 180))}</code>`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function diagnosePublisher(input: {
+  publishEnvEnabled: boolean;
+  schedulerEnvEnabled: boolean;
+  channelEnabled: boolean;
+  chatConfigured: boolean;
+  dueNow: number;
+  overdue: number;
+  failed: number;
+}): string[] {
+  const lines: string[] = [];
+
+  if (!input.publishEnvEnabled) lines.push('final publish is disabled by env');
+  if (!input.schedulerEnvEnabled) lines.push('publish scheduler is disabled by env');
+  if (!input.channelEnabled) lines.push('channel publishing is disabled');
+  if (!input.chatConfigured) lines.push('channel telegram_chat_id is missing');
+
+  if (input.dueNow === 0) {
+    lines.push('no due posts right now; scheduled posts may simply be for the future');
+  } else if (input.overdue > 0) {
+    lines.push('due posts are overdue; inspect publisher logs and Telegram send errors');
+  } else {
+    lines.push('due posts exist and are recent; wait for the next scheduler tick or inspect logs if they stay due');
+  }
+
+  if (input.failed > 0) lines.push('failed publish rows exist; open failed row details in the database/logs');
+
+  if (lines.length === 0) lines.push('no obvious blocker detected from queue metadata');
+
+  return lines;
+}
+
+function isTruthy(value: unknown): boolean {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function formatQueueId(value: unknown): string {
+  const raw = String(value ?? '');
+  if (!raw) return '<code>unknown</code>';
+  const compact = raw.length > 14 ? `${raw.slice(0, 6)}…${raw.slice(-6)}` : raw;
+  return `<code>${escapeHtml(compact)}</code>`;
+}
+
+function formatAge(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  if (safe < 60) return `${safe}s`;
+  if (safe < 3600) return `${Math.floor(safe / 60)}m`;
+  if (safe < 86400) return `${Math.floor(safe / 3600)}h ${Math.floor((safe % 3600) / 60)}m`;
+  return `${Math.floor(safe / 86400)}d ${Math.floor((safe % 86400) / 3600)}h`;
 }
 
 function buildChannelAuditText(report: any, scope: ScopedSession): string {
