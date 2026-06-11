@@ -59,7 +59,7 @@ function bySource(result: any, sourceId: string): any {
 }
 
 describe('Phase 3B trusted Apify rotation queries', () => {
-  it('keeps rotation bounded with the existing six source ids and reduced risky-source maxItems', async () => {
+  it('keeps rotation bounded with existing six source ids and reduced risky-source maxItems', async () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
 
     expect(result.ok).toBe(true);
@@ -67,6 +67,8 @@ describe('Phase 3B trusted Apify rotation queries', () => {
     expect(result.plans.map((p: any) => p.sourceId).sort()).toEqual([...SOURCE_IDS].sort());
 
     for (const plan of result.plans) {
+      const query = String(plan.inputOverride.query);
+
       expect(plan.inputOverride.maxItems).toBe(EXPECTED_MAX_ITEMS_BY_SOURCE[plan.sourceId]);
       expect(plan.inputOverride.maxItems).toBeLessThanOrEqual(24);
       expect(plan.inputOverride.queryType).toBe('Latest');
@@ -75,63 +77,39 @@ describe('Phase 3B trusted Apify rotation queries', () => {
       expect(plan.inputOverride.searchTerms).toBeUndefined();
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
 
-      const query = String(plan.inputOverride.query);
+      expect(query).toContain('from:');
       expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
       expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
-      expect((query.match(/min_faves:/g) ?? []).length).toBe(1);
+      expect((query.match(/min_faves:/g) ?? []).length).toBeLessThanOrEqual(1);
     }
   });
 
-  it('builds Iran-focused trusted news, market, token, and security buckets', async () => {
+  it('uses trusted profile cohorts without whole-web search gates', async () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
 
-    const newsText = String(bySource(result, 'src_crypto_x_news_text').inputOverride.query);
-    expect(newsText).toContain('XRP');
-    expect(newsText).toContain('DOGE');
-    expect(newsText).toContain('SHIB');
-    expect(newsText).toContain('TON');
-    expect(newsText).toContain('USDT');
-    expect(newsText).toContain('"MEXC listing"');
-    expect(newsText).toContain('min_faves:25');
+    const newsText = bySource(result, 'src_crypto_x_news_text');
+    expect(newsText.cohortName).toContain('core_news_text');
+    expect(String(newsText.inputOverride.query)).toContain('from:');
+    expect(String(newsText.inputOverride.query)).toContain('-filter:media');
 
     const voicesText = bySource(result, 'src_crypto_x_voices_text');
     expect(voicesText.cohortName).toContain('expert_signals_text');
-    expect(String(voicesText.inputOverride.query)).toContain('"funding rate"');
-    expect(String(voicesText.inputOverride.query)).toContain('governance');
-    expect(String(voicesText.inputOverride.query)).toContain('min_faves:30');
+    expect(String(voicesText.inputOverride.query)).toContain('from:');
 
     const security = bySource(result, 'src_crypto_x_voices_media');
-    const securityQuery = String(security.inputOverride.query);
     expect(security.cohortName).toContain('security_alert_text');
     expect(security.accounts).toEqual(['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts']);
-    expect(securityQuery).toContain('from:zachxbt');
-    expect(securityQuery).toContain('from:PeckShieldAlert');
-    expect(securityQuery).toContain('phishing');
-    expect(securityQuery).toContain('"private key"');
-    expect(securityQuery).toContain('min_faves:20');
-    expect(securityQuery).toContain('-potato');
-    expect(securityQuery).toContain('-adult');
+    expect(String(security.inputOverride.query)).toContain('from:zachxbt');
+    expect(String(security.inputOverride.query)).toContain('from:PeckShieldAlert');
 
     const market = bySource(result, 'src_market_trending_x_text');
-    const marketQuery = String(market.inputOverride.query);
     expect(market.cohortName).toContain('market_impact_text');
     expect(market.accounts.length).toBeGreaterThan(0);
-    expect(marketQuery).toContain('from:');
-    expect(marketQuery).toContain('Tether');
-    expect(marketQuery).toContain('"exchange inflow"');
-    expect(marketQuery).toContain('min_faves:50');
-    expect(marketQuery).toContain('-meme');
-    expect(marketQuery).toContain('-astrology');
+    expect(String(market.inputOverride.query)).toContain('from:');
 
     const tokenProject = bySource(result, 'src_market_trending_x_media');
-    const tokenQuery = String(tokenProject.inputOverride.query);
     expect(tokenProject.cohortName).toContain('token_project_watch_text');
     expect(tokenProject.accounts.length).toBeGreaterThan(0);
-    expect(tokenQuery).toContain('from:');
-    expect(tokenQuery).toContain('Notcoin');
-    expect(tokenQuery).toContain('DOGS');
-    expect(tokenQuery).toContain('"Hamster Kombat"');
-    expect(tokenQuery).toContain('-phishing');
-    expect(tokenQuery).toContain('min_faves:25');
+    expect(String(tokenProject.inputOverride.query)).toContain('from:');
   });
 });

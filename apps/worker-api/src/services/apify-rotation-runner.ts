@@ -276,11 +276,11 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   const id = source.id;
 
   if (id === 'src_crypto_x_news_media') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 24, buildCoreNewsTopicGate(), 25);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 24);
   }
 
   if (id === 'src_crypto_x_news_text') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 24, buildCoreNewsTopicGate(), 25);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 24);
   }
 
   if (id === 'src_crypto_x_voices_media') {
@@ -288,7 +288,7 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   }
 
   if (id === 'src_crypto_x_voices_text') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 24, buildExpertSignalsTopicGate(), 30);
+    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 24);
   }
 
   // Query-first market impact discovery. Cost-neutral: same source ids, cadence, and maxItems.
@@ -382,7 +382,7 @@ function buildExpertSignalsTopicGate(): string {
 function buildMarketImpactPlan(source: SourceRow, bucket: number, mode: RotationMode, maxItems: number): RotationPlan {
   const index = positiveModulo(bucket, MARKET_IMPACT_COHORTS.length);
   const accounts = MARKET_IMPACT_COHORTS[index] ?? MARKET_IMPACT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, mode, buildMarketImpactTopicGate(), 50);
+  const query = buildProfileTopicContent(accounts, mode);
 
   return {
     source,
@@ -420,7 +420,7 @@ function buildMarketImpactTopicGate(): string {
 function buildTokenProjectWatchPlan(source: SourceRow, bucket: number, maxItems: number): RotationPlan {
   const index = positiveModulo(bucket, TOKEN_PROJECT_COHORTS.length);
   const accounts = TOKEN_PROJECT_COHORTS[index] ?? TOKEN_PROJECT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, 'text', buildTokenProjectWatchTopicGate(), 25);
+  const query = buildProfileTopicContent(accounts, 'text');
 
   return {
     source,
@@ -459,7 +459,7 @@ function buildTokenProjectWatchTopicGate(): string {
 function buildSecurityAlertPlan(source: SourceRow, bucket: number, maxItems: number): RotationPlan {
   const index = positiveModulo(bucket, SECURITY_ALERT_COHORTS.length);
   const accounts = SECURITY_ALERT_COHORTS[index] ?? SECURITY_ALERT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, 'text', buildSecurityAlertTopicGate(), 20);
+  const query = buildProfileTopicContent(accounts, 'text');
 
   return {
     source,
