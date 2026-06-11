@@ -293,6 +293,31 @@ describe('telegram admin bot scoped entry', () => {
 
 
 
+  it('opens publishing queue detail with capacity and next schedule visibility', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '📬 Publishing', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:publish_queue');
+    expect(payload.text).toContain('📬 <b>Publishing Queue</b>');
+    expect(payload.text).toContain('Capacity');
+    expect(payload.text).toContain('remaining 24h capacity');
+    expect(payload.text).toContain('Next Scheduled Posts');
+
+    vi.unstubAllGlobals();
+  });
+
   it('opens platform scope settings detail instead of treating it as platform selection', async () => {
     const { env, fetchMock } = await chooseScope();
 

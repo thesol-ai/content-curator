@@ -301,6 +301,15 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     return Response.json({ ok: true, handled: `report:${costSection}` });
   }
 
+  if (text === '📬 Publishing') {
+    const scoped = await requireScope(env, chatId);
+    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
+
+    await saveSession(env, chatId, { ...scoped, screen: 'reports' });
+    await sendTelegramMessage(env, chatId, await buildPublishingQueueText(env, scoped), reportSectionKeyboard());
+    return Response.json({ ok: true, handled: 'report:publish_queue' });
+  }
+
   const section = parseSectionButton(text);
   if (section) {
     const scoped = await requireScope(env, chatId);
@@ -766,6 +775,22 @@ function buildHelpDetailText(text: string, scope: ScopedSession | null): string 
   return null;
 }
 
+function formatTehranDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date).replace(',', '');
+}
+
 function scopeLine(scope: ScopedSession): string {
   return `<b>Scope</b>: ${escapeHtml(scope.categoryId)} · ${escapeHtml(scope.channelId)} · ${escapeHtml(scope.platform)}`;
 }
@@ -849,7 +874,7 @@ async function channelKeyboard(env: Env, categoryId: string): Promise<object> {
   const channels = rows.length > 0 ? rows : [{ id: 'crypto_fa_pilot', category_id: 'crypto' }];
   return replyKeyboard([
     ...channels.map(row => [`📣 ${row.id}`]),
-    ['⬅️ Back', '📂 Change Category'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -877,7 +902,7 @@ async function platformKeyboard(env: Env, categoryId: string): Promise<object> {
   return replyKeyboard([
     ['🌐 All Platforms'],
     ...unique.map(platform => [platformLabel(platform)]),
-    ['⬅️ Back', '📣 Change Channel'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -1128,7 +1153,6 @@ function parseSectionButton(text: string): OperationalReportSection | null {
     '📊 Overview': 'overview',
     '🔄 Funnel': 'pipeline',
     '📬 Publish': 'publish',
-    '📬 Publishing': 'publish',
     '🩺 System': 'health',
     '🏆 Sources': 'sources',
   };
@@ -1154,6 +1178,147 @@ function buildReportingDetailText(detail: ReportingDetail, report: any, scope: S
   return buildMarketSnapshotText(report, scope, env);
 }
 
+type ChannelPublishConfig = {
+  id?: string;
+  category_id?: string;
+  timezone?: string;
+  max_per_day?: number;
+  max_per_hour?: number;
+  min_gap_minutes?: number;
+};
+
+type ScheduledPostRow = {
+  id: string;
+  scheduled_at: number | null;
+  status: string;
+  retry_count?: number | null;
+  source_account?: string | null;
+  post_id?: string | null;
+};
+
+async function buildPublishingQueueText(env: Env, scope: ScopedSession): Promise<string> {
+  const channel = await safeFirst<ChannelPublishConfig | null>(env, `
+    SELECT id, category_id, timezone, max_per_day, max_per_hour, min_gap_minutes
+    FROM channels
+    WHERE id=?
+    LIMIT 1
+  `, [scope.channelId], null);
+
+  const maxPerDay = positiveNumber(channel?.max_per_day);
+  const maxPerHour = positiveNumber(channel?.max_per_hour);
+  const minGap = positiveNumber(channel?.min_gap_minutes);
+  const timezone = String(channel?.timezone ?? 'Asia/Tehran');
+
+  const activeCounts = await safeAll<{ status: string; count: number }>(env, `
+    SELECT status, COUNT(*) AS count
+    FROM publish_queue
+    WHERE channel_id=?
+      AND status IN ('scheduled','retry','publishing','failed')
+    GROUP BY status
+    ORDER BY status
+  `, [scope.channelId]);
+
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const oneHourAgo = nowUnix - 3600;
+  const dayStart = nowUnix - 24 * 3600;
+
+  const published24 = await safeFirst<{ count: number }>(env, `
+    SELECT COUNT(*) AS count
+    FROM publish_queue
+    WHERE channel_id=?
+      AND status='published'
+      AND published_at >= ?
+  `, [scope.channelId, dayStart], { count: 0 });
+
+  const publishedHour = await safeFirst<{ count: number }>(env, `
+    SELECT COUNT(*) AS count
+    FROM publish_queue
+    WHERE channel_id=?
+      AND status='published'
+      AND published_at >= ?
+  `, [scope.channelId, oneHourAgo], { count: 0 });
+
+  const nextRows = await safeAll<ScheduledPostRow>(env, `
+    SELECT
+      pq.id,
+      pq.scheduled_at,
+      pq.status,
+      pq.retry_count,
+      COALESCE(NULLIF(di.source_account,''), '__unknown__') AS source_account,
+      di.post_id AS post_id
+    FROM publish_queue pq
+    LEFT JOIN discovery_items di ON di.id = pq.item_id
+    WHERE pq.channel_id=?
+      AND pq.status IN ('scheduled','retry','publishing')
+      AND (?='all' OR di.platform=?)
+    ORDER BY COALESCE(pq.scheduled_at, 0) ASC, pq.created_at ASC
+    LIMIT 12
+  `, [scope.channelId, scope.platform, scope.platform]);
+
+  const counts = countRowsToSimpleObject(activeCounts);
+  const remainingDay = maxPerDay === null ? null : Math.max(0, maxPerDay - Number(published24.count ?? 0));
+  const remainingHour = maxPerHour === null ? null : Math.max(0, maxPerHour - Number(publishedHour.count ?? 0));
+  const dueNow = nextRows.filter(row => Number(row.scheduled_at ?? 0) > 0 && Number(row.scheduled_at) <= nowUnix).length;
+
+  const lines = [
+    '📬 <b>Publishing Queue</b>',
+    '',
+    scopeLine(scope),
+    `<b>Time</b>: ${escapeHtml(formatTehranDate(new Date().toISOString()))}`,
+    '',
+    '📬 <b>Queue Now</b>',
+    `- scheduled: <b>${int(counts.scheduled)}</b>`,
+    `- publishing: <b>${int(counts.publishing)}</b>`,
+    `- retry: <b>${int(counts.retry)}</b>`,
+    `- failed: <b>${int(counts.failed)}</b>`,
+    `- due now: <b>${int(dueNow)}</b>`,
+    '',
+    '📏 <b>Capacity</b>',
+    `- max/day: <b>${maxPerDay === null ? 'n/a' : int(maxPerDay)}</b>`,
+    `- published last 24h: <b>${int(published24.count)}</b>`,
+    `- remaining 24h capacity: <b>${remainingDay === null ? 'n/a' : int(remainingDay)}</b>`,
+    `- max/hour: <b>${maxPerHour === null ? 'n/a' : int(maxPerHour)}</b>`,
+    `- published last hour: <b>${int(publishedHour.count)}</b>`,
+    `- remaining hourly capacity: <b>${remainingHour === null ? 'n/a' : int(remainingHour)}</b>`,
+    `- min gap: <b>${minGap === null ? 'n/a' : int(minGap)} min</b>`,
+    '',
+    '🗓 <b>Next Scheduled Posts</b>',
+  ];
+
+  if (nextRows.length === 0) {
+    lines.push('- no scheduled posts found for this scope');
+  } else {
+    for (const row of nextRows.slice(0, 10)) {
+      const when = row.scheduled_at ? formatTehranDate(new Date(Number(row.scheduled_at) * 1000).toISOString()) : 'unscheduled';
+      const due = Number(row.scheduled_at ?? 0) <= nowUnix ? ' · due' : '';
+      const source = trimSource(row.source_account ?? '__unknown__');
+      lines.push(`- ${escapeHtml(when)} · ${escapeHtml(row.status)}${due} · ${source}`);
+    }
+
+    if (nextRows.length > 10) {
+      lines.push(`- ${int(nextRows.length - 10)} more hidden`);
+    }
+  }
+
+  lines.push('');
+  lines.push('If scheduled items do not publish when due, check the publisher logs and Telegram bot secret next.');
+
+  return lines.join('\n');
+}
+
+function countRowsToSimpleObject(rows: Array<{ status: string; count: number }>): Record<string, number> {
+  return rows.reduce((acc: Record<string, number>, row) => {
+    acc[String(row.status)] = Number(row.count ?? 0);
+    return acc;
+  }, {});
+}
+
+function positiveNumber(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
 function buildChannelAuditText(report: any, scope: ScopedSession): string {
   const w24 = findWindow(report, '24h');
   const w7 = findWindow(report, '7d');
@@ -1170,7 +1335,7 @@ function buildChannelAuditText(report: any, scope: ScopedSession): string {
     '',
     scopeLine(scope),
     '',
-    'This is the channel-level operational snapshot.',
+    'Channel-level snapshot for queue, funnel, and source performance.',
     '',
     '📬 <b>Queue Now</b>',
     `- scheduled: <b>${int(queue.scheduled)}</b>`,
