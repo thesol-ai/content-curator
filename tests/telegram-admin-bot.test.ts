@@ -195,7 +195,7 @@ describe('telegram admin bot scoped entry', () => {
     expect(buttons).toContain('📈 Reporting');
     expect(buttons).toContain('⚙️ Settings');
     expect(buttons).toContain('❓ Help');
-    expect(buttons).toContain('📌 Change Scope');
+    expect(buttons).toContain('🧭 Switch Channel / Platform');
 
     vi.unstubAllGlobals();
   });
@@ -220,6 +220,7 @@ describe('telegram admin bot scoped entry', () => {
     expect(body.handled).toBe('reports');
     expect(payload.text).toContain('📈 <b>Reporting</b>');
     expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(buttons).toContain('🧾 Channel Audit');
     expect(buttons).toContain('📊 Overview');
     expect(buttons).toContain('💸 Costs');
     expect(buttons).toContain('🧠 AI Quality');
@@ -279,14 +280,93 @@ describe('telegram admin bot scoped entry', () => {
     expect(payload.text).toContain('💸 <b>Costs</b>');
     expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
     expect(buttons).toContain('💸 Summary');
-    expect(buttons).toContain('🤖 AI Providers');
+    expect(buttons).toContain('🟣 Anthropic');
+    expect(buttons).toContain('🔵 Gemini');
     expect(buttons).toContain('🕷 Apify');
+    expect(buttons).not.toContain('🤖 AI Providers');
+    expect(buttons).not.toContain('📈 Reporting');
 
     vi.unstubAllGlobals();
   });
 
 
 
+
+
+  it('opens platform scope settings detail instead of treating it as platform selection', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🌐 Platform Scope', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('settings_detail');
+    expect(payload.text).toContain('🌐 <b>Platform Scope</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(payload.text).not.toContain('📊 <b>Content Command Center</b>');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps cost providers directly in the costs menu without a nested AI providers menu', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🟣 Anthropic', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
+    expect(body.handled).toBe('report:costs_anthropic');
+    expect(payload.text).toContain('🟣 <b>Anthropic / Claude</b>');
+    expect(buttons).toContain('🟣 Anthropic');
+    expect(buttons).toContain('🔵 Gemini');
+    expect(buttons).not.toContain('🤖 AI Providers');
+    expect(buttons).not.toContain('💸 Costs');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens channel audit reporting detail from the reporting menu', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🧾 Channel Audit', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:channel_audit');
+    expect(payload.text).toContain('🧾 <b>Channel Audit</b>');
+    expect(payload.text).toContain('Queue Now');
+    expect(payload.text).toContain('Last 24h Funnel');
+
+    vi.unstubAllGlobals();
+  });
 
   it('opens AI quality reporting detail for the selected scope', async () => {
     const { env, fetchMock } = await chooseScope();

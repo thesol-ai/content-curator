@@ -113,7 +113,7 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     return Response.json({ ok: true, handled: 'scope_categories' });
   }
 
-  if (text === '/scope' || text === '📌 Change Scope' || text === '📂 Change Category') {
+  if (text === '/scope' || text === '🧭 Switch Channel / Platform' || text === '📌 Change Scope' || text === '📂 Change Category') {
     await startScopeSelection(env, chatId);
     return Response.json({ ok: true, handled: 'scope_categories' });
   }
@@ -286,9 +286,9 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     const scoped = await requireScope(env, chatId);
     if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
 
-    await saveSession(env, chatId, { ...scoped, screen: 'ai_costs' });
-    await sendTelegramMessage(env, chatId, buildAIProviderMenuText(scoped), aiProviderCostKeyboard());
-    return Response.json({ ok: true, handled: 'ai_costs_menu' });
+    await saveSession(env, chatId, { ...scoped, screen: 'costs' });
+    await sendTelegramMessage(env, chatId, buildCostMenuText(scoped), costMenuKeyboard());
+    return Response.json({ ok: true, handled: 'costs_menu' });
   }
 
   const costSection = parseCostSectionButton(text);
@@ -296,10 +296,8 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
     const scoped = await requireScope(env, chatId);
     if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
 
-    const screen: AdminScreen = costSection === 'costs_anthropic' || costSection === 'costs_gemini' ? 'ai_costs' : 'costs';
-    const keyboard = screen === 'ai_costs' ? aiProviderCostKeyboard() : costMenuKeyboard();
-    await saveSession(env, chatId, { ...scoped, screen });
-    await sendReportSection(env, chatId, costSection, scoped, keyboard);
+    await saveSession(env, chatId, { ...scoped, screen: 'costs' });
+    await sendReportSection(env, chatId, costSection, scoped, costMenuKeyboard());
     return Response.json({ ok: true, handled: `report:${costSection}` });
   }
 
@@ -637,7 +635,7 @@ function buildPlatformScopeText(scope: ScopedSession): string {
     `- channel: <code>${escapeHtml(scope.channelId)}</code>`,
     `- platform: <code>${escapeHtml(scope.platform)}</code>`,
     '',
-    'Use <b>📌 Change Scope</b> to switch category, channel, or platform.',
+    'Use <b>🧭 Switch Channel / Platform</b> to switch category, channel, or platform.',
   ].join('\n');
 }
 
@@ -748,7 +746,7 @@ function buildHelpDetailText(text: string, scope: ScopedSession | null): string 
     return [
       '📖 <b>Button Guide</b>',
       '',
-      '- <b>📌 Change Scope</b>: choose category, channel, and platform again.',
+      '- <b>🧭 Switch Channel / Platform</b>: choose category, channel, and platform again.',
       '- <b>🟢 Monitoring</b>: live operational state.',
       '- <b>📈 Reporting</b>: historical and analytical views.',
       '- <b>⚙️ Settings</b>: read-only configuration overview.',
@@ -759,7 +757,7 @@ function buildHelpDetailText(text: string, scope: ScopedSession | null): string 
     return [
       '🆘 <b>Troubleshooting</b>',
       '',
-      '- If data looks wrong, use <b>📌 Change Scope</b> first.',
+      '- If data looks wrong, use <b>🧭 Switch Channel / Platform</b> first.',
       '- If buttons feel stale, send <code>/start</code>.',
       '- If access is denied, copy the Telegram user_id shown by the bot.',
     ].join('\n');
@@ -776,7 +774,7 @@ function commandCenterKeyboard(): object {
   return replyKeyboard([
     ['🟢 Monitoring', '📈 Reporting'],
     ['⚙️ Settings', '❓ Help'],
-    ['📌 Change Scope'],
+    ['🧭 Switch Channel / Platform'],
   ]);
 }
 
@@ -785,7 +783,7 @@ function settingsKeyboard(): object {
     ['🧩 Channel Config', '🌐 Platform Scope'],
     ['📡 Sources Config', '⏱ Schedule Config'],
     ['👥 Admin Access'],
-    ['⬅️ Back', '📌 Change Scope'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -804,7 +802,7 @@ function monitoringKeyboard(): object {
     ['🚨 Failures', '🕷 Apify Runtime'],
     ['🤖 AI Health', '💰 Cost Watch'],
     ['📡 Source Health', '⏱ Scheduler'],
-    ['⬅️ Back', '📌 Change Scope'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -886,12 +884,13 @@ async function platformKeyboard(env: Env, categoryId: string): Promise<object> {
 
 function reportSectionKeyboard(): object {
   return replyKeyboard([
+    ['🧾 Channel Audit'],
     ['📊 Overview', '💸 Costs'],
     ['🔄 Funnel', '📬 Publishing'],
     ['🩺 System', '🏆 Sources'],
     ['🧠 AI Quality', '📰 Editorial'],
     ['📈 Market Snapshot'],
-    ['⬅️ Back', '📌 Change Scope'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -899,8 +898,9 @@ function reportSectionKeyboard(): object {
 function costMenuKeyboard(): object {
   return replyKeyboard([
     ['💸 Summary'],
-    ['🤖 AI Providers', '🕷 Apify'],
-    ['⬅️ Back', '📊 Reports'],
+    ['🟣 Anthropic', '🔵 Gemini'],
+    ['🕷 Apify'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -908,7 +908,7 @@ function costMenuKeyboard(): object {
 function aiProviderCostKeyboard(): object {
   return replyKeyboard([
     ['🟣 Anthropic', '🔵 Gemini'],
-    ['⬅️ Back', '💸 Costs'],
+    ['⬅️ Back'],
     ['🏠 Home'],
   ]);
 }
@@ -1135,10 +1135,11 @@ function parseSectionButton(text: string): OperationalReportSection | null {
   return map[normalized] ?? null;
 }
 
-type ReportingDetail = 'ai_quality' | 'editorial' | 'market_snapshot';
+type ReportingDetail = 'channel_audit' | 'ai_quality' | 'editorial' | 'market_snapshot';
 
 function parseReportingDetailButton(text: string): ReportingDetail | null {
   const map: Record<string, ReportingDetail> = {
+    '🧾 Channel Audit': 'channel_audit',
     '🧠 AI Quality': 'ai_quality',
     '📰 Editorial': 'editorial',
     '📈 Market Snapshot': 'market_snapshot',
@@ -1147,9 +1148,59 @@ function parseReportingDetailButton(text: string): ReportingDetail | null {
 }
 
 function buildReportingDetailText(detail: ReportingDetail, report: any, scope: ScopedSession, env: Env): string {
+  if (detail === 'channel_audit') return buildChannelAuditText(report, scope);
   if (detail === 'ai_quality') return buildAIQualityText(report, scope);
   if (detail === 'editorial') return buildEditorialText(report, scope);
   return buildMarketSnapshotText(report, scope, env);
+}
+
+function buildChannelAuditText(report: any, scope: ScopedSession): string {
+  const w24 = findWindow(report, '24h');
+  const w7 = findWindow(report, '7d');
+  const current = report.current ?? {};
+  const queue = current.publish_queue_active ?? {};
+  const p24 = w24?.pipeline ?? {};
+  const pub24 = w24?.publish ?? {};
+  const p7 = w7?.pipeline ?? {};
+  const pub7 = w7?.publish ?? {};
+  const sources = Array.isArray(w7?.top_sources) ? w7.top_sources : [];
+
+  const lines = [
+    '🧾 <b>Channel Audit</b>',
+    '',
+    scopeLine(scope),
+    '',
+    'This is the channel-level operational snapshot.',
+    '',
+    '📬 <b>Queue Now</b>',
+    `- scheduled: <b>${int(queue.scheduled)}</b>`,
+    `- retry: <b>${int(queue.retry)}</b>`,
+    `- failed: <b>${int(queue.failed)}</b>`,
+    '',
+    '🔄 <b>Last 24h Funnel</b>',
+    `- fetched: <b>${int(p24.fetched)}</b>`,
+    `- fresh: <b>${int(p24.fresh)}</b>`,
+    `- selected: <b>${int(p24.ai_selected)}</b>`,
+    `- queued: <b>${int(p24.queued)}</b>`,
+    `- published: <b>${int(pub24.published)}</b>`,
+    '',
+    '📆 <b>Last 7d</b>',
+    `- fetched: <b>${int(p7.fetched)}</b>`,
+    `- selected: <b>${int(p7.ai_selected)}</b>`,
+    `- published: <b>${int(pub7.published)}</b>`,
+    '',
+    '🏆 <b>Top Sources 7d</b>',
+  ];
+
+  if (sources.length === 0) {
+    lines.push('- no source data found');
+  } else {
+    for (const row of sources.slice(0, 3)) {
+      lines.push(`- ${trimSource(row.source_account)} · selected <b>${int(row.selected)}</b> / total <b>${int(row.total)}</b>`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 function buildAIQualityText(report: any, scope: ScopedSession): string {
@@ -1264,7 +1315,12 @@ function parsePlatformButton(text: string): string | null {
   if (text === '𝕏 X / Twitter') return 'x';
   if (text === '📸 Instagram') return 'instagram';
   if (text === '💼 LinkedIn') return 'linkedin';
-  if (text.startsWith('🌐 ')) return sanitizeCallbackId(text.slice('🌐 '.length).trim(), 'all');
+
+  if (text.startsWith('🌐 ')) {
+    const raw = text.slice('🌐 '.length).trim();
+    return /^[\w-]{1,64}$/.test(raw) ? raw : null;
+  }
+
   return null;
 }
 
