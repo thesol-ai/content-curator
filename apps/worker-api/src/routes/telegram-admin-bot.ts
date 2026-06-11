@@ -1559,7 +1559,9 @@ function countSpacingViolations(rows: any[], minGapMinutes: number | null): numb
   let violations = 0;
   const minSeconds = minGapMinutes * 60;
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] - sorted[i - 1] < minSeconds) violations++;
+    const current = sorted[i];
+    const previous = sorted[i - 1];
+    if (current !== undefined && previous !== undefined && current - previous < minSeconds) violations++;
   }
   return violations;
 }

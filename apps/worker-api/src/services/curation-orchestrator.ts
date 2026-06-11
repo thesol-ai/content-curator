@@ -15,6 +15,7 @@ import { recordRunEvent, recordRunItemEvent } from './run-events';
 import { buildPolicyRejectAiResult, findSimilarTopicInRunRejections, getItemRejectReason, getPreAiContentRejectReason } from './content-policy';
 import { drainAICandidateQueue } from './backlog-drain';
 import { enqueueCandidates, isCandidateBacklogEnabled, updateCandidatesStatus } from './candidate-queue';
+import { findRecentStoryDuplicate, getStoryDedupeWindowHours } from './story-dedupe';
 export { findSimilarTopicInRunRejections, getItemRejectReason, getPreAiContentRejectReason } from './content-policy';
 
 export interface CurationRunResult {
@@ -747,6 +748,33 @@ async function processSingleSource(
           });
           continue;
         }
+        const storyDuplicate = await findRecentStoryDuplicate(env, channel.id, ai.topicFingerprint, getStoryDedupeWindowHours(channel));
+        if (storyDuplicate.duplicate) {
+          await recordRunItemEvent(env, {
+            runId,
+            itemId,
+            sourceUrl: item.sourceUrl,
+            postId: item.postId,
+            sourceAccount: item.sourceAccount,
+            phase: 'persist_ai_results',
+            status: 'story_duplicate_rejected',
+            rejectReason: 'story_duplicate_recent_channel',
+            aiScore: ai.score,
+            aiRisk: ai.riskLevel,
+            mediaCount: item.media.length,
+            metadata: {
+              channelId: channel.id,
+              language: channel.language,
+              topicFingerprint: ai.topicFingerprint,
+              existingQueueId: storyDuplicate.queueId,
+              existingItemId: storyDuplicate.itemId,
+              existingSourceAccount: storyDuplicate.sourceAccount,
+              existingStatus: storyDuplicate.status,
+            },
+          });
+          continue;
+        }
+
         const rule = await runRuleGate(env, ai, channel, item.mediaUrlExpiresSoon);
         if (!rule.approved || !rule.scheduledAt) {
           console.log(`[Orchestrator] Rule rejected: ${rule.reason} — channel ${channel.id}`);

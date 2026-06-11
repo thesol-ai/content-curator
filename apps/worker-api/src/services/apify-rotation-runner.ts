@@ -22,24 +22,16 @@ const NEWS_COHORTS = [
   ['decryptmedia'],
 ];
 
+// 8 cohorts match a 3-hour rotation day: 8 buckets/day.
 const VOICES_COHORTS = [
-  ['rektcapital'],
   ['scottmelker'],
-  ['KoroushAK'],
-  ['saylor'],
-  ['CryptoCapo_'],
-  ['Cobie'],
-  ['Pentosh1'],
-  ['HsakaTrades'],
-  ['Ansem'],
-  ['CryptoHayes'],
-  ['DegenSpartan'],
-  ['DefiIgnas'],
-  ['TheDeFinvestor'],
-  ['rektfencer'],
-  ['0xngmi'],
-  ['AltcoinDailyio'],
-  ['alicharts'],
+  ['rektcapital', 'KoroushAK'],
+  ['saylor', 'CryptoCapo_'],
+  ['Cobie', 'Ansem'],
+  ['Pentosh1', 'HsakaTrades'],
+  ['CryptoHayes', 'DegenSpartan'],
+  ['DefiIgnas', 'TheDeFinvestor'],
+  ['rektfencer', '0xngmi', 'AltcoinDailyio', 'alicharts'],
 ];
 
 type RotationMode = 'media' | 'text' | 'default';
@@ -283,16 +275,15 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
     return buildCohortPlan(source, VOICES_COHORTS, bucket, 'voices', 'text', 24);
   }
 
-  // فعلاً market را حذف یا کم نمی‌کنیم، چون runway پایین است.
-  // اما market هنوز با input پیش‌فرض task اجرا می‌شود.
-  if (id === 'src_market_trending_x_media' || id === 'src_market_trending_x_text') {
-    return {
-      source,
-      cohortName: 'market_default',
-      cohortIndex: null,
-      accounts: [],
-      inputOverride: {},
-    };
+  // Query-first market impact discovery. Cost-neutral: same source ids, cadence, and maxItems.
+  // We pass both query and twitterContent because existing Apify task configs use query,
+  // while older worker rotation events used twitterContent.
+  if (id === 'src_market_trending_x_media') {
+    return buildMarketImpactPlan(source, 'media', 24);
+  }
+
+  if (id === 'src_market_trending_x_text') {
+    return buildMarketImpactPlan(source, 'text', 24);
   }
 
   return null;
@@ -313,17 +304,50 @@ function buildCohortPlan(
     cohortName: `${family}_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: {
-      twitterContent: buildTwitterContent(accounts, mode),
-      maxItems,
-    },
+    inputOverride: buildSearchInputOverride(buildTwitterContent(accounts, mode), maxItems),
   };
 }
 
 function buildTwitterContent(accounts: string[], mode: RotationMode): string {
   const accountQuery = accounts.map(account => `from:${account}`).join(' OR ');
   const mediaPart = mode === 'media' ? 'filter:media' : '-filter:media';
-  return `(${accountQuery}) ${mediaPart} -filter:replies since:${currentUtcDate()}`;
+  return `(${accountQuery}) ${mediaPart} -filter:replies lang:en since:${currentUtcDate()}`;
+}
+
+function buildMarketImpactPlan(source: SourceRow, mode: RotationMode, maxItems: number): RotationPlan {
+  return {
+    source,
+    cohortName: `market_impact_${mode}`,
+    cohortIndex: null,
+    accounts: [],
+    inputOverride: buildSearchInputOverride(buildMarketImpactContent(mode), maxItems),
+  };
+}
+
+function buildMarketImpactContent(mode: RotationMode): string {
+  const mediaPart = mode === 'media' ? 'filter:media' : '-filter:media';
+  return [
+    '(',
+    'bitcoin OR BTC OR ethereum OR ETH OR crypto OR stablecoin OR ETF OR "ETF flows" OR',
+    'liquidation OR liquidations OR "open interest" OR funding OR onchain OR "rate cut" OR',
+    'Fed OR CPI OR inflation OR dollar OR treasury OR "risk off" OR DeFi OR RWA',
+    ')',
+    mediaPart,
+    '-filter:replies',
+    'lang:en',
+    'min_faves:75',
+    `since:${currentUtcDate()}`,
+  ].join(' ');
+}
+
+function buildSearchInputOverride(query: string, maxItems: number): Record<string, unknown> {
+  return {
+    query,
+    twitterContent: query,
+    maxItems,
+    queryType: 'Latest',
+    lang: 'en',
+  };
 }
 
 function currentUtcDate(): string {
