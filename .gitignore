@@ -44,3 +44,14 @@ coverage/
 
 # TypeScript incremental build metadata
 tsconfig.tsbuildinfo
+
+# Local secrets, never commit these
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+!.env.example
+!.dev.vars.example
+secrets.json
+secrets.*
+*.secret

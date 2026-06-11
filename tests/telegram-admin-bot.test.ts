@@ -12,24 +12,6 @@ function makeReq(body: object, secret = 'test-secret'): Request {
   });
 }
 
-function update(text: string, userId = 111): object {
-  return {
-    message: {
-      text,
-      chat: { id: 222 },
-      from: { id: userId },
-    },
-  };
-}
-
-function lastPayload(fetchMock: any): any {
-  return JSON.parse(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].body);
-}
-
-function buttons(payload: any): string[] {
-  return payload.reply_markup.keyboard.flat().map((b: any) => b.text);
-}
-
 function makeEnv() {
   const settings = new Map<string, string>();
 
@@ -54,8 +36,8 @@ function makeEnv() {
               return value === undefined ? null : { value };
             }
 
-            if (sql.includes('FROM channels') && sql.includes('WHERE id=?')) {
-              return { id: String(bound[0]), category_id: 'crypto' };
+            if (sql.includes('FROM channels')) {
+              return { category_id: 'crypto' };
             }
 
             return null;
@@ -65,16 +47,12 @@ function makeEnv() {
               return { results: [{ category_id: 'crypto' }] };
             }
 
-            if (sql.includes('FROM channels') && sql.includes('category_id=?')) {
+            if (sql.includes('FROM channels')) {
               return { results: [{ id: 'crypto_fa_pilot', category_id: 'crypto' }] };
             }
 
             if (sql.includes('SELECT DISTINCT platform')) {
               return { results: [{ platform: 'x' }, { platform: 'instagram' }, { platform: 'linkedin' }] };
-            }
-
-            if (sql.includes('FROM apify_sources')) {
-              return { results: [] };
             }
 
             return { results: [] };
@@ -92,143 +70,455 @@ function makeEnv() {
   } as any;
 }
 
-async function chooseScope(env: any, fetchMock: any): Promise<void> {
-  await handleTelegramAdminBot(makeReq(update('/start')), env);
-  await handleTelegramAdminBot(makeReq(update('📂 crypto')), env);
-  await handleTelegramAdminBot(makeReq(update('📣 crypto_fa_pilot')), env);
+async function chooseScope(env = makeEnv()) {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await handleTelegramAdminBot(makeReq({
+    message: { text: '/start', chat: { id: 222 }, from: { id: 111 } },
+  }), env);
+
+  await handleTelegramAdminBot(makeReq({
+    message: { text: '📂 crypto', chat: { id: 222 }, from: { id: 111 } },
+  }), env);
+
+  await handleTelegramAdminBot(makeReq({
+    message: { text: '📣 crypto_fa_pilot', chat: { id: 222 }, from: { id: 111 } },
+  }), env);
+
   fetchMock.mockClear();
-  await handleTelegramAdminBot(makeReq(update('𝕏 X / Twitter')), env);
+
+  return { env, fetchMock };
 }
 
-describe('telegram admin bot command center', () => {
-  it('starts with category selection before any command center area', async () => {
+describe('telegram admin bot scoped entry', () => {
+  it('starts with category selection, not the command center', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const res = await handleTelegramAdminBot(makeReq(update('/start')), makeEnv());
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '/start',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }), makeEnv());
+
     const body: any = await res.json();
-    const payload = lastPayload(fetchMock);
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
 
     expect(res.status).toBe(200);
     expect(body.handled).toBe('scope_categories');
     expect(payload.text).toContain('📂 <b>Select Category</b>');
-    expect(buttons(payload)).toContain('📂 crypto');
+    expect(buttons).toContain('📂 crypto');
+    expect(buttons).not.toContain('🟢 Monitoring');
 
     vi.unstubAllGlobals();
   });
 
-  it('selects category, then channel, then platform, then command center', async () => {
+  it('opens channel selection after category selection', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    const env = makeEnv();
 
-    let res = await handleTelegramAdminBot(makeReq(update('📂 crypto')), env);
-    let body: any = await res.json();
-    let payload = lastPayload(fetchMock);
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '📂 crypto',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }), makeEnv());
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
     expect(body.handled).toBe('scope_channels');
     expect(payload.text).toContain('📣 <b>Select Channel</b>');
-    expect(buttons(payload)).toContain('📣 crypto_fa_pilot');
+    expect(payload.text).toContain('crypto');
+    expect(buttons).toContain('📣 crypto_fa_pilot');
 
-    res = await handleTelegramAdminBot(makeReq(update('📣 crypto_fa_pilot')), env);
-    body = await res.json();
-    payload = lastPayload(fetchMock);
+    vi.unstubAllGlobals();
+  });
+
+  it('opens platform selection after channel selection', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const env = makeEnv();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '📂 crypto', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '📣 crypto_fa_pilot',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
     expect(body.handled).toBe('scope_platforms');
     expect(payload.text).toContain('🌐 <b>Select Platform</b>');
-    expect(buttons(payload)).toContain('𝕏 X / Twitter');
+    expect(payload.text).toContain('crypto_fa_pilot');
+    expect(buttons).toContain('🌐 All Platforms');
+    expect(buttons).toContain('𝕏 X / Twitter');
 
-    res = await handleTelegramAdminBot(makeReq(update('𝕏 X / Twitter')), env);
-    body = await res.json();
-    payload = lastPayload(fetchMock);
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the command center after platform selection and reuses the scope', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '𝕏 X / Twitter',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
     expect(body.handled).toBe('command_center');
     expect(payload.text).toContain('📊 <b>Content Command Center</b>');
-    expect(payload.text).toContain('<code>crypto_fa_pilot</code>');
-    expect(buttons(payload)).toContain('🟢 Monitoring');
-    expect(buttons(payload)).toContain('📈 Reporting');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(buttons).toContain('🟢 Monitoring');
+    expect(buttons).toContain('📈 Reporting');
+    expect(buttons).toContain('⚙️ Settings');
+    expect(buttons).toContain('❓ Help');
+    expect(buttons).toContain('📌 Change Scope');
 
     vi.unstubAllGlobals();
   });
 
-  it('reuses selected scope when opening monitoring and reporting sections', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    const env = makeEnv();
+  it('opens reporting from the selected scope without asking for channel again', async () => {
+    const { env, fetchMock } = await chooseScope();
 
-    await chooseScope(env, fetchMock);
-    let payload = lastPayload(fetchMock);
-    expect(payload.text).toContain('Content Command Center');
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
 
-    let res = await handleTelegramAdminBot(makeReq(update('🟢 Monitoring')), env);
-    let body: any = await res.json();
-    payload = lastPayload(fetchMock);
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '📈 Reporting', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
+    expect(body.handled).toBe('reports');
+    expect(payload.text).toContain('📈 <b>Reporting</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(buttons).toContain('📊 Overview');
+    expect(buttons).toContain('💸 Costs');
+    expect(buttons).toContain('🧠 AI Quality');
+    expect(buttons).toContain('📰 Editorial');
+    expect(buttons).toContain('📈 Market Snapshot');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens monitoring from the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '🌐 All Platforms', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🟢 Monitoring', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
     expect(body.handled).toBe('monitoring');
     expect(payload.text).toContain('🟢 <b>Monitoring</b>');
-    expect(buttons(payload)).toContain('🤖 AI Health');
-
-    res = await handleTelegramAdminBot(makeReq(update('🟢 Status')), env);
-    body = await res.json();
-    payload = lastPayload(fetchMock);
-    expect(body.handled).toBe('monitoring:monitoring_status');
-    expect(payload.text).toContain('🟢 <b>System Status</b>');
-    expect(payload.text).toContain('<code>crypto_fa_pilot</code>');
-
-    res = await handleTelegramAdminBot(makeReq(update('📈 Reporting')), env);
-    body = await res.json();
-    payload = lastPayload(fetchMock);
-    expect(body.handled).toBe('reporting');
-    expect(payload.text).toContain('📈 <b>Reporting</b>');
-    expect(buttons(payload)).toContain('💸 Costs');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · all');
+    expect(buttons).toContain('🟢 Status');
+    expect(buttons).toContain('🤖 AI Health');
+    expect(buttons).toContain('📡 Source Health');
+    expect(buttons).toContain('⏱ Scheduler');
+    expect(buttons).toContain('💰 Cost Watch');
 
     vi.unstubAllGlobals();
   });
 
-  it('keeps AI Health and AI Providers as different routes', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    const env = makeEnv();
+  it('opens the cost submenu using the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
 
-    await chooseScope(env, fetchMock);
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
 
-    let res = await handleTelegramAdminBot(makeReq(update('🟢 Monitoring')), env);
-    await res.json();
+    fetchMock.mockClear();
 
-    res = await handleTelegramAdminBot(makeReq(update('🤖 AI Health')), env);
-    let body: any = await res.json();
-    let payload = lastPayload(fetchMock);
-    expect(body.handled).toBe('monitoring:monitoring_ai');
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '💸 Costs', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
+    expect(body.handled).toBe('costs_menu');
+    expect(payload.text).toContain('💸 <b>Costs</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(buttons).toContain('💸 Summary');
+    expect(buttons).toContain('🤖 AI Providers');
+    expect(buttons).toContain('🕷 Apify');
+
+    vi.unstubAllGlobals();
+  });
+
+
+
+
+  it('opens AI quality reporting detail for the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🧠 AI Quality', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:ai_quality');
+    expect(payload.text).toContain('🧠 <b>AI Quality</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(payload.text).toContain('select rate');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens editorial reporting detail for the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '📰 Editorial', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:editorial');
+    expect(payload.text).toContain('📰 <b>Editorial Output</b>');
+    expect(payload.text).toContain('published');
+    expect(payload.text).toContain('Missing data');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens market snapshot reporting detail for the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    env.MARKET_SNAPSHOT_ENABLED = 'true';
+    env.MARKET_SNAPSHOT_CHANNEL_ID = 'crypto_fa_pilot';
+    env.MARKET_SNAPSHOT_SLOTS = '09:05,12:35';
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '🌐 All Platforms', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '📈 Market Snapshot', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('report:market_snapshot');
+    expect(payload.text).toContain('📈 <b>Market Snapshot</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · all');
+    expect(payload.text).toContain('09:05,12:35');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens AI health monitoring detail without entering cost provider routing', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🤖 AI Health', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
+    expect(body.handled).toBe('monitoring:ai_health');
     expect(payload.text).toContain('🤖 <b>AI Health</b>');
-
-    await handleTelegramAdminBot(makeReq(update('📈 Reporting')), env);
-    await handleTelegramAdminBot(makeReq(update('💸 Costs')), env);
-
-    res = await handleTelegramAdminBot(makeReq(update('🤖 AI Providers')), env);
-    body = await res.json();
-    payload = lastPayload(fetchMock);
-    expect(body.handled).toBe('ai_costs_menu');
-    expect(payload.text).toContain('🤖 <b>AI Provider Costs</b>');
-    expect(buttons(payload)).toContain('🟣 Anthropic');
-    expect(buttons(payload)).toContain('🔵 Gemini');
+    expect(payload.text).toContain('AI cost scope: global');
+    expect(buttons).toContain('📡 Source Health');
+    expect(buttons).not.toContain('🟣 Anthropic');
 
     vi.unstubAllGlobals();
   });
 
-  it('keeps operations read-only', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    const env = makeEnv();
+  it('opens source health monitoring detail for the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
 
-    await chooseScope(env, fetchMock);
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
 
-    let res = await handleTelegramAdminBot(makeReq(update('🛠 Operations')), env);
-    let body: any = await res.json();
-    let payload = lastPayload(fetchMock);
-    expect(body.handled).toBe('operations');
-    expect(payload.text).toContain('Read-only for now');
+    fetchMock.mockClear();
 
-    res = await handleTelegramAdminBot(makeReq(update('🧠 Drain Backlog')), env);
-    body = await res.json();
-    payload = lastPayload(fetchMock);
-    expect(body.handled).toBe('operation_read_only');
-    expect(payload.text).toContain('Operation Not Armed');
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '📡 Source Health', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('monitoring:source_health');
+    expect(payload.text).toContain('📡 <b>Source Health</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(payload.text).toContain('Top Sources');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens scheduler monitoring detail for the selected scope', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '🌐 All Platforms', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '⏱ Scheduler', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('monitoring:scheduler');
+    expect(payload.text).toContain('⏱ <b>Scheduler</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · all');
+    expect(payload.text).toContain('Apify rotation');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens scoped settings from the command center', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '⚙️ Settings', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
+
+    expect(body.handled).toBe('settings');
+    expect(payload.text).toContain('⚙️ <b>Settings</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(buttons).toContain('🧩 Channel Config');
+    expect(buttons).toContain('🌐 Platform Scope');
+    expect(buttons).toContain('👥 Admin Access');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens channel settings detail as read-only text', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '𝕏 X / Twitter', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const res = await handleTelegramAdminBot(makeReq({
+      message: { text: '🧩 Channel Config', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const body: any = await res.json();
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(body.handled).toBe('settings_detail');
+    expect(payload.text).toContain('🧩 <b>Channel Config</b>');
+    expect(payload.text).toContain('crypto · crypto_fa_pilot · x');
+    expect(payload.text).toContain('max/day');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('opens scoped help and current scope detail', async () => {
+    const { env, fetchMock } = await chooseScope();
+
+    await handleTelegramAdminBot(makeReq({
+      message: { text: '🌐 All Platforms', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    fetchMock.mockClear();
+
+    const helpRes = await handleTelegramAdminBot(makeReq({
+      message: { text: '❓ Help', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const helpBody: any = await helpRes.json();
+    const helpPayload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(helpBody.handled).toBe('help');
+    expect(helpPayload.text).toContain('❓ <b>Help</b>');
+
+    fetchMock.mockClear();
+
+    const scopeRes = await handleTelegramAdminBot(makeReq({
+      message: { text: '📎 Current Scope', chat: { id: 222 }, from: { id: 111 } },
+    }), env);
+
+    const scopeBody: any = await scopeRes.json();
+    const scopePayload = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(scopeBody.handled).toBe('help_detail');
+    expect(scopePayload.text).toContain('📎 <b>Current Scope</b>');
+    expect(scopePayload.text).toContain('crypto · crypto_fa_pilot · all');
 
     vi.unstubAllGlobals();
   });
@@ -237,9 +527,16 @@ describe('telegram admin bot command center', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const res = await handleTelegramAdminBot(makeReq(update('/start', 999)), makeEnv());
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '/start',
+        chat: { id: 222 },
+        from: { id: 999 },
+      },
+    }), makeEnv());
+
     const body: any = await res.json();
-    const payload = lastPayload(fetchMock);
+    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
 
     expect(res.status).toBe(200);
     expect(body.ignored).toBe(true);
@@ -252,7 +549,14 @@ describe('telegram admin bot command center', () => {
   });
 
   it('rejects invalid webhook secrets', async () => {
-    const res = await handleTelegramAdminBot(makeReq(update('/start'), 'wrong-secret'), makeEnv());
+    const res = await handleTelegramAdminBot(makeReq({
+      message: {
+        text: '/start',
+        chat: { id: 222 },
+        from: { id: 111 },
+      },
+    }, 'wrong-secret'), makeEnv());
+
     expect(res.status).toBe(401);
   });
 });
