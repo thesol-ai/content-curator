@@ -35,6 +35,7 @@
 - [Security](#security)
 - [GitHub Actions](#github-actions)
 - [Implementation Phases & Validation History](#implementation-phases--validation-history)
+- [Current Production Operations Addendum](#current-production-operations-addendum)
 - [Troubleshooting](#troubleshooting)
 - [Monthly Cost Estimate](#monthly-cost-estimate)
 
@@ -2734,6 +2735,404 @@ Dashboard styling and structure are intentionally not changed by release hardeni
 
 ---
 
+<!-- README-PRODUCTION-OPS-ADDENDUM:START -->
+
+## Current Production Operations Addendum
+
+This section captures the current production operating model after the recent crypto-pipeline, Apify rotation, AI backlog, Telegram scheduling, and quality-gate changes. It is intentionally written as an operational supplement to the existing README rather than a replacement for the older architecture, setup, API, and phase-history sections.
+
+### Current production baseline
+
+The current live deployment is a Cloudflare Worker backed by Cloudflare D1, Apify, Claude scoring, Gemini translation, and Telegram publishing.
+
+Current production assumptions:
+
+| Area | Current value / behavior |
+|---|---|
+| Worker URL | `https://content-curator.thesol-ai.workers.dev` |
+| D1 database | `content-curator-db-v2` |
+| Primary live category | `crypto` |
+| Primary live channel | `crypto_fa_pilot` |
+| Primary public Telegram channel | `@thesolcrypto_fa` |
+| Main live platform | X/Twitter through Apify task rotation |
+| Worker cron | Every 5 minutes: `*/5 * * * *` |
+| Apify rotation cadence | 3-hour source buckets, with max 2 sources per tick by default |
+| Publishing mode | Scheduled queue + Telegram publisher, guarded by env and DB locks |
+| Media mode | `binary_upload` in production |
+| Market snapshot | Direct Telegram send, not `publish_queue` |
+| AI scoring provider | Anthropic Claude Haiku |
+| Translation provider | Gemini Flash-Lite |
+
+The production model is no longer just webhook-driven dataset ingestion. It now combines controlled Apify task rotation, webhook-scoped curation, AI candidate backlog draining, scheduled publishing, direct market snapshots, and operational reporting.
+
+### Current cron order
+
+The Worker scheduled handler performs these operations in order:
+
+1. Load effective runtime config and stop immediately if maintenance mode is active.
+2. Optionally run legacy scheduled curation only when `APIFY_SCHEDULED_CURATION_ENABLED=true`.
+3. Run controlled Apify rotation when `APIFY_ROTATION_ENABLED=true`.
+4. Send due market snapshots directly, if a configured snapshot slot is due.
+5. Publish due queue items through Telegram.
+6. Recover, fail, skip, and drain AI candidate backlog when enabled.
+7. Cleanup old dedupe keys.
+
+Publishing is intentionally executed before backlog drain so already-scheduled posts are not delayed by scoring work. Backlog failures are isolated and should not block scheduled publishing.
+
+### Crypto pilot throughput target
+
+The current crypto FA pilot target is high-volume publishing:
+
+```text
+Target: 72 Telegram posts / day
+Channel max_per_day: 72
+Channel max_per_hour: 4
+Minimum gap: 15 minutes
+Practical active window: about 18 hours / day
+Required pace: 4 posts/hour during active windows
+Required supply: about 12 publishable items every 3 hours
+Recommended queue buffer: 85-100 scheduled/queued items per 24 hours
+```
+
+This means the system has almost no slack. If the queue is empty for several hours, it becomes difficult to recover the 72/day target without reducing quality or forcing bursts. The correct fix is usually source/query tuning, not bypassing rate limits.
+
+### Natural-run measurement protocol
+
+When validating whether production can naturally fill the queue, do not manually spam Apify, drain, or publish-now. Take snapshots every 30 minutes for at least 3 hours.
+
+```bash
+BASE="https://content-curator.thesol-ai.workers.dev"
+
+curl -s "$BASE/internal/backlog/stats"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.ai_budget,.status_counts,.top_pending_accounts'
+
+curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.queue[] | {id,source_url,caption_short,scheduled_at,status}'
+
+curl -s "$BASE/internal/debug/crypto-pipeline"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.recent_runs[0:20] | map({dataset:.apify_dataset_id,fetched:.items_fetched,new:.items_new,duplicate:.items_duplicate,queued:.items_queued,rejected:.items_ai_rejected,created:.created_at,error:.error_message})'
+```
+
+For a file snapshot:
+
+```bash
+mkdir -p ops-snapshots
+TS=$(TZ=Asia/Tehran date '+%Y%m%d-%H%M')
+OUT="ops-snapshots/crypto-ops-$TS.txt"
+
+{
+  echo "=== SNAPSHOT $TS Tehran ==="
+  echo "--- backlog / AI budget ---"
+  curl -s "$BASE/internal/backlog/stats" -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.ai_budget,.status_counts,.top_pending_accounts'
+  echo "--- scheduled queue ---"
+  curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50" -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.queue[] | {source_url,caption_short,scheduled_at}'
+  echo "--- recent runs ---"
+  curl -s "$BASE/internal/debug/crypto-pipeline" -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.recent_runs[0:20] | map({dataset:.apify_dataset_id,fetched:.items_fetched,new:.items_new,duplicate:.items_duplicate,queued:.items_queued,rejected:.items_ai_rejected,created:.created_at,error:.error_message})'
+} | tee "$OUT"
+```
+
+Never paste secrets into issue comments, PR comments, README changes, screenshots, or chat logs. If auth fails, check secret length locally with `echo ${#INTERNAL_API_SECRET}`, not the secret value.
+
+### Capacity and cost KPIs
+
+Use these ratios to understand whether the bottleneck is scraping, dedupe, AI selection, queue scheduling, or Telegram publishing.
+
+| KPI | Formula | Healthy signal | What it means if unhealthy |
+|---|---|---:|---|
+| Freshness yield | `items_new / items_fetched` | Source-dependent, should not stay near 0 | Apify is buying duplicates or query/source overlap is too high |
+| Duplicate rate | `items_duplicate / items_fetched` | Preferably below 60% for experimental sources | Queries overlap too much or scraping is too frequent |
+| AI select rate | `ai_selected / candidates_scored` | Usually above 10% for trusted crypto sources | Query is too broad, source is noisy, or AI threshold is too strict |
+| Queue rate | `items_queued / items_fetched` | Enough to sustain 72/day | Rule gate, translation, dedupe, or source quality is blocking output |
+| AI cost efficiency | `tokens_today / queued_today` | Stable over time | Prompt size, batch size, or low select rate is wasting AI budget |
+| Publish completion | `published / scheduled` | High | Telegram errors, rate limits, media failures, or window constraints are blocking publish |
+
+Apify cost should be estimated from fetched result volume and the actual actor price:
+
+```text
+Apify cost ~= total_items_fetched * actor_price_per_result
+```
+
+Claude scoring cost should be estimated from `ai_usage`:
+
+```text
+Claude scoring tokens = SUM(input_tokens + output_tokens)
+Daily remaining budget = AI_DAILY_TOKEN_BUDGET - tokens_today
+```
+
+For the current crypto pilot, do not judge success by AI usage alone. A low AI bill with an empty queue is not success; it just means the system has learned frugality while starving the channel. Very inspirational, in the way an empty fridge is inspirational.
+
+### Apify controlled rotation
+
+Current rotation source IDs:
+
+```text
+src_crypto_x_news_media
+src_crypto_x_news_text
+src_crypto_x_voices_media
+src_crypto_x_voices_text
+src_market_trending_x_media
+src_market_trending_x_text
+```
+
+The rotation runner builds source-specific query plans and sends both `query` and `twitterContent` in the Apify task input override for compatibility with older/newer task schemas.
+
+Current production rotation principles:
+
+- Use cohort rotation instead of scraping every account every tick.
+- Keep `APIFY_ROTATION_MAX_SOURCES_PER_TICK` low to avoid cost spikes.
+- Use `maxItems` per source family instead of one large global value.
+- Prefer query-first topic gates over profile-only scraping.
+- Do not run force rotation repeatedly unless diagnosing a specific source.
+- If `items_fetched > 0` but `items_new = 0`, do not drain more; there is nothing new to score.
+
+Dry-run rotation is safe and does not call Apify:
+
+```bash
+curl -s -X POST "$BASE/internal/apify/rotation/run"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"dryRun":true,"force":true}' | jq .
+```
+
+A real force run spends Apify budget:
+
+```bash
+curl -s -X POST "$BASE/internal/apify/rotation/run"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"force":true,"onlySourceId":"src_crypto_x_news_text"}' | jq .
+```
+
+### AI candidate backlog lifecycle
+
+The current production path is:
+
+```text
+Apify dataset
+  -> normalize
+  -> dedupe
+  -> freshness check
+  -> ai_candidate_queue pending
+  -> fair source picker
+  -> pre-AI content policy
+  -> Claude scoring
+  -> translation
+  -> semantic/rule gate
+  -> publish_queue scheduled
+  -> Telegram publisher
+```
+
+Important behavior:
+
+- Fresh items are stored in `ai_candidate_queue` before Claude scoring.
+- Backlog drain claims a bounded batch and respects daily AI budget.
+- Fair source picker prevents one source account from dominating a scoring batch.
+- Pre-AI policy can reject candidates before Claude, saving budget.
+- Candidates have bounded attempts and stale candidate handling.
+- Queue creation is separated from publication.
+
+Safe manual drain:
+
+```bash
+curl -s -X POST "$BASE/internal/backlog/drain"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"category_id":"crypto","limit":10,"maxBatches":1,"skipStale":true,"recoverStale":true}' | jq '.drain'
+```
+
+Do not run drain when `pending=0`. The result will correctly be `candidatesPulled: 0`, because apparently even software cannot score imaginary candidates. Miracles remain out of scope.
+
+### Crypto pre-AI quality gate
+
+The crypto pre-AI gate exists to prevent avoidable Claude calls. It rejects common low-value classes before scoring:
+
+- Empty text.
+- Engagement bait.
+- Generic AI news without an explicit crypto/digital-asset angle.
+- Generic equity, IPO, SpaceX, or stock-market news without a crypto angle.
+- Generic geopolitics without explicit crypto, oil/liquidity, stablecoin, Bitcoin, Ethereum, ETF, DeFi, or digital-asset relevance.
+- Non-crypto content from noisy crypto-adjacent sources.
+
+Allowed crypto anchors include Bitcoin, Ethereum, stablecoins, ETFs, DeFi, RWA, tokenization, exchanges, wallets, protocol upgrades, mainnet/testnet, hacks, exploits, and digital-asset regulation.
+
+### Whale Alert policy
+
+`whale_alert` is intentionally treated as a special source. It can produce useful liquidity signals, but it can also flood the channel with repetitive wallet-transfer noise.
+
+Current policy:
+
+Allowed before Claude only when high-signal:
+
+- USDC / USDT / Tether mint or burn events above roughly 100M USD.
+- Large stablecoin flows to major exchanges above roughly 100M USD.
+- Large BTC / ETH exchange flows above roughly 100M USD.
+- Large stablecoin movement into DeFi venues such as Aave, Compound, Maker, or Curve.
+
+Rejected before Claude:
+
+- Unknown wallet to unknown wallet.
+- Non-core assets.
+- Coinbase Institutional / custody to unknown wallet by default.
+- BTC / ETH movements below the configured high-signal threshold.
+- Generic “could indicate market movement” transfers without a stronger reason.
+
+Queue-level cap:
+
+```text
+At most 2 whale_alert posts per channel in the last 24 hours
+Statuses counted: scheduled, retry, publishing, published
+```
+
+If too many whale posts are already scheduled, cancel extra queue items rather than deleting rows. Historical rows are useful for debugging and quality review.
+
+### Market snapshot publishing
+
+Market snapshots are sent directly and no longer use `publish_queue`. The direct route exists because snapshots are time-slot based and operationally different from curated social posts.
+
+Useful endpoints:
+
+```bash
+curl -s "$BASE/internal/market-snapshot/preview"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+
+curl -s -X POST "$BASE/internal/market-snapshot/send-now"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"channel_id":"crypto_fa_pilot","force":true}' | jq .
+```
+
+The `send-now` route is a production write. Use it for diagnostics or intentional manual snapshots, not as a replacement for scheduled operation.
+
+### Queue operations
+
+Read scheduled queue:
+
+```bash
+curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+Preview one queue item with the real Telegram formatter:
+
+```bash
+curl -s "$BASE/internal/queue/$QUEUE_ID/preview"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+Publish due items:
+
+```bash
+curl -s -X POST "$BASE/internal/publish/due"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"limit":4}' | jq .
+```
+
+Publish one item now:
+
+```bash
+curl -s -X POST "$BASE/internal/queue/$QUEUE_ID/publish-now"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+`publish-now` bypasses schedule timing only. It should still respect final publish locks and channel rate limits. If it returns `rate_limit_min_gap`, that is expected behavior, not a failure.
+
+Cancel one scheduled/retry/failed item safely:
+
+```bash
+curl -s -X DELETE "$BASE/internal/queue/$QUEUE_ID"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+For bulk cleanup, prefer soft-cancel updates over deletion:
+
+```sql
+UPDATE publish_queue
+SET status='cancelled', publish_error='manual_cleanup_reason'
+WHERE status='scheduled'
+  AND channel_id='crypto_fa_pilot'
+  AND source_url LIKE '%/whale_alert/%';
+```
+
+### Underfilled queue playbook
+
+If the scheduled queue is too small for the 72/day target:
+
+1. Check `pending` in `/internal/backlog/stats`.
+2. If `pending > 0`, run one bounded backlog drain.
+3. If `pending = 0`, inspect recent Apify runs.
+4. If recent Apify runs have `fetched > 0` and `new = 0`, do not drain more. Tune source/query/cadence.
+5. If `new > 0` but `queued = 0`, inspect AI rejection reasons, rule gate rejections, translation missing flags, and semantic dedupe.
+6. If queue is healthy but published count is low, inspect publish windows, `min_gap_minutes`, Telegram errors, and media failures.
+
+Do not solve queue starvation by resetting AI budget unless the only proven blocker is a previously exhausted budget and the operator has explicitly accepted the cost risk.
+
+### Overfilled or low-quality queue playbook
+
+If queue is large but quality is poor:
+
+1. Cancel low-quality scheduled rows; do not delete.
+2. Inspect source accounts dominating the queue.
+3. Tighten Apify query terms for that cohort.
+4. Add or tighten pre-AI reject logic if Claude is seeing obvious junk.
+5. Use fair source picker and source-level caps instead of manually fighting the queue forever, because apparently humans do have other hobbies.
+
+### Operational reports
+
+Use built-in reports before writing new SQL whenever possible:
+
+```bash
+curl -s "$BASE/internal/report/ops?hours=24&category=crypto"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+
+curl -s "$BASE/internal/report/ops/telegram-preview?hours=24&category=crypto"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+
+curl -s "$BASE/internal/report/daily?hours=24&category=crypto"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+
+curl -s "$BASE/internal/report/market-trending?hours=24"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+Useful SQL when deeper inspection is needed:
+
+```bash
+npx wrangler d1 execute content-curator-db-v2 --remote --command "SELECT status, COUNT(*) AS count FROM publish_queue WHERE channel_id='crypto_fa_pilot' AND COALESCE(published_at, scheduled_at) >= unixepoch('now','-24 hours') GROUP BY status ORDER BY status;"
+
+npx wrangler d1 execute content-curator-db-v2 --remote --command "SELECT provider, purpose, status, COUNT(*) AS calls, SUM(COALESCE(input_tokens,0)) AS input_tokens, SUM(COALESCE(output_tokens,0)) AS output_tokens, SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)) AS total_tokens FROM ai_usage WHERE created_at > datetime('now','-24 hours') GROUP BY provider, purpose, status ORDER BY provider, purpose, status;"
+
+npx wrangler d1 execute content-curator-db-v2 --remote --command "SELECT COUNT(*) AS runs, SUM(items_fetched) AS fetched, SUM(items_new) AS new_items, SUM(items_duplicate) AS duplicates, SUM(items_queued) AS queued, SUM(items_ai_rejected) AS ai_rejected FROM discovery_runs WHERE category_id='crypto' AND created_at > datetime('now','-24 hours');"
+```
+
+### README and documentation maintenance rules
+
+This README is the canonical operating document. Keep separate docs only when they are actively useful and current.
+
+Recommended documentation policy:
+
+- Keep `README.md` as the main product, architecture, setup, API, and operations reference.
+- Keep `RELEASE_CHECKLIST.md` as the pre-merge/pre-deploy checklist.
+- Keep additional docs only if they describe a living process not already covered here.
+- If an old phase plan has been fully implemented and summarized here, archive or delete it in a separate cleanup commit.
+- Never commit generated patch scripts, downloaded ZIPs, README backups, local snapshots, or one-off investigation files.
+
+Common files to keep out of commits:
+
+```text
+README.md.bak-*
+readme-update.diff.txt
+update_readme_*.py
+admin-bot-*.zip
+ops-snapshots/
+*.tsbuildinfo
+.dev.vars.production
+```
+
+### Branch and PR hygiene
+
+If a PR is stale, draft, conflicts with `main`, and its work has already landed through later commits, close it instead of resolving conflicts and merging it.
+
+Do not resolve conflicts on old PR branches just to make GitHub look clean. That can accidentally reintroduce older logic over newer production fixes. The `main` branch and deployed production commit are the source of truth.
+
+Recommended stale PR close comment:
+
+```text
+Closing stale draft PR. The work has already landed on main and production through later commits.
+```
+
+### Current known limitations and next work
+
+Known limitations:
+
+- Natural source throughput is still being measured against the 72/day target.
+- Some source cohorts may return `items_new=0` during quiet windows because dedupe is doing its job or queries are too narrow.
+- Apify cost needs continued measurement from actual fetched result volume, not estimates alone.
+- Queue starvation should be solved by source/query strategy, not by force-running the same empty sources.
+- Whale Alert is capped, but source quality should still be monitored because liquidity signals can become repetitive quickly.
+
+Next likely work:
+
+- Tune Apify source cohorts based on natural-run data.
+- Add more high-quality crypto-native accounts only after measuring duplicate and AI select rates.
+- Improve operational dashboards for queue fill-rate, cost-per-queued-post, and source-level yield.
+- Add source-level daily caps for other noisy accounts if Whale Alert-style flooding appears elsewhere.
+- Keep pre-AI gates strict so Claude is used for judgment, not garbage collection.
+
+<!-- README-PRODUCTION-OPS-ADDENDUM:END -->
 ## Troubleshooting
 
 ### Scheduled queue is empty
