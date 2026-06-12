@@ -107,4 +107,44 @@ describe('crypto pre-AI content gate', () => {
       text: 'New spot Bitcoin ETF filing appears on the SEC website.',
     }), cryptoCategory)).toBeNull();
   });
+
+  it('allows only high-signal whale alert events before Claude', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '250,000,000 USDC minted at USDC Treasury',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '236,000,000 USDT transferred from unknown wallet to Bitfinex',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '83,000 ETH (136,700,000 USD) transferred from unknown wallet to Kraken',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '135,000,000 USDC transferred from unknown wallet to Aave',
+    }), cryptoCategory)).toBeNull();
+  });
+
+  it('rejects low-signal or repetitive whale alert events before Claude', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '1,300 BTC (87,000,000 USD) transferred from Coinbase Institutional to unknown wallet',
+    }), cryptoCategory)).toBe('pre_ai_whale_institution_to_unknown');
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '809 BTC (50,700,000 USD) transferred from unknown wallet to Binance',
+    }), cryptoCategory)).toBe('pre_ai_whale_low_signal');
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'whale_alert',
+      text: '52,000,000 USD of BTC transferred from Coinbase Institutional to unknown wallet',
+    }), cryptoCategory)).toBe('pre_ai_whale_institution_to_unknown');
+  });
+
 });

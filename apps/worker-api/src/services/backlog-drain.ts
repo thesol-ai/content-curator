@@ -284,6 +284,14 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
         continue;
       }
 
+      if (normalizeAccount(candidate.item.sourceAccount) === 'whale_alert') {
+        const alreadyQueued = await countRecentWhaleAlertQueueItems(env, channel.id);
+        if (alreadyQueued >= 2) {
+          await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', 'whale_alert_daily_cap', ai, { channelId: channel.id, language: channel.language, alreadyQueued });
+          continue;
+        }
+      }
+
       const inserted = await saveQueueItem(env, {
         candidateId: candidate.row.id,
         itemId,
@@ -514,6 +522,31 @@ async function recordCandidateItemEvent(
       ...metadata,
     },
   });
+}
+
+
+async function countRecentWhaleAlertQueueItems(env: Env, channelId: string): Promise<number> {
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id = ?
+        AND status IN ('scheduled','retry','publishing','published')
+        AND source_url LIKE '%/whale_alert/%'
+        AND COALESCE(published_at, scheduled_at) >= unixepoch('now', '-24 hours')
+    `).bind(channelId).first<{ count: number }>();
+    return Number(row?.count ?? 0);
+  } catch (err) {
+    console.warn('[BacklogDrain] whale alert daily cap check skipped:', err instanceof Error ? err.message : String(err));
+    return 0;
+  }
+}
+
+function normalizeAccount(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '');
 }
 
 function channelTranslationKey(channelId: string): string {

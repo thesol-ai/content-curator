@@ -87,10 +87,7 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
   if (isEngagementBait(body)) return 'pre_ai_engagement_bait';
 
   if (account === 'whale_alert') {
-    if (body.includes('unknown wallet to unknown wallet')) return 'pre_ai_whale_unknown_to_unknown';
-    if (!hasCoreWhaleAsset(body)) return 'pre_ai_whale_non_core_asset';
-    if (!hasCryptoRelevance(body, account)) return 'pre_ai_non_crypto';
-    return null;
+    return getWhaleAlertRejectReason(body);
   }
 
   if (mentionsGenericAi(body) && !hasCryptoRelevance(body, account)) {
@@ -320,6 +317,91 @@ function hasCoreWhaleAsset(body: string): boolean {
     'eth',
     'ethereum',
   ]);
+}
+
+
+function getWhaleAlertRejectReason(body: string): string | null {
+  if (body.includes('unknown wallet to unknown wallet')) return 'pre_ai_whale_unknown_to_unknown';
+  if (!hasCoreWhaleAsset(body)) return 'pre_ai_whale_non_core_asset';
+
+  const usdValue = extractWhaleUsdValue(body);
+
+  if (isWhaleInstitutionToUnknown(body)) return 'pre_ai_whale_institution_to_unknown';
+
+  if (isWhaleStablecoinMintOrBurn(body) && usdValue >= 100_000_000) return null;
+  if (isWhaleStablecoinDefiFlow(body) && usdValue >= 100_000_000) return null;
+  if (isWhaleExchangeFlow(body) && usdValue >= whaleExchangeUsdThreshold(body)) return null;
+
+  return 'pre_ai_whale_low_signal';
+}
+
+function isWhaleInstitutionToUnknown(body: string): boolean {
+  return body.includes('from coinbase institutional to unknown wallet')
+    || body.includes('from coinbase insto to unknown wallet')
+    || body.includes('from bitgo to unknown wallet')
+    || body.includes('from custody to unknown wallet');
+}
+
+function isWhaleStablecoinMintOrBurn(body: string): boolean {
+  return hasAny(body, ['usdc', 'usdt', 'tether'])
+    && hasAny(body, ['minted', 'mint', 'burned', 'burnt', 'burn', 'issued', 'destroyed'])
+    && hasAny(body, ['treasury', 'circle', 'tether treasury', 'usdc treasury']);
+}
+
+function isWhaleStablecoinDefiFlow(body: string): boolean {
+  return hasAny(body, ['usdc', 'usdt', 'tether'])
+    && hasAny(body, ['aave', 'compound', 'maker', 'curve', 'lending protocol']);
+}
+
+function isWhaleExchangeFlow(body: string): boolean {
+  return hasAny(body, [
+    'to binance',
+    'to kraken',
+    'to bitfinex',
+    'to coinbase',
+    'to okx',
+    'to bybit',
+    'to bitstamp',
+    'to gemini',
+    'from binance',
+    'from kraken',
+    'from bitfinex',
+    'from coinbase',
+    'from okx',
+    'from bybit',
+    'from bitstamp',
+    'from gemini',
+  ]);
+}
+
+function whaleExchangeUsdThreshold(body: string): number {
+  if (hasAny(body, ['usdc', 'usdt', 'tether'])) return 100_000_000;
+  if (hasAny(body, ['eth', 'ethereum'])) return 100_000_000;
+  if (hasAny(body, ['btc', 'bitcoin'])) return 100_000_000;
+  return 150_000_000;
+}
+
+function extractWhaleUsdValue(body: string): number {
+  const values = [
+    parseMagnitudeMatch(body.match(/([\d,.]+)\s*(billion|million|m|b)?\s*usd\b/i)),
+    parseMagnitudeMatch(body.match(/\$\s*([\d,.]+)\s*(billion|million|m|b)?\b/i)),
+    parseMagnitudeMatch(body.match(/([\d,.]+)\s*(billion|million)\s*(?:dollars|usd)\b/i)),
+    parseMagnitudeMatch(body.match(/([\d,.]+)\s*(billion|million|m|b)?\s*(?:usdc|usdt|tether)\b/i)),
+  ].filter(value => value > 0);
+
+  return values.length ? Math.max(...values) : 0;
+}
+
+function parseMagnitudeMatch(match: RegExpMatchArray | null): number {
+  if (!match) return 0;
+  const raw = match[1];
+  if (!raw) return 0;
+  const value = Number(raw.replace(/,/g, ''));
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const unit = String(match[2] ?? '').toLowerCase();
+  if (unit === 'billion' || unit === 'b') return value * 1_000_000_000;
+  if (unit === 'million' || unit === 'm') return value * 1_000_000;
+  return value;
 }
 
 function normalizeText(value: unknown): string {

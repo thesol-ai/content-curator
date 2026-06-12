@@ -43,7 +43,7 @@ const TOKEN_PROJECT_COHORTS = [
 ];
 
 const MARKET_IMPACT_COHORTS = [
-  ['lookonchain', 'whale_alert', 'glassnode', 'cryptoquant_com'],
+  ['lookonchain', 'glassnode', 'cryptoquant_com'],
   ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
   ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
   ['VitalikButerin', 'ethereum', 'solana', 'base', 'chainlink'],
