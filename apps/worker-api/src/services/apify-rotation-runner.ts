@@ -23,7 +23,7 @@ const NEWS_COHORTS = [
 // 8 cohorts match a 3-hour rotation day: 8 buckets/day.
 const VOICES_COHORTS = [
   ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
-  ['lookonchain', 'whale_alert', 'glassnode', 'cryptoquant_com'],
+  ['lookonchain', 'glassnode', 'cryptoquant_com'],
   ['Pentosh1', 'CryptoCred', 'CryptoHayes', 'RaoulGMI'],
   ['DefiLlama', 'BanklessHQ', 'TheDefiantNews'],
   ['VitalikButerin', 'ethereum'],
@@ -276,30 +276,30 @@ function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | nu
   const id = source.id;
 
   if (id === 'src_crypto_x_news_media') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 24);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 18, buildCoreNewsTopicGate());
   }
 
   if (id === 'src_crypto_x_news_text') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 24);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 18, buildCoreNewsTopicGate());
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    return buildSecurityAlertPlan(source, bucket + 4, 12);
+    return buildSecurityAlertPlan(source, bucket + 4, 8);
   }
 
   if (id === 'src_crypto_x_voices_text') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 24);
+    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 16, buildExpertSignalsTopicGate());
   }
 
   // Query-first market impact discovery. Cost-neutral: same source ids, cadence, and maxItems.
   // We pass both query and twitterContent because existing Apify task configs use query,
   // while older worker rotation events used twitterContent.
   if (id === 'src_market_trending_x_media') {
-    return buildTokenProjectWatchPlan(source, bucket + 5, 12);
+    return buildTokenProjectWatchPlan(source, bucket + 5, 10);
   }
 
   if (id === 'src_market_trending_x_text') {
-    return buildMarketImpactPlan(source, bucket + 6, 'text', 16);
+    return buildMarketImpactPlan(source, bucket + 6, 'text', 10);
   }
 
   return null;
@@ -357,7 +357,7 @@ function buildCoreNewsTopicGate(): string {
   return [
     '(',
     'crypto OR bitcoin OR ethereum OR XRP OR ripple OR dogecoin OR DOGE OR SHIB OR TON OR',
-    'stablecoin OR USDT OR Tether OR ETF OR DeFi OR RWA OR tokenization OR exchange OR treasury',
+    'stablecoin OR USDT OR Tether OR USDC OR "spot ETF" OR "Bitcoin ETF" OR "Ethereum ETF" OR DeFi OR RWA OR tokenization OR exchange OR treasury OR Coinbase OR Binance OR wallet OR "digital asset"',
     ')',
     '(',
     'SEC OR CFTC OR regulation OR lawsuit OR approval OR filing OR',
@@ -382,7 +382,7 @@ function buildExpertSignalsTopicGate(): string {
 function buildMarketImpactPlan(source: SourceRow, bucket: number, mode: RotationMode, maxItems: number): RotationPlan {
   const index = positiveModulo(bucket, MARKET_IMPACT_COHORTS.length);
   const accounts = MARKET_IMPACT_COHORTS[index] ?? MARKET_IMPACT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, mode);
+  const query = buildProfileTopicContent(accounts, mode, buildMarketImpactTopicGate());
 
   return {
     source,
@@ -420,7 +420,7 @@ function buildMarketImpactTopicGate(): string {
 function buildTokenProjectWatchPlan(source: SourceRow, bucket: number, maxItems: number): RotationPlan {
   const index = positiveModulo(bucket, TOKEN_PROJECT_COHORTS.length);
   const accounts = TOKEN_PROJECT_COHORTS[index] ?? TOKEN_PROJECT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, 'text');
+  const query = buildProfileTopicContent(accounts, 'text', buildTokenProjectWatchTopicGate());
 
   return {
     source,
@@ -459,7 +459,7 @@ function buildTokenProjectWatchTopicGate(): string {
 function buildSecurityAlertPlan(source: SourceRow, bucket: number, maxItems: number): RotationPlan {
   const index = positiveModulo(bucket, SECURITY_ALERT_COHORTS.length);
   const accounts = SECURITY_ALERT_COHORTS[index] ?? SECURITY_ALERT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, 'text');
+  const query = buildProfileTopicContent(accounts, 'text', buildSecurityAlertTopicGate());
 
   return {
     source,
