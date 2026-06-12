@@ -108,6 +108,9 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
 
   if (!hasCryptoRelevance(body, account)) return 'pre_ai_non_crypto';
 
+  const editorialSubstanceRejectReason = getCryptoEditorialSubstanceRejectReason(body);
+  if (editorialSubstanceRejectReason) return editorialSubstanceRejectReason;
+
   return null;
 }
 
@@ -441,6 +444,187 @@ function isEngagementBait(body: string): boolean {
   if (body.includes('pump') && body.includes('polymarket') && body.includes('chance')) return true;
   return false;
 }
+
+function getCryptoEditorialSubstanceRejectReason(body: string): string | null {
+  if (isLowSubstanceCryptoMarketCommentary(body)) {
+    return 'pre_ai_low_substance_market_commentary';
+  }
+
+  return null;
+}
+
+function isLowSubstanceCryptoMarketCommentary(body: string): boolean {
+  if (!mentionsCryptoMarketAnalysis(body)) return false;
+  if (hasConcreteCryptoMarketSignal(body)) return false;
+
+  // Reject vague analysis/report teasers and market commentary that only says an
+  // analysis exists or "may provide clues" without giving a concrete signal.
+  if (hasAny(body, VAGUE_MARKET_ANALYSIS_TEASERS)) return true;
+
+  // Market-analysis text with only generic words like sentiment/positioning/trend
+  // and no numbers, levels, flows, or directional conclusion is not publish-worthy.
+  return hasAny(body, GENERIC_MARKET_ANALYSIS_TERMS);
+}
+
+function mentionsCryptoMarketAnalysis(body: string): boolean {
+  return hasAny(body, [
+    'market',
+    'price',
+    'trend',
+    'technical analysis',
+    'options',
+    'volatility',
+    'implied volatility',
+    'realized volatility',
+    'positioning',
+    'trader positioning',
+    'sentiment',
+    'market sentiment',
+    'support',
+    'resistance',
+    'breakout',
+    'breakdown',
+    'bounce',
+    'bounced',
+    'reclaim',
+    'reclaimed',
+    'low',
+    'high',
+    'glassnode',
+    'santiment',
+    'cryptoquant',
+    'coinshares',
+    'kaiko',
+    'funding',
+    'open interest',
+    'liquidation',
+    'liquidations',
+  ]);
+}
+
+function hasConcreteCryptoMarketSignal(body: string): boolean {
+  return hasConcreteNumericSignal(body)
+    || hasAny(body, CONCRETE_MARKET_SIGNAL_TERMS)
+    || hasConcreteMarketStructureSignal(body)
+    || hasConcreteCryptoEventSignal(body);
+}
+
+function hasConcreteNumericSignal(body: string): boolean {
+  return /(?:[$€£]\s*)?[0-9۰-۹٠-٩][0-9۰-۹٠-٩,._\s]*(?:%|percent|bps|basis points|usd|dollars?|million|billion|trillion|m\b|b\b|k\b|btc\b|eth\b|usdt\b|usdc\b)/iu.test(body)
+    || /(?:above|below|over|under|near|at|from|to)\s+\$?\s*[0-9۰-۹٠-٩][0-9۰-۹٠-٩,._\s]*(?:k\b|m\b|b\b)?/iu.test(body)
+    || /[0-9۰-۹٠-٩][0-9۰-۹٠-٩,._\s]*\s*(?:inflow|inflows|outflow|outflows|liquidation|liquidations|volume|open interest|funding rate)/iu.test(body);
+}
+
+function hasConcreteMarketStructureSignal(body: string): boolean {
+  return /(?:breaks?|broke|reclaims?|reclaimed|holds?|held|loses?|lost|rejects?|rejected)\s+(?:above|below|over|under|at|near)\s+\$?\s*[0-9۰-۹٠-٩]/iu.test(body)
+    || /(?:support|resistance)\s+(?:at|near|around)\s+\$?\s*[0-9۰-۹٠-٩]/iu.test(body)
+    || /(?:implied volatility|realized volatility|open interest|funding rate|net inflows?|net outflows?)\s+(?:rose|rises|fell|falls|jumped|dropped|turned|hit|reached|increased|decreased)/iu.test(body);
+}
+
+function hasConcreteCryptoEventSignal(body: string): boolean {
+  return hasAny(body, [
+    'etf filing',
+    'sec filing',
+    's-1',
+    '19b-4',
+    'approved',
+    'approval',
+    'rejected',
+    'launched',
+    'launches',
+    'listing',
+    'listed',
+    'mainnet launch',
+    'token launch',
+    'airdrop',
+    'exploit',
+    'hacked',
+    'hack',
+    'drained',
+    'stolen funds',
+    'frozen',
+    'froze',
+    'minted',
+    'burned',
+    'transferred',
+    'withdrew',
+    'withdrawn',
+    'deposit',
+    'outflow',
+    'inflow',
+    'charged',
+    'indicted',
+    'lawsuit',
+    'settlement',
+    'acquired',
+    'raises',
+    'raised',
+    'partners with',
+    'integrates',
+  ]);
+}
+
+const VAGUE_MARKET_ANALYSIS_TEASERS = [
+  'may provide clues',
+  'could provide clues',
+  'can provide clues',
+  'offers a deeper picture',
+  'provides a deeper picture',
+  'deeper picture',
+  'sheds light',
+  'analysis includes',
+  'report includes',
+  'report explores',
+  'we break down',
+  'this analysis looks at',
+  'this report looks at',
+  'what traders expect',
+  'expectations of future volatility',
+  'expectations for future volatility',
+  'short-term and medium-term trend',
+  'short and medium term trend',
+  'near-term and medium-term trend',
+  'overall market sentiment',
+  'general market sentiment',
+];
+
+const GENERIC_MARKET_ANALYSIS_TERMS = [
+  'market sentiment',
+  'trader positioning',
+  'positioning',
+  'volatility expectations',
+  'future volatility',
+  'short-term trend',
+  'medium-term trend',
+  'trend expectations',
+  'technical picture',
+  'market picture',
+  'options data',
+  'derivatives data',
+];
+
+const CONCRETE_MARKET_SIGNAL_TERMS = [
+  'net inflow',
+  'net inflows',
+  'net outflow',
+  'net outflows',
+  'funding rate turned negative',
+  'funding rate turned positive',
+  'open interest rose',
+  'open interest fell',
+  'open interest hit',
+  'implied volatility rose',
+  'implied volatility fell',
+  'implied volatility hit',
+  'liquidations topped',
+  'liquidations reached',
+  'spot bitcoin etf inflow',
+  'spot bitcoin etf outflow',
+  'bitcoin etf inflow',
+  'bitcoin etf outflow',
+  'ethereum etf inflow',
+  'ethereum etf outflow',
+];
 
 function hasCoreWhaleAsset(body: string): boolean {
   return hasAny(body, [
