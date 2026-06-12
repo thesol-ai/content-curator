@@ -1,0 +1,10 @@
+import type { CategoryPolicy } from '../types';
+import { buildTemplateScoringPolicy } from './prompts';
+
+export const templatePolicy: CategoryPolicy = {
+  id: 'template',
+  buildScoringPolicy: (category) => buildTemplateScoringPolicy(category),
+
+  // Add only category-specific pre-AI rejects here.
+  // getPreAiRejectReason: (item, category) => null,
+};
