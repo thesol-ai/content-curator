@@ -244,4 +244,60 @@ describe('crypto pre-AI content gate', () => {
     }), cryptoCategory)).toBe('pre_ai_whale_institution_to_unknown');
   });
 
+  it('rejects low-substance crypto market commentary without a concrete signal or takeaway', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'glassnode',
+      text: 'Bitcoin recently broke its February low and bounced from its June low. Glassnode options data offers a deeper picture of trader positioning, expectations for future volatility, and overall market sentiment, which may provide clues about Bitcoin short-term and medium-term trend.',
+    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'santimentfeed',
+      text: 'Ethereum market sentiment is shifting as derivatives positioning gives analysts a deeper picture of what traders expect next.',
+    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'cryptoquant_com',
+      text: 'Our latest Bitcoin report explores volatility expectations, trader positioning, and the broader market picture for the coming weeks.',
+    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
+  });
+
+  it('allows crypto market analysis only when it includes a concrete signal, number, level, flow, or conclusion', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'glassnode',
+      text: 'Bitcoin options implied volatility rose to 62% while open interest increased 18%, suggesting traders are pricing a larger BTC move after spot ETF outflows.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'CoinGlass',
+      text: 'Bitcoin fell below $100,000 and triggered $420 million in crypto liquidations over 24 hours.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'EricBalchunas',
+      text: 'Spot Bitcoin ETFs saw $90 million in net outflows while Ethereum ETFs lost $11 million in a single trading day.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'CryptoQuant',
+      text: 'Bitcoin funding rate turned negative and open interest fell after BTC rejected resistance near $104,000.',
+    }), cryptoCategory)).toBeNull();
+  });
+
+  it('does not reject concrete non-market crypto news while filtering vague analysis teasers', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'CoinDesk',
+      text: 'A DeFi protocol exploit on Ethereum drained $48 million in stolen funds from user wallets.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'TheBlock__',
+      text: 'New spot Bitcoin ETF filing appears on the SEC website.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'Glassnode',
+      text: 'Bitcoin options data gives a broader view of market sentiment and what traders may expect next.',
+    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
+  });
+
 });
