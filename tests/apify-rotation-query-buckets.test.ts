@@ -107,8 +107,16 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     const security = bySource(result, 'src_crypto_x_voices_media');
     expect(security.cohortName).toContain('security_alert_text');
     expect(security.accounts).toEqual(['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts']);
-    expect(String(security.inputOverride.query)).toContain('hack OR hacked OR exploit');
+    expect(String(security.inputOverride.query)).toContain('"crypto hack"');
+    expect(String(security.inputOverride.query)).toContain('"DeFi hack"');
+    expect(String(security.inputOverride.query)).toContain('"protocol exploit"');
+    expect(String(security.inputOverride.query)).toContain('"smart contract exploit"');
     expect(String(security.inputOverride.query)).toContain('crypto OR DeFi OR protocol');
+    expect(String(security.inputOverride.query)).not.toContain('hack OR hacked OR exploit');
+    expect(String(security.inputOverride.query)).toContain('-pypi');
+    expect(String(security.inputOverride.query)).toContain('-npm');
+    expect(String(security.inputOverride.query)).toContain('-python');
+    expect(String(security.inputOverride.query)).toContain('-bun');
 
     const market = bySource(result, 'src_market_trending_x_text');
     expect(market.cohortName).toContain('market_impact_text');

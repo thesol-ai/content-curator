@@ -32,6 +32,82 @@ export async function fetchApifyDataset(
   return Array.isArray(data) ? data : [];
 }
 
+export interface ApifyDatasetFilterResult {
+  realItems: any[];
+  actorMockCount: number;
+  actorMockSamples: Array<{
+    keys: string[];
+    id?: unknown;
+    type?: unknown;
+    textPreview?: string;
+  }>;
+}
+
+export function isApifyActorMockNoResultItem(raw: any): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+
+  const keys = Object.keys(raw).sort();
+  const keySet = new Set(keys);
+  const onlyMinimalKeys = keys.length > 0 && keys.every(key => ['id', 'text', 'type'].includes(key));
+
+  const id = Number(raw.id);
+  const text = String(raw.text ?? '').trim();
+  const type = String(raw.type ?? '').trim().toLowerCase();
+  const lowerText = text.toLowerCase();
+
+  const looksLikeKaitoMock =
+    lowerText.includes('from kaitoeasyapi') ||
+    lowerText.includes('kaitoeasyapi') ||
+    lowerText.includes('api pricing') ||
+    lowerText.includes('mock data') ||
+    lowerText.includes('minimum charge');
+
+  const hasNoTweetShape =
+    !keySet.has('url') &&
+    !keySet.has('twitterUrl') &&
+    !keySet.has('tweet_url') &&
+    !keySet.has('tweetUrl') &&
+    !keySet.has('permalink') &&
+    !keySet.has('link') &&
+    !keySet.has('author') &&
+    !keySet.has('user') &&
+    !keySet.has('legacy') &&
+    !keySet.has('tweet') &&
+    !keySet.has('data') &&
+    !keySet.has('result');
+
+  return (
+    (id === -1 && looksLikeKaitoMock) ||
+    (onlyMinimalKeys && looksLikeKaitoMock && hasNoTweetShape) ||
+    (type.includes('mock') && hasNoTweetShape)
+  );
+}
+
+export function filterApifyActorMockNoResultItems(rawItems: any[]): ApifyDatasetFilterResult {
+  const realItems: any[] = [];
+  const actorMockSamples: ApifyDatasetFilterResult['actorMockSamples'] = [];
+  let actorMockCount = 0;
+
+  for (const raw of rawItems) {
+    if (isApifyActorMockNoResultItem(raw)) {
+      actorMockCount++;
+      if (actorMockSamples.length < 3) {
+        actorMockSamples.push({
+          keys: Object.keys(raw ?? {}).sort().slice(0, 30),
+          id: raw?.id,
+          type: raw?.type,
+          textPreview: String(raw?.text ?? '').replace(/\s+/g, ' ').slice(0, 180),
+        });
+      }
+      continue;
+    }
+
+    realItems.push(raw);
+  }
+
+  return { realItems, actorMockCount, actorMockSamples };
+}
+
 export function normalizeItem(raw: any, platform: Platform): NormalizedItem | null {
   switch (platform) {
     case 'x':         return normalizeTwitterItem(raw);

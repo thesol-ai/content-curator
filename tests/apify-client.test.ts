@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeItem } from '../apps/worker-api/src/services/apify-client';
+import {
+  filterApifyActorMockNoResultItems,
+  isApifyActorMockNoResultItem,
+  normalizeItem,
+} from '../apps/worker-api/src/services/apify-client';
 import {
   instagramCarouselPost,
   instagramCarouselWithManifestVideoPost,
@@ -120,4 +124,23 @@ describe('apify-client normalization baseline', () => {
     expect(deck?.media).toHaveLength(10);
     expect(deck?.mediaWarnings?.join(' ')).toContain('expected 12 media items');
   });
+
+  it('detects KaitoEasyAPI mock/no-result rows as actor mock data', () => {
+    const mock = {
+      id: -1,
+      type: 'mock',
+      text: 'From KaitoEasyAPI, a reminder: Our API pricing is based on minimum charge...',
+    };
+
+    expect(isApifyActorMockNoResultItem(mock)).toBe(true);
+
+    const item = normalizeItem(mock, 'x');
+    expect(item).toBeNull();
+
+    const filtered = filterApifyActorMockNoResultItems([mock]);
+    expect(filtered.realItems).toHaveLength(0);
+    expect(filtered.actorMockCount).toBe(1);
+    expect(filtered.actorMockSamples[0]?.textPreview).toContain('KaitoEasyAPI');
+  });
+
 });

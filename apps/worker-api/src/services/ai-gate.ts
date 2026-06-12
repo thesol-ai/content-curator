@@ -6,6 +6,7 @@
 // ══════════════════════════════════════════════════════════════
 
 import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from '../types';
+import { getPreAiContentRejectReason } from './content-policy';
 
 // ── Provider configs ──────────────────────────────────────────
 
@@ -201,10 +202,14 @@ async function runScoring(
   }
 
   const scoringEditorialPolicy = buildScoringEditorialPolicy(category);
+  const strictCryptoScoringPolicy = isCryptoCategory(category)
+    ? buildStrictCryptoScoringPolicy()
+    : '';
 
   const system = [
     `You are an expert content curator. ${profile}`,
     scoringEditorialPolicy,
+    strictCryptoScoringPolicy,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
     '',
@@ -288,7 +293,7 @@ async function runScoring(
       const parsed = extractJsonObject(text);
       if (!parsed) { lastErr = 'No valid JSON in response'; continue; }
       if (!Array.isArray(parsed.items)) { lastErr = 'Missing items array in JSON'; continue; }
-      return mapScoringResults(parsed.items, items);
+      return applyPostScoringHardGate(mapScoringResults(parsed.items, items), items, category);
     } catch (e) { lastErr = e instanceof Error ? e.message : String(e); }
   }
 
@@ -307,6 +312,54 @@ async function runScoring(
     riskFlags: ['scoring_error'], topicFingerprint: `err-${item.postId}`,
     publishPriority: 'normal' as const, translations: {},
   }));
+}
+
+function isCryptoCategory(category: CategoryRow): boolean {
+  return String(category.id ?? '').trim().toLowerCase() === 'crypto';
+}
+
+function buildStrictCryptoScoringPolicy(): string {
+  return [
+    'CRYPTO HARD GATE:',
+    'Default to publish=false unless the source text itself contains an explicit crypto/digital-asset connection.',
+    'Source account reputation is not enough. A post from SlowMist, DefiLlama, Decrypt, CoinDesk, or any crypto-native account can still be non-crypto.',
+    'The text must directly mention at least one strong crypto anchor such as Bitcoin/BTC, Ethereum/ETH, Solana, stablecoin/USDT/USDC, DeFi, blockchain, on-chain, smart contract, wallet drain, crypto exchange, ETF tied to Bitcoin/Ethereum/crypto, tokenization/RWA, or named crypto venues/chains.',
+    'Reject generic cybersecurity, software supply-chain, AI, macro, politics, stocks, SpaceX, sports, tech, legal, or business news unless the crypto connection is explicit in the source text.',
+    'If you are unsure whether it is crypto, publish=false.',
+    'If publish=false because crypto relevance is missing, include risk_flags containing "missing_explicit_crypto_relevance".',
+  ].join('\n');
+}
+
+export function applyPostScoringHardGate(
+  results: AIGateResult[],
+  items: NormalizedItem[],
+  category: CategoryRow,
+): AIGateResult[] {
+  if (!isCryptoCategory(category)) return results;
+
+  return results.map((result, index) => {
+    if (!result.publish) return result;
+
+    const item = items[index];
+    if (!item) return result;
+
+    const hardRejectReason = getPreAiContentRejectReason(item, category);
+    if (!hardRejectReason) return result;
+
+    const flags = new Set(result.riskFlags ?? []);
+    flags.add('hard_gate_after_ai');
+    flags.add(hardRejectReason);
+    flags.add('missing_explicit_crypto_relevance');
+
+    return {
+      ...result,
+      publish: false,
+      score: 0,
+      riskLevel: result.riskLevel === 'high' ? result.riskLevel : 'medium',
+      riskFlags: Array.from(flags).slice(0, 10),
+      publishPriority: 'low',
+    };
+  });
 }
 
 // استخراج JSON از پاسخ AI — مقاوم در برابر markdown fences و متن اضافه

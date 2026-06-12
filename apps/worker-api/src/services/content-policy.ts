@@ -90,6 +90,10 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
     return getWhaleAlertRejectReason(body);
   }
 
+  if (mentionsGenericSoftwareSecurity(body) && !hasExplicitCryptoSecurityRelevance(body)) {
+    return 'pre_ai_generic_software_security';
+  }
+
   if (mentionsGenericAi(body) && !hasCryptoRelevance(body, account)) {
     return 'pre_ai_generic_ai_news';
   }
@@ -108,68 +112,37 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
 }
 
 function hasCryptoRelevance(body: string, account: string): boolean {
-  if (hasAny(body, DIRECT_CRYPTO_ANCHORS)) return true;
-
-  const etfAccounts = new Set([
-    'ericbalchunas',
-    'jseyff',
-    'nategeraci',
-    'eleanorterrett',
-  ]);
-
-  if (etfAccounts.has(account) && hasAny(body, ETF_REGULATORY_TERMS)) return true;
-
-  const cryptoNativeAccounts = new Set([
-    'coindesk',
-    'cointelegraph',
-    'theblock__',
-    'wublockchain',
-    'watcherguru',
-    'news_of_alpha',
-    'tree_of_alpha',
-    'bitcoinmagazine',
-    'defiantnews',
-    'dlnewsinfo',
-    'lookonchain',
-    'glassnode',
-    'cryptoquant_com',
-    'zachxbt',
-    'peckshieldalert',
-    'slowmist_team',
-    'cyversalerts',
-    'defillama',
-    'banklesshq',
-    'thedefiantnews',
-    'ethereum',
-    'solana',
-    'base',
-    'chainlink',
-    'coinbaseassets',
-    'binance',
-  ]);
-
-  if (cryptoNativeAccounts.has(account) && hasAny(body, CRYPTO_NATIVE_CONTEXT_TERMS)) return true;
-
-  return false;
+  // Strict channel rule:
+  // Source account reputation is NOT enough. The text itself must contain a high-confidence
+  // crypto/digital-asset anchor. Default is reject.
+  void account;
+  return hasAny(body, DIRECT_CRYPTO_ANCHORS);
 }
 
+
 const DIRECT_CRYPTO_ANCHORS = [
+  // Core assets / tickers
   'bitcoin',
-  'btc',
+  ' btc',
   '$btc',
   'ethereum',
-  'eth',
+  ' eth',
   '$eth',
+  'solana',
+  ' xrp',
+  '$xrp',
+  'dogecoin',
+  ' doge',
+  '$doge',
+  'shib',
+  '$shib',
+
+  // Crypto category terms
   'crypto',
   'cryptocurrency',
   'blockchain',
   'digital asset',
   'digital-asset',
-  'tokenized',
-  'tokenization',
-  ' token ',
-  ' tokens ',
-  'rwa',
   'stablecoin',
   'usdt',
   'tether',
@@ -177,9 +150,48 @@ const DIRECT_CRYPTO_ANCHORS = [
   'defi',
   'onchain',
   'on-chain',
-  'whale',
-  'wallet',
-  'exchange',
+  'web3',
+  'smart contract',
+
+  // Safer wallet/security terms. Generic "wallet", "hack", "exploit" are intentionally NOT enough.
+  'crypto wallet',
+  'web3 wallet',
+  'wallet drain',
+  'wallet drainer',
+  'seed phrase',
+  'private key',
+  'smart contract exploit',
+  'defi exploit',
+  'bridge exploit',
+  'crypto hack',
+  'defi hack',
+  'protocol exploit',
+  'stolen funds',
+  'funds stolen',
+  'drained funds',
+
+  // DeFi / protocol / chain terms
+  'mainnet',
+  'testnet',
+  'validator',
+  'staking',
+  'governance token',
+  'liquidity pool',
+  'lending protocol',
+  'dex',
+  'dao',
+  'dapp',
+  'airdrop',
+  'tge',
+
+  // Tokenization / RWA, still crypto-adjacent enough
+  'tokenized',
+  'tokenization',
+  'rwa',
+  'real-world asset',
+  'real world asset',
+
+  // Known crypto venues / infra
   'coinbase',
   'binance',
   'kraken',
@@ -187,42 +199,43 @@ const DIRECT_CRYPTO_ANCHORS = [
   'bitget',
   'okx',
   'mexc',
-  'dex',
-  'smart contract',
-  'protocol',
-  'web3',
-  'layer 1',
-  'layer-1',
-  'layer 2',
-  'layer-2',
-  'mainnet',
-  'testnet',
-  'airdrop',
-  'tge',
-  'listing',
-  'solana',
+  'bitfinex',
+  'uniswap',
+  'aave',
+  'curve',
+  'metamask',
+  'phantom',
+  'ledger',
+
+  // Chains / ecosystems
   'chainlink',
-  'base',
-  'ton',
-  'telegram mini',
-  'notcoin',
-  'dogs',
-  'hamster kombat',
+  'base chain',
+  'bnb chain',
+  'arbitrum',
+  'optimism',
+  'polygon',
+  'avalanche',
+  'ton blockchain',
+  'ton ecosystem',
+
+  // Crypto ETF / regulation
   'spot bitcoin etf',
   'bitcoin etf',
   'ethereum etf',
   'crypto etf',
   'sec crypto',
-  'cftc',
+  'cftc crypto',
+  'digital asset regulation',
   'clarity act',
   'stablecoin bill',
-  'hack',
-  'exploit',
-  'phishing',
-  'bridge attack',
-  'private key',
-  'seed phrase',
+
+  // Telegram crypto games / mini app ecosystem
+  'telegram mini app',
+  'telegram mini',
+  'notcoin',
+  'hamster kombat',
 ];
+
 
 const CRYPTO_NATIVE_CONTEXT_TERMS = [
   'etf',
@@ -261,6 +274,127 @@ const ETF_REGULATORY_TERMS = [
   's-1',
   'issuer',
 ];
+
+function mentionsGenericSoftwareSecurity(body: string): boolean {
+  return hasAny(body, [
+    'pypi',
+    'npm',
+    'package',
+    'packages',
+    'supply chain',
+    'supply-chain',
+    'malware',
+    'backdoor',
+    'trojan',
+    'rce',
+    'remote code execution',
+    'dependency',
+    'dependencies',
+    '.pth',
+    'python',
+    'bun',
+    'node.js',
+    'javascript',
+    'typescript',
+    'developer',
+    'developers',
+    'repository',
+    'github',
+    'credential',
+    'credentials',
+    'api key',
+    'secret key',
+    'environment variable',
+    'ssh key',
+    'infostealer',
+    'shai-hulud',
+    'cyberattack',
+    'cyberattacks',
+    'cyber attack',
+    'cyber attacks',
+    'data breach',
+    'breach',
+    'ransomware',
+    'attacks',
+    'attackers',
+  ]);
+}
+
+function hasExplicitCryptoSecurityRelevance(body: string): boolean {
+  if (!hasAny(body, [
+    'hack',
+    'hacked',
+    'exploit',
+    'exploited',
+    'phishing',
+    'drained',
+    'drainer',
+    'bridge attack',
+    'private key',
+    'seed phrase',
+    'wallet drain',
+    'security incident',
+    'vulnerability',
+    'malware',
+    'supply chain',
+    'supply-chain',
+  ])) {
+    return false;
+  }
+
+  return hasAny(body, [
+    'bitcoin',
+    'btc',
+    'ethereum',
+    'eth',
+    'crypto',
+    'cryptocurrency',
+    'blockchain',
+    'defi',
+    'web3',
+    'wallet',
+    'smart contract',
+    'bridge',
+    'protocol',
+    'exchange',
+    'dex',
+    'dao',
+    'dapp',
+    'onchain',
+    'on-chain',
+    'token',
+    'tokens',
+    'stablecoin',
+    'usdt',
+    'usdc',
+    'solana',
+    'base',
+    'bnb chain',
+    'arbitrum',
+    'optimism',
+    'polygon',
+    'avalanche',
+    'ton',
+    'ledger',
+    'metamask',
+    'phantom',
+    'binance',
+    'coinbase',
+    'kraken',
+    'okx',
+    'bybit',
+    'aave',
+    'curve',
+    'uniswap',
+    'lending protocol',
+    'liquidity pool',
+    'treasury',
+    'stolen funds',
+    'funds stolen',
+    'lost funds',
+    'drained funds',
+  ]);
+}
 
 function mentionsGenericAi(body: string): boolean {
   return hasAny(body, [

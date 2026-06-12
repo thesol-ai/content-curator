@@ -39,6 +39,7 @@
 - [Current Limitations & Next Improvements](#current-limitations-next-improvements)
 - [Troubleshooting](#troubleshooting)
 - [Monthly Cost Estimate](#monthly-cost-estimate)
+- [Documentation & Release Hygiene](#documentation-release-hygiene-1)
 
 ---
 
@@ -742,7 +743,7 @@ wrangler secret put R2_PUBLIC_BASE_URL    # https://media.yourdomain.com
 ### 5. Deploy
 
 ```bash
-npx wrangler deploy --env production
+npx npx wrangler deploy --env production
 ```
 
 Verify:
@@ -1313,7 +1314,7 @@ These actions can spend money, publish posts, or change production state:
 - `/internal/queue/:id/publish-now`
 - `/internal/market-snapshot/send-now`
 - D1 `UPDATE` statements against `publish_queue`, `ai_usage`, `settings`, `channels`, or `apify_sources`
-- `npx wrangler deploy --env production`
+- `npx npx wrangler deploy --env production`
 
 Do not paste secrets into chat or logs. For local checks, load `.dev.vars.production` privately and only verify presence/length, not the value.
 
@@ -1563,7 +1564,7 @@ Trigger: workflow_dispatch → input: environment (production)
 Steps:
   1. Checkout + install
   2. npm run typecheck
-  3. npx wrangler deploy --env production
+  3. npx npx wrangler deploy --env production
   4. Health check: curl WORKER_URL/health → must return 200
 ```
 
@@ -1770,7 +1771,7 @@ curl ".../internal/queue?status=failed&limit=10" -H "..."
 # Switch to binary_upload mode to handle expiring CDN URLs
 # In wrangler.toml:
 MEDIA_PROCESSING_MODE = "binary_upload"
-# Then redeploy: npx wrangler deploy --env production
+# Then redeploy: npx npx wrangler deploy --env production
 
 # Retry a specific failed item
 curl -X POST .../internal/queue/QUEUE_ITEM_ID/retry -H "..."
@@ -1903,3 +1904,26 @@ A high fetched count with low new count means scrape spend is being wasted on du
 ---
 
 *TypeScript · Cloudflare Workers · D1 · Apify · Claude · Gemini · Telegram Bot API*
+
+## Documentation & Release Hygiene
+
+The README is the durable source of truth for architecture, setup, configuration, API usage, operations, and troubleshooting.
+
+`RELEASE_CHECKLIST.md` should remain separate because it is an operational deployment gate, not general product documentation.
+
+Historical planning documents can be useful while a feature is still being designed, but they should not remain as competing architecture references after the implementation has landed. If a planning document is fully represented in the README and no longer matches production, archive or delete it in a separate documentation-cleanup commit.
+
+Recommended cleanup policy:
+
+```text
+Keep:
+  README.md
+  RELEASE_CHECKLIST.md
+
+Review separately before deleting:
+  docs/ai-candidate-backlog-and-fair-source-distribution.md
+  docs/market-trending-source-rollout.md
+  RELEASE_NOTES_NEXT.md
+```
+
+Do not mix documentation deletion with runtime code changes. Keep those commits separate so review does not become archaeology with syntax highlighting.
