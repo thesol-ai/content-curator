@@ -2,6 +2,7 @@
 
 > Fully automated, multi-category content curation and Telegram publishing system.
 > **Apify → Cloudflare Worker → Claude AI → Telegram**
+> Current production crypto pilot also uses **controlled Apify rotation → AI candidate backlog → fair source scoring → Gemini translation → Telegram scheduler**.
 
 ---
 
@@ -10,6 +11,10 @@
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Pipeline Flow](#pipeline-flow)
+- [Current Production Architecture & Pilot State](#current-production-architecture--pilot-state)
+- [AI Candidate Backlog & Fair Source Distribution](#ai-candidate-backlog--fair-source-distribution)
+- [Apify Controlled Rotation](#apify-controlled-rotation)
+- [Crypto Quality Gate & Whale Alert Throttle](#crypto-quality-gate--whale-alert-throttle)
 - [Media Processing](#media-processing)
 - [Category & Language System](#category--language-system)
 - [Project Structure](#project-structure)
@@ -21,6 +26,9 @@
 - [Telegram Bot & Channels](#telegram-bot--channels)
 - [AI Models & Cost](#ai-models--cost)
 - [Scheduling & Time Windows](#scheduling--time-windows)
+- [Market Snapshot](#market-snapshot)
+- [Operational Runbook](#operational-runbook)
+- [Documentation Consolidation & Cleanup](#documentation-consolidation--cleanup)
 - [Dashboard](#dashboard)
 - [API Reference](#api-reference)
 - [Safety Switches](#safety-switches)
@@ -35,6 +43,17 @@
 ## Overview
 
 Content Curator is a zero-touch content pipeline that discovers posts from social media, scores them with Claude AI, translates them with Gemini, and publishes them to Telegram channels — fully automatically.
+
+**Current production crypto pilot status:**
+
+- Production Worker: `https://content-curator.thesol-ai.workers.dev`
+- Production D1 database: `content-curator-db-v2`
+- Active pilot category/channel: `crypto` → `crypto_fa_pilot` → `@thesolcrypto_fa`
+- Worker cron: every 5 minutes
+- Production publishing path: Apify controlled rotation + webhook/dataset ingestion + AI candidate backlog + Claude scoring + Gemini translation + Telegram scheduler
+- Media mode in production: `binary_upload`
+- Cloudflare Stream fallback: disabled by default through `STREAM_TRANSCODE_ENABLED=false`
+- Target production cadence for the crypto Persian pilot: up to 72 posts/day, constrained by channel windows, `max_per_hour`, and `min_gap_minutes`
 
 **What it does:**
 
@@ -97,7 +116,7 @@ Content Curator is a zero-touch content pipeline that discovers posts from socia
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  CRON  every 30 minutes                              │   │
+│  │  CRON  every 5 minutes                               │   │
 │  │  └─ publishDueItems()                                │   │
 │  │     ├─ Check hourly rate limit per channel           │   │
 │  │     ├─ Check minimum gap between posts               │   │
@@ -133,6 +152,247 @@ Category: finance  (score_threshold: 80, freshness: 24h)
   └── Channel: finance_en  → @FinanceChannelEn  (en, UTC)
   └── Channel: finance_ar  → @FinanceChannelAr  (ar, Asia/Dubai)
 ```
+
+
+---
+
+## Current Production Architecture & Pilot State
+
+The original architecture remains valid: Apify produces datasets, the Cloudflare Worker ingests them, Claude scores candidates, Gemini translates selected items, and Telegram publishes scheduled queue items. The current production crypto pilot adds several important operational layers on top of that base flow.
+
+### Effective production flow
+
+```text
+Cloudflare cron every 5 minutes
+  -> optional scheduled dataset curation only if APIFY_SCHEDULED_CURATION_ENABLED=true
+  -> controlled Apify rotation if APIFY_ROTATION_ENABLED=true
+  -> market snapshot direct send if a configured slot is due
+  -> publish due Telegram queue items
+  -> recover/skip/fail stale AI candidates
+  -> drain AI candidate backlog in bounded batches
+  -> cleanup old dedupe keys
+```
+
+Production intentionally keeps `APIFY_SCHEDULED_CURATION_ENABLED=false` so the Worker does not repeatedly reprocess old datasets. Freshness is normally driven by Apify task runs, source-scoped webhooks, and controlled Apify rotation.
+
+### Current production knobs
+
+```toml
+APIFY_ROTATION_ENABLED = "true"
+APIFY_ROTATION_INTERVAL_HOURS = "3"
+APIFY_ROTATION_MAX_SOURCES_PER_TICK = "2"
+APIFY_ROTATION_WAIT_FOR_FINISH_SECONDS = "60"
+
+AI_CANDIDATE_BACKLOG_ENABLED = "true"
+AI_FAIR_SOURCE_PICKER_ENABLED = "true"
+AI_SCORING_BATCH_SIZE = "5"
+AI_MAX_SCORING_BATCHES_PER_RUN = "1"
+AI_CANDIDATE_BACKLOG_DRAIN_LIMIT = "10"
+AI_CANDIDATE_MAX_ATTEMPTS = "2"
+AI_CANDIDATE_MAX_AGE_HOURS = "12"
+
+AI_MAX_CALLS_PER_DAY = "100"
+AI_DAILY_TOKEN_BUDGET = "200000"
+
+TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
+TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
+TELEGRAM_PUBLISH_DUE_LIMIT = "4"
+
+MEDIA_PROCESSING_MODE = "binary_upload"
+STREAM_TRANSCODE_ENABLED = "false"
+```
+
+### Crypto Persian pilot channel
+
+The current pilot channel is configured for high-frequency publishing, but it is still bounded by editorial quality, queue availability, and channel rate limits.
+
+```text
+category_id: crypto
+channel_id: crypto_fa_pilot
+language: fa
+timezone: Asia/Tehran
+allowed windows: 07:00-23:59 and 00:00-01:00
+blocked window: 01:00-07:00
+max_per_day: 72
+max_per_hour: 4
+min_gap_minutes: 15
+```
+
+This means the theoretical maximum is 72 posts/day only when enough high-quality queue items exist. If the queue runs empty for several hours, the system cannot safely publish 72 quality posts without either increasing candidate supply, improving source diversity, or changing editorial constraints.
+
+---
+
+## AI Candidate Backlog & Fair Source Distribution
+
+Earlier versions treated `AI_MAX_CANDIDATES_PER_RUN` as a lossy cutoff: fresh items beyond the AI candidate limit could be fetched and normalized but never scored. The current architecture uses a durable `ai_candidate_queue` between dedupe and AI scoring.
+
+### Why it exists
+
+The backlog solves four production problems:
+
+- fresh candidates are not wasted when Apify fetches more than Claude should score in one call;
+- Claude prompts stay small and predictable;
+- daily AI cost limits remain enforceable;
+- source accounts get fairer representation instead of letting one high-volume account dominate every scoring batch.
+
+### Backlog lifecycle
+
+```text
+Apify dataset
+  -> normalize
+  -> source-account balancing
+  -> dedupe
+  -> freshness check
+  -> enqueue fresh candidates into ai_candidate_queue
+  -> claim a small batch
+  -> pre-AI content policy reject where possible
+  -> Claude scoring only for survivors
+  -> Gemini translation for selected items
+  -> rule gate
+  -> publish_queue insert
+  -> candidate status update
+```
+
+### Candidate statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | Candidate is waiting for AI scoring. |
+| `scoring` | Candidate has been claimed for a scoring attempt. |
+| `ai_selected` | Claude selected the item, but it may not have created a queue row yet. |
+| `ai_rejected` | Item was rejected by pre-AI policy or Claude/editorial policy. |
+| `queued` | At least one `publish_queue` row was created. |
+| `failed` | Candidate exceeded attempts or had an unrecoverable processing error. |
+| `skipped` | Candidate was intentionally skipped, usually because it became stale. |
+
+### Fair source picker
+
+When `AI_FAIR_SOURCE_PICKER_ENABLED=true`, the backlog drain loads a larger pending pool and selects candidates round-robin by `source_account`. This avoids scoring a batch made entirely of one account when multiple sources are available.
+
+The picker is intentionally soft: it improves diversity without starving high-quality active sources. The final publish decision still goes through Claude scoring, semantic dedupe, rule gate, and queue limits.
+
+### Manual drain
+
+Use small, bounded drains in production. This endpoint is a production write because it can spend AI budget and create Telegram queue items.
+
+```bash
+curl -s -X POST "$BASE/internal/backlog/drain" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"category_id":"crypto","limit":5,"maxBatches":1,"skipStale":true,"recoverStale":true}' | jq .
+```
+
+---
+
+## Apify Controlled Rotation
+
+The current crypto pilot does not rely only on static Apify schedules. It uses controlled Worker-side rotation over existing Apify task IDs and source records.
+
+### Why rotation exists
+
+Broad Apify queries can be expensive and noisy. They can also over-represent whichever account posts most recently. Controlled rotation reduces that failure mode by rotating account cohorts and topic gates while keeping `maxItems` intentionally small.
+
+### Rotation source IDs
+
+```text
+src_crypto_x_news_media
+src_crypto_x_news_text
+src_crypto_x_voices_media
+src_crypto_x_voices_text
+src_market_trending_x_media
+src_market_trending_x_text
+```
+
+### Main cohort families
+
+| Family | Purpose | Typical maxItems |
+|---|---:|---:|
+| `core_news` | trusted crypto news accounts with explicit crypto topic gates | 18 |
+| `expert_signals` | analyst/project/market voices with crypto signal gates | 16 |
+| `security_alert` | hacks, exploits, phishing, bridge/security incidents | 8 |
+| `token_project_watch` | listings, mainnets, token launches, upgrades, funding, protocol events | 10 |
+| `market_impact` | ETF, liquidity, stablecoin, on-chain, liquidation and macro-with-crypto relevance | 10 |
+
+### Query override fields
+
+The Worker sends both fields to Apify task runs:
+
+```json
+{
+  "query": "...",
+  "twitterContent": "...",
+  "maxItems": 18,
+  "queryType": "Latest",
+  "lang": "en",
+  "since_time": "..."
+}
+```
+
+Both `query` and `twitterContent` are intentionally sent because different Apify task versions/configs have used different field names. This avoids silent empty runs during task changes.
+
+### Dry-run rotation
+
+```bash
+curl -s -X POST "$BASE/internal/apify/rotation/run" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"force":true,"dryRun":true}' | jq .
+```
+
+### One-source real rotation
+
+This is a production-cost action because it runs an Apify task.
+
+```bash
+curl -s -X POST "$BASE/internal/apify/rotation/run" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"force":true,"onlySourceId":"src_crypto_x_news_text"}' | jq .
+```
+
+---
+
+## Crypto Quality Gate & Whale Alert Throttle
+
+The crypto pilot now has a deterministic pre-AI content policy. The purpose is to reject obvious junk before Claude scoring instead of spending model budget on posts that clearly do not belong in the channel.
+
+### Pre-AI rejects
+
+Before Claude scoring, crypto items can be rejected with reasons such as:
+
+| Reject reason | Meaning |
+|---|---|
+| `pre_ai_empty_text` | No usable text. |
+| `pre_ai_engagement_bait` | Poll/bait/prediction-style low-value post. |
+| `pre_ai_generic_ai_news` | AI news without explicit crypto relevance. |
+| `pre_ai_generic_equity_or_spacex` | Equity/IPO/SpaceX content without crypto relevance. |
+| `pre_ai_generic_geopolitics` | Geopolitics without explicit crypto, liquidity, oil, stablecoin, ETF, or risk-asset angle. |
+| `pre_ai_non_crypto` | No crypto anchor or accepted crypto-native context. |
+| `pre_ai_whale_unknown_to_unknown` | Whale Alert unknown-wallet to unknown-wallet transfer. |
+| `pre_ai_whale_non_core_asset` | Whale Alert asset is not BTC, ETH, USDT, or USDC. |
+| `pre_ai_whale_institution_to_unknown` | Low-signal custody/institution-to-unknown movement. |
+| `pre_ai_whale_low_signal` | Whale Alert transfer does not meet signal thresholds. |
+
+### Whale Alert rules
+
+`whale_alert` is not globally banned. Some on-chain movements are legitimate market context. The gate allows only higher-signal cases:
+
+- USDC/USDT mint or burn at or above 100M USD;
+- USDC/USDT DeFi flow at or above 100M USD;
+- exchange inflow/outflow for BTC, ETH, USDC, or USDT above configured thresholds;
+- core assets only: BTC, ETH, USDT, USDC.
+
+Unknown-to-unknown transfers, non-core assets, low-value movements, and institution/custody-to-unknown flows are rejected before Claude.
+
+### Daily queue throttle
+
+Even valid Whale Alert items are capped at the queue layer. For each channel, if two Whale Alert items are already scheduled/retry/publishing/published in the recent daily window, additional Whale Alert candidates are not queued and are recorded with:
+
+```text
+whale_alert_daily_cap
+```
+
+This keeps the channel from becoming mostly wallet-transfer posts.
 
 ---
 
@@ -189,7 +449,7 @@ publish_queue INSERT
      │          thumbnail_urls, media_types, scheduled_at
      │
      ▼
-Cron runs every 30 min
+Cron runs every 5 min
      │  publishDueItems()
      │  status = 'scheduled' OR 'retry', scheduled_at <= now
      │
@@ -393,6 +653,29 @@ content-curator/
 └── tsconfig.json
 ```
 
+
+### Current important Worker services
+
+The original structure above is still accurate, but production now relies on several additional services that are important enough to call out explicitly.
+
+| File | Purpose |
+|---|---|
+| `apps/worker-api/src/services/candidate-queue.ts` | Durable AI candidate backlog, status transitions, stale recovery, max attempts, backlog stats. |
+| `apps/worker-api/src/services/backlog-drain.ts` | Bounded backlog scoring, pre-AI policy filtering, translation, rule gate, queue creation. |
+| `apps/worker-api/src/services/fair-source-picker.ts` | Round-robin source-account candidate selection for AI scoring diversity. |
+| `apps/worker-api/src/services/apify-rotation-runner.ts` | Worker-side controlled Apify task rotation, cohort planning, query overrides, rotation bucket claiming. |
+| `apps/worker-api/src/services/content-policy.ts` | Editorial reject policy, crypto pre-AI filter, semantic/run-level duplicate rejection, Whale Alert rules. |
+| `apps/worker-api/src/services/story-dedupe.ts` | Recent story/topic dedupe for channels using topic fingerprints. |
+| `apps/worker-api/src/services/market-snapshot.ts` | Direct market snapshot publishing for configured slots. |
+| `apps/worker-api/src/services/operational-report.ts` | Read-only operational reporting. |
+| `apps/worker-api/src/routes/telegram-admin-bot.ts` | Telegram admin bot webhook route, protected separately from public health endpoints. |
+
+### Current migration line
+
+The early migration list above documents the initial schema. The current repository has later migrations for media observability, Apify extraction diagnostics, AI usage, formatting/editorial controls, Apify task binding, AI candidate backlog, market-trending sources, and production hardening.
+
+Do not edit already-applied migrations. Add a new numbered migration for future schema changes and verify remote D1 before applying it.
+
 ---
 
 ## Tech Stack & Cost
@@ -412,7 +695,7 @@ content-curator/
 
 ## Prerequisites
 
-- Node.js 22+, pnpm
+- Node.js 22+, npm
 - Cloudflare account (free tier is sufficient)
 - Wrangler CLI: `npm install -g wrangler`
 - Apify account with API token
@@ -436,7 +719,7 @@ wrangler login
 ### 2. Create the D1 database
 
 ```bash
-wrangler d1 create content-curator-db
+wrangler d1 create content-curator-db-v2
 # Copy the database_id from output
 ```
 
@@ -444,7 +727,7 @@ Update `wrangler.toml`:
 ```toml
 [[d1_databases]]
 binding = "DB"
-database_name = "content-curator-db"
+database_name = "content-curator-db-v2"
 database_id = "YOUR_ACTUAL_DATABASE_ID"
 ```
 
@@ -452,15 +735,15 @@ database_id = "YOUR_ACTUAL_DATABASE_ID"
 
 ```bash
 # Local test
-wrangler d1 migrations apply content-curator-db --local
+wrangler d1 migrations apply content-curator-db-v2 --local
 
 # Remote production
-wrangler d1 migrations apply content-curator-db --remote
+wrangler d1 migrations apply content-curator-db-v2 --remote
 ```
 
 Verify:
 ```bash
-wrangler d1 execute content-curator-db --command "SELECT name FROM sqlite_master WHERE type='table'" --remote
+wrangler d1 execute content-curator-db-v2 --command "SELECT name FROM sqlite_master WHERE type='table'" --remote
 # Expected: 10 tables including discovery_media, publish_queue, etc.
 ```
 
@@ -570,11 +853,23 @@ curl -X POST $BASE/internal/channels/crypto_fa/publish -H "$AUTH" -d '{"enabled"
 | `APIFY_CURATION_ENABLED` | `false` | Enable the entire curation pipeline |
 | `APIFY_CURATION_DRY_RUN` | `true` | Score + reject/select but do not insert into queue |
 | `APIFY_MAX_ITEMS_PER_SOURCE` | `100` | Items fetched per Apify dataset per run |
+| `APIFY_RAW_FETCH_LIMIT_PER_SOURCE` | unset | Raw rows fetched before balancing and final source limit. Production uses `300`. |
+| `APIFY_ROTATION_ENABLED` | `false` | Enables Worker-side controlled Apify task rotation. |
+| `APIFY_ROTATION_INTERVAL_HOURS` | `3` | Rotation bucket width. Production uses 3 hours. |
+| `APIFY_ROTATION_MAX_SOURCES_PER_TICK` | `2` | Max Apify source tasks the cron may start per tick. |
+| `APIFY_ROTATION_WAIT_FOR_FINISH_SECONDS` | `60` | Wait time passed to Apify task run API. |
 | `AI_SCORING_MODEL` | `claude-haiku-4-5-20251001` | Claude model for scoring |
 | `AI_SCORE_THRESHOLD_DEFAULT` | `75` | Minimum score to select (0–100) |
 | `AI_MAX_CALLS_PER_DAY` | `10` | Claude API calls per day (tracked, not yet hard-enforced) |
 | `AI_DAILY_TOKEN_BUDGET` | `50000` | Claude token budget per day |
 | `AI_MAX_CANDIDATES_PER_RUN` | `50` | Items sent to Claude per pipeline run |
+| `AI_CANDIDATE_BACKLOG_ENABLED` | `false` | Enables durable `ai_candidate_queue` flow. Production crypto uses `true`. |
+| `AI_FAIR_SOURCE_PICKER_ENABLED` | `false` | Enables round-robin source-account selection for scoring batches. |
+| `AI_SCORING_BATCH_SIZE` | `10` | Claude scoring batch size when backlog is enabled. Production uses `5`. |
+| `AI_MAX_SCORING_BATCHES_PER_RUN` | `1` | Max backlog scoring batches per Worker execution. |
+| `AI_CANDIDATE_BACKLOG_DRAIN_LIMIT` | `10` | Upper bound for candidates drained per execution. |
+| `AI_CANDIDATE_MAX_ATTEMPTS` | `2` | Max scoring attempts before candidate failure. |
+| `AI_CANDIDATE_MAX_AGE_HOURS` | `12` | Max backlog age before stale skip. |
 | `AI_MAX_TEXT_CHARS_PER_ITEM` | `400` | Text chars sent to AI per item |
 | `AI_MAX_RETRIES` | `1` | Retry count for AI API calls |
 | `TRANSLATION_PROVIDER` | `gemini` | `gemini` \| `openai` \| `claude` |
@@ -586,6 +881,10 @@ curl -X POST $BASE/internal/channels/crypto_fa/publish -H "$AUTH" -d '{"enabled"
 | `MEDIA_MAX_DOWNLOAD_MB` | `50` | Max file size to download (MB) |
 | `MEDIA_DOWNLOAD_TIMEOUT_SEC` | `60` | Download timeout per media file |
 | `DEDUPE_WINDOW_HOURS` | `168` | Deduplication lookback window (7 days) |
+| `MARKET_SNAPSHOT_ENABLED` | `false` | Enables direct market snapshot publishing. |
+| `MARKET_SNAPSHOT_INTERVAL_HOURS` | `1` | Snapshot cadence guard. |
+| `MARKET_SNAPSHOT_SLOTS` | unset | Local-time snapshot slots, e.g. `09:05,12:35,15:35,18:35,21:35`. |
+| `MARKET_SNAPSHOT_CHANNEL_ID` | unset | Channel receiving snapshot posts. |
 
 ### Secrets (set with `wrangler secret put`)
 
@@ -612,11 +911,28 @@ curl -X POST $BASE/internal/channels/crypto_fa/publish -H "$AUTH" -d '{"enabled"
 | `discovery_media` | Media URLs with processing status, thumbnail, telegram_file_id |
 | `dedupe_keys` | Configurable deduplication window |
 | `publish_queue` | Scheduled posts: captions, media_urls, thumbnail_urls, status |
+| `ai_candidate_queue` | Durable backlog between dedupe and Claude scoring. |
+| `run_events` | Phase-level operational events and diagnostics. |
+| `run_item_events` | Item-level diagnostics, reject reasons, queue creation events. |
+| `ai_usage` | Provider/model/purpose token and call usage. |
 | `settings` | Runtime toggles that override env vars |
 
 ---
 
 ## Apify Actors
+
+### Production note: static actors plus controlled rotation
+
+The original actor notes below are still useful for platform schema and cost expectations. The production crypto pilot also uses Worker-side controlled rotation through existing Apify task IDs. Rotation does not replace Apify; it controls which account cohorts and topic gates are passed to the Apify tasks on each 3-hour bucket.
+
+For crypto X/Twitter sources, prefer source-scoped webhooks:
+
+```text
+POST /webhook/apify?source_id=src_crypto_x_news_text
+x-webhook-secret: YOUR_INTERNAL_API_SECRET
+```
+
+The generic dataset-matching webhook still works, but `source_id` is safer for experiments and rotating sources because it avoids ambiguous dataset matching.
 
 ### Twitter/X — `kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest`
 
@@ -841,6 +1157,12 @@ Each channel enforces its own timezone-aware schedule.
 
 Counts both `published` and `scheduled/retry/publishing` items for the current channel-local day. This prevents over-scheduling even if items haven't been published yet.
 
+### Current crypto_fa_pilot capacity math
+
+For `crypto_fa_pilot`, the current production target is up to 72 posts/day. With `max_per_hour=4` and `min_gap_minutes=15`, the channel can publish at most four items per hour. With the active publishing windows, this is close to the theoretical daily ceiling.
+
+Operationally, that means the queue must stay ahead of the scheduler. If the system needs 72 posts/day, it should normally create roughly 12 usable queue items per active 3-hour rotation window. If it consistently creates fewer, increase candidate supply or tune source/query quality before loosening editorial filters.
+
 ### Publish priority → delay mapping
 
 | Priority | Normal content | Expiring media |
@@ -856,7 +1178,193 @@ At schedule creation time, the system reads `MAX(scheduled_at)` for the channel 
 
 ### Cron granularity limitation
 
-The cron runs every 30 minutes. Breaking content scheduled for "+5 minutes" may wait up to 30 minutes to publish. For time-sensitive content (expiring Instagram/LinkedIn), use `binary_upload` mode and set `min_gap_minutes ≤ 15`.
+The cron runs every 5 minutes. Breaking content scheduled for "+5 minutes" should normally be attempted on the next cron tick, subject to channel rate limits and Telegram availability. For time-sensitive content (expiring Instagram/LinkedIn), use `binary_upload` mode and set `min_gap_minutes ≤ 15`.
+
+
+---
+
+## Market Snapshot
+
+Market snapshots are direct Telegram sends rather than normal `publish_queue` items. They are useful for predictable market-context posts at configured times.
+
+Production configuration:
+
+```toml
+MARKET_SNAPSHOT_ENABLED = "true"
+MARKET_SNAPSHOT_INTERVAL_HOURS = "1"
+MARKET_SNAPSHOT_SLOTS = "09:05,12:35,15:35,18:35,21:35"
+MARKET_SNAPSHOT_CHANNEL_ID = "crypto_fa_pilot"
+```
+
+Preview without publishing:
+
+```bash
+curl -s "$BASE/internal/market-snapshot/preview" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+Send now. This is a production write and can publish to Telegram:
+
+```bash
+curl -s -X POST "$BASE/internal/market-snapshot/send-now" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"channel_id":"crypto_fa_pilot","force":true}' | jq .
+```
+
+---
+
+## Operational Runbook
+
+### Health check
+
+```bash
+curl -s "$BASE/health" | jq .
+```
+
+Expected production shape:
+
+```json
+{"ok":true,"status":"healthy","db":"connected","environment":"production"}
+```
+
+### Backlog and AI budget snapshot
+
+```bash
+curl -s "$BASE/internal/backlog/stats" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+| jq '.ai_budget,.status_counts,.top_pending_accounts'
+```
+
+Watch these fields together:
+
+| Field | Meaning |
+|---|---|
+| `calls_today` | Successful Claude scoring calls in the last day. |
+| `tokens_today` | Successful Claude scoring tokens in the last day. |
+| `tokens_remaining` | Remaining scoring budget before backlog drain stops. |
+| `pending` | Backlog candidates waiting for scoring. |
+| `queued` | Candidates that created queue items. |
+| `ai_rejected` | Candidates rejected by pre-AI or AI/editorial policy. |
+
+### Scheduled queue snapshot
+
+```bash
+curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+| jq '.queue[] | {id,source_url,caption_short,scheduled_at,status}'
+```
+
+### Publish due manually
+
+This is a production write. It respects final publish locks and channel rate limits.
+
+```bash
+curl -s -X POST "$BASE/internal/publish/due" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"limit":1}' | jq .
+```
+
+### Preview one queue item
+
+```bash
+QID="q_example"
+
+curl -s "$BASE/internal/queue/$QID/preview" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+### Publish one queue item now
+
+This bypasses scheduled time, but it still respects publishing locks and channel rate limits by default.
+
+```bash
+curl -s -X POST "$BASE/internal/queue/$QID/publish-now" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+If the response has `reason: rate_limit_min_gap`, the system is behaving correctly. Wait for the natural scheduler window.
+
+### Crypto pipeline debug snapshot
+
+```bash
+curl -s "$BASE/internal/debug/crypto-pipeline" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+| jq '.runtime_config,.channel,.queue_counts,.recent_runs[0:8]'
+```
+
+### Ops report
+
+```bash
+curl -s "$BASE/internal/report/ops?hours=24&category=crypto" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+Telegram-ready preview:
+
+```bash
+curl -s "$BASE/internal/report/ops/telegram-preview?hours=24&category=crypto" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
+
+### 72-post/day monitoring
+
+For the crypto Persian pilot, watch these ratios every few hours:
+
+```text
+scheduled + published today >= pace needed for 72/day
+new_items / fetched
+queued / fetched
+AI_tokens / queued
+published / queued
+Whale Alert items per day <= 2
+```
+
+If queue depth is low:
+
+1. Check Apify rotation runs and dataset freshness.
+2. Check duplicate rate. High duplicates mean scrape volume is being wasted.
+3. Check pending backlog. High pending with low budget means AI budget/batch tuning is the bottleneck.
+4. Check `ai_rejected` reasons. Too many pre-AI rejects means source/query quality is bad, not that Claude is broken.
+5. Tune source cohorts/queries before raising `maxItems` or loosening editorial filters.
+
+### Production write warnings
+
+These actions can spend money, publish posts, or change production state:
+
+- `/internal/apify/rotation/run` without `dryRun:true`
+- `/internal/backlog/drain`
+- `/internal/publish/due`
+- `/internal/queue/:id/publish-now`
+- `/internal/market-snapshot/send-now`
+- D1 `UPDATE` statements against `publish_queue`, `ai_usage`, `settings`, `channels`, or `apify_sources`
+- `wrangler deploy --env production`
+
+Do not paste secrets into chat or logs. For local checks, load `.dev.vars.production` privately and only verify presence/length, not the value.
+
+---
+
+## Documentation Consolidation & Cleanup
+
+The repository has accumulated several `.md` files from phased implementation and rollout planning. The README should be the durable source of truth for architecture, setup, API, operations, and troubleshooting.
+
+### Keep
+
+| File | Why |
+|---|---|
+| `README.md` | Main architecture, setup, API, operations, and production reference. |
+| `RELEASE_CHECKLIST.md` | Final deployment checklist and production safety gate. |
+
+### Candidates to consolidate into README, then delete in a separate cleanup commit
+
+| File | Reason |
+|---|---|
+| `docs/ai-candidate-backlog-and-fair-source-distribution.md` | Useful historically, but much of it describes a draft plan that is now implemented and active in production. The durable parts are now covered by the AI Candidate Backlog section. |
+| `docs/market-trending-source-rollout.md` | Useful rollout context, but the source model has evolved into text/media market-trending sources and controlled rotation. Durable parts are now covered by Apify Controlled Rotation and Operational Runbook. |
+| `RELEASE_NOTES_NEXT.md` | Release notes for a rollout that has effectively happened. Keep only if archival release notes are needed; otherwise consolidate durable notes into README and remove the stale “next” file. |
+
+Cleanup should be a separate commit after README review so documentation deletion does not hide content changes in one giant diff.
 
 ---
 
@@ -897,6 +1405,16 @@ GET /internal/stats
 GET /internal/runs?category=crypto&limit=20
 GET /internal/items?status=ai_selected&category=crypto&platform=x&limit=50
 GET /internal/queue?status=scheduled&channel=crypto_fa&limit=50
+GET /internal/backlog/stats
+POST /internal/backlog/drain
+GET /internal/debug/crypto-pipeline
+GET /internal/report/ops?hours=24&category=crypto
+GET /internal/report/ops/telegram-preview?hours=24&category=crypto
+GET /internal/report/daily?hours=24&category=crypto
+GET /internal/report/market-trending?hours=24
+GET /internal/media?item=ITEM_ID
+GET /internal/debug/runs/:runId/events
+GET /internal/debug/runs/:runId/items
 ```
 
 **Item statuses:** `ai_selected`, `ai_rejected`, `queued`, `duplicate`, `error`
@@ -917,6 +1435,14 @@ POST /internal/queue/:id/retry
 ```
 POST /internal/curation/trigger
 Body: {"dryRun": true, "force": true}
+
+POST /internal/apify/rotation/run
+Body: {"force": true, "dryRun": true, "onlySourceId": "src_crypto_x_news_text"}
+
+POST /internal/market-snapshot/send-now
+Body: {"channel_id":"crypto_fa_pilot","force":true}
+
+GET /internal/market-snapshot/preview
 
 POST /internal/admin/toggle
 Body: {"key": "telegram_publish_enabled", "value": "true"}
@@ -977,6 +1503,10 @@ TELEGRAM_PUBLISH_SCHEDULER_ENABLED = false  → cron doesn't publish (env var)
 channels.publish_enabled = 0            → per-channel pause (DB)
 channels.enabled = 0                    → channel removed from all pipelines (DB)
 maintenance_mode = true                 → blocks all non-health endpoints + cron (settings table)
+AI_CANDIDATE_BACKLOG_ENABLED = false     → disables durable candidate backlog and backlog drain
+APIFY_ROTATION_ENABLED = false           → stops Worker-side Apify task rotation
+MARKET_SNAPSHOT_ENABLED = false          → stops scheduled market snapshots
+STREAM_TRANSCODE_ENABLED = false         → prevents paid Cloudflare Stream fallback calls
 ```
 
 **Emergency stop (via API):**
@@ -1042,7 +1572,7 @@ All admin endpoints validate:
 ```yaml
 Steps:
   1. Checkout
-  2. Setup Node 22 + pnpm
+  2. Setup Node 22 + npm
   3. pnpm install --frozen-lockfile
   4. pnpm typecheck          ← TypeScript must compile cleanly
   5. wrangler deploy --dry-run  ← Build must succeed
@@ -2088,6 +2618,76 @@ Use a private Telegram test channel before enabling public channels:
 - No dashboard redesign is made.
 - No production toggles are changed.
 
+### Phase 12 — Release Hardening, Formatting, and Editorial Controls
+
+After the Phase 11 validation baseline, the system added production-facing editorial and formatting hardening.
+
+#### What changed
+
+- Telegram message formatting moved behind a backend formatter so dashboard preview and real publish output do not diverge.
+- Raw source URLs are hidden behind source labels instead of being printed into message bodies.
+- Link preview is disabled in text fallback paths.
+- Channel-level controls were added for source attribution, signature, footer, and link preview behavior.
+- Reply, retweet, quote, and text-only controls became configurable.
+- Queue preview and publish-now endpoints were added for operational QA.
+- Apify sources gained task/actor metadata and last dataset tracking.
+- Release hardening validation was added through `npm run validate:release` and `npm run validate:release:strict`.
+
+### Phase 13 — AI Candidate Backlog, Query-First Discovery, and Production Throughput Work
+
+This phase addressed the core production bottleneck: the system could scrape enough raw data but still fail to create enough high-quality Telegram queue items.
+
+#### What changed
+
+- Added durable `ai_candidate_queue` between dedupe and Claude scoring.
+- Added bounded backlog drain through cron and admin endpoint.
+- Added source-account fair picker for Claude scoring batches.
+- Changed `AI_MAX_CANDIDATES_PER_RUN` from a lossy cutoff into a safe batch concept when backlog is enabled.
+- Added controlled Apify rotation with cohorts and topic gates.
+- Added source-account balancing before final source limit slicing.
+- Added raw fetch limit so the Worker can fetch a larger raw dataset, balance by account, then process a smaller final candidate set.
+- Added market-trending text/media source families for controlled experimentation.
+- Added ops/debug reports for backlog, recent runs, and pipeline state.
+
+#### Production posture
+
+```text
+AI_CANDIDATE_BACKLOG_ENABLED=true
+AI_FAIR_SOURCE_PICKER_ENABLED=true
+APIFY_ROTATION_ENABLED=true
+APIFY_SCHEDULED_CURATION_ENABLED=false
+```
+
+### Phase 14 — Dependency Audit Remediation
+
+#### What changed
+
+- Upgraded `vitest` to the current 4.x line.
+- Upgraded `wrangler` to the current 4.x line.
+- Added `npm run validate:audit`.
+- Verified the updated toolchain with typecheck, tests, dry-run build, media validation, release validation, and npm audit.
+
+### Phase 15 — Crypto Input Quality Gate and Whale Alert Throttle
+
+This phase tightened the crypto pilot after production showed too much low-value AI/geopolitics/general news and too many Whale Alert queue items.
+
+#### What changed
+
+- Tightened Apify rotation topic gates for crypto relevance.
+- Removed `whale_alert` from general voices cohorts.
+- Kept only high-signal whale/on-chain use cases.
+- Added deterministic pre-AI rejects for generic AI, generic equities/SpaceX, generic geopolitics, engagement bait, non-crypto posts, and low-signal Whale Alert transfers.
+- Added Whale Alert daily queue throttle so a valid on-chain item can still publish, but the channel cannot become mostly wallet-transfer posts.
+
+#### Validation
+
+```bash
+npm test -- --run tests/apify-rotation-query-buckets.test.ts tests/content-policy-crypto-pre-ai.test.ts
+npm test -- --run tests/backlog-drain.test.ts tests/discovery-quality-phase9a.test.ts
+npm run typecheck
+npm test -- --run
+```
+
 ---
 
 ## Release Hardening & Production Checklist
@@ -2110,7 +2710,7 @@ The release checklist is documented in:
 RELEASE_CHECKLIST.md
 ```
 
-Release notes for the next rollout are documented in:
+Historical release notes for the last rollout may exist in:
 
 ```text
 RELEASE_NOTES_NEXT.md
@@ -2135,6 +2735,71 @@ Dashboard styling and structure are intentionally not changed by release hardeni
 ---
 
 ## Troubleshooting
+
+### Scheduled queue is empty
+
+Check the full pipeline before increasing scrape volume:
+
+```bash
+curl -s "$BASE/internal/backlog/stats" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+| jq '.ai_budget,.status_counts,.top_pending_accounts'
+
+curl -s "$BASE/internal/debug/crypto-pipeline" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+| jq '.recent_runs[0:10],.scheduled_queue,.failed_retry_queue,.diagnosis'
+```
+
+Interpretation:
+
+- `pending > 0` and budget remaining: run a small backlog drain or wait for cron.
+- `pending > 0` and budget exhausted: do not force more scoring; wait for budget window or intentionally revise budget.
+- `items_fetched > 0` but `items_new = 0`: scrape is mostly duplicate/stale.
+- `items_new > 0` but `queued = 0`: check pre-AI reject reasons, AI scores, semantic dedupe, rule gate, and translation availability.
+- scheduled queue exists but publish returns `rate_limit_min_gap`: wait; this is normal channel protection.
+
+### Apify rotation ran but no new queue items appeared
+
+A successful Apify task run only proves Apify produced a dataset. Queue creation still depends on webhook/ingestion, dedupe, freshness, pre-AI policy, Claude budget, translation, semantic dedupe, and rule gate.
+
+Check recent runs:
+
+```bash
+curl -s "$BASE/internal/debug/crypto-pipeline" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" \
+| jq '.recent_runs[0:8] | map({dataset:.apify_dataset_id,fetched:.items_fetched,new:.items_new,queued:.items_queued,rejected:.items_ai_rejected,created:.created_at})'
+```
+
+If `fetched` is high and `new` is zero, do not raise AI budget. The bottleneck is source freshness/dedupe, not Claude.
+
+### AI budget exhausted
+
+Backlog drain stops when the scoring budget is exceeded. Do not reset production AI usage repeatedly unless a release owner explicitly accepts the cost and quality risk.
+
+Read-only budget check:
+
+```bash
+curl -s "$BASE/internal/backlog/stats" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.ai_budget'
+```
+
+### Too many Whale Alert items
+
+The production code now has pre-AI Whale Alert filtering and queue throttle. Existing scheduled Whale Alert rows from before a patch may still need manual cleanup. Prefer cancelling low-signal queued items rather than deleting historical discovery data.
+
+Read current scheduled Whale Alert rows:
+
+```bash
+npx wrangler d1 execute content-curator-db-v2 --remote --json --command "SELECT id, source_url, scheduled_at, caption_short FROM publish_queue WHERE status='scheduled' AND channel_id='crypto_fa_pilot' AND source_url LIKE '%/whale_alert/%' ORDER BY scheduled_at;" \
+| jq -r '.[0].results[] | "\nID: \(.id)\nURL: \(.source_url)\nTIME: \(.scheduled_at)\nTEXT:\n\(.caption_short)\n"'
+```
+
+Cancel selected queue rows through the API when possible:
+
+```bash
+curl -s -X DELETE "$BASE/internal/queue/$QID" \
+  -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
+```
 
 ### Items not arriving from Apify
 
@@ -2256,6 +2921,35 @@ MEDIA_MAX_DOWNLOAD_MB = "20"
 ---
 
 ## Monthly Cost Estimate
+
+### Current crypto pilot cost model
+
+The current production crypto pilot has three variable cost drivers:
+
+1. Apify task runs and fetched result count.
+2. Claude scoring calls/tokens.
+3. Gemini translation calls/tokens.
+
+Cloudflare Worker, D1, Telegram Bot API, and the static dashboard are normally free at the current expected scale. Cloudflare Stream remains disabled by default and should not create cost unless explicitly enabled.
+
+Useful formulas:
+
+```text
+Apify cost ≈ fetched_results × actor_price_per_result
+Claude scoring cost ≈ input_tokens × input_price + output_tokens × output_price
+Gemini translation cost ≈ input_tokens × input_price + output_tokens × output_price
+```
+
+Operationally, the important ratios are:
+
+```text
+items_new / items_fetched
+items_queued / items_fetched
+AI_tokens / queued_item
+published / queued_item
+```
+
+A high fetched count with low new count means scrape spend is being wasted on duplicates/stale items. A high new count with low queued count means editorial policy, AI selection, semantic dedupe, translation, or rule gate is the bottleneck.
 
 ### Scenario: 3 categories, 6 channels (2 languages each), 3 platforms
 
