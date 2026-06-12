@@ -1,9 +1,11 @@
 import type { NormalizedItem } from '../../types';
 import type { CategoryPolicy } from '../types';
+import { buildCryptoScoringPolicy } from './prompts';
 
 export const cryptoPolicy: CategoryPolicy = {
   id: 'crypto',
   getPreAiRejectReason: (item) => getCryptoPreAiRejectReason(item),
+  buildScoringPolicy: () => buildCryptoScoringPolicy(),
 };
 
 function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
