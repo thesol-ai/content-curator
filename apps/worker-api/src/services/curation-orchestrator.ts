@@ -4,7 +4,7 @@
 // ══════════════════════════════════════════════════════════════
 
 import type { Env, CategoryRow, ChannelRow, ApifySourceRow, NormalizedItem, PublishedMediaResult, AIGateResult } from '../types';
-import { fetchApifyDataset, normalizeItem } from './apify-client';
+import { fetchApifyDataset, filterApifyActorMockNoResultItems, normalizeItem } from './apify-client';
 import { computeDedupeKeys, isDuplicate, recordDedupeKeys } from './dedupe';
 import { runAIGate } from './ai-gate';
 import { checkChannelPublishWindowAt, runRuleGate } from './rule-gate';
@@ -377,7 +377,9 @@ async function processSingleSource(
   try {
     await markPhase('fetch_dataset');
     const fetched = await fetchSourceDatasetItems(env, source, effectiveDatasetId, rawFetchLimit, runId, category, t0);
-    const raw = fetched.raw;
+    const rawFetched = fetched.raw;
+    const actorMockFilter = filterApifyActorMockNoResultItems(rawFetched);
+    const raw = actorMockFilter.realItems;
     effectiveDatasetId = fetched.datasetId;
     itemsFetched = raw.length;
 
@@ -391,11 +393,34 @@ async function processSingleSource(
       datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
-        rawCount: raw.length,
+        rawCount: rawFetched.length,
+        realRawCount: raw.length,
+        actorMockCount: actorMockFilter.actorMockCount,
+        actorMockSamples: actorMockFilter.actorMockSamples,
         maxItems,
         usedFallback: fetched.usedFallback,
       },
     });
+
+    if (raw.length === 0 && actorMockFilter.actorMockCount > 0) {
+      await recordRunEvent(env, {
+        runId,
+        eventType: 'apify.actor_mock_no_results',
+        phase: 'fetch_dataset',
+        severity: 'warn',
+        message: 'Apify/Kaito returned mock/no-result rows instead of real tweet rows.',
+        categoryId: category.id,
+        platform: source.platform,
+        sourceId: source.id,
+        datasetId: effectiveDatasetId,
+        durationMs: Date.now() - t0,
+        metadata: {
+          rawCount: rawFetched.length,
+          actorMockCount: actorMockFilter.actorMockCount,
+          actorMockSamples: actorMockFilter.actorMockSamples,
+        },
+      });
+    }
 
     await markPhase('normalize_items');
     const normalized: NormalizedItem[] = [];
@@ -448,7 +473,9 @@ async function processSingleSource(
       datasetId: effectiveDatasetId,
       durationMs: Date.now() - t0,
       metadata: {
-        rawCount: raw.length,
+        rawCount: rawFetched.length,
+        realRawCount: raw.length,
+        actorMockCount: actorMockFilter.actorMockCount,
         rawFetchLimit,
         maxItems,
         normalizedBeforeBalance,

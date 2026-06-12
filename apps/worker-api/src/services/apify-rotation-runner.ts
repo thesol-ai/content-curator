@@ -1,5 +1,6 @@
 import type { Env } from '../types';
 import { recordRunEvent } from './run-events';
+import { fetchApifyDataset, filterApifyActorMockNoResultItems } from './apify-client';
 
 const APIFY_API_BASE = 'https://api.apify.com/v2';
 
@@ -68,6 +69,24 @@ interface RotationPlan {
   inputOverride: Record<string, unknown>;
 }
 
+interface RotationAttemptPlan {
+  attempt: string;
+  inputOverride: Record<string, unknown>;
+  reason?: string;
+}
+
+interface DatasetHealth {
+  rawCount: number;
+  realRawCount: number;
+  actorMockCount: number;
+  actorMockSamples: Array<{
+    keys: string[];
+    id?: unknown;
+    type?: unknown;
+    textPreview?: string;
+  }>;
+}
+
 export interface ApifyRotationOptions {
   force?: boolean;
   dryRun?: boolean;
@@ -90,6 +109,17 @@ export interface ApifyRotationResult {
     actorRunId?: string | null;
     status?: string | null;
     defaultDatasetId?: string | null;
+    finalAttempt?: string;
+    attempts?: Array<{
+      attempt: string;
+      actorRunId?: string | null;
+      status?: string | null;
+      defaultDatasetId?: string | null;
+      rawCount?: number;
+      realRawCount?: number;
+      actorMockCount?: number;
+      error?: string;
+    }>;
     error?: string;
   }>;
 }
@@ -195,54 +225,131 @@ export async function runApifyRotation(
       continue;
     }
 
-    try {
-      const run = await runApifyTask(env, taskId, plan.inputOverride);
+    const attempts = buildRotationAttempts(plan);
+    const attemptResults: NonNullable<ApifyRotationResult['plans'][number]['attempts']> = [];
+    let selected: { attempt: RotationAttemptPlan; run: any } | null = null;
+    let lastFailure: string | null = null;
+
+    for (const attempt of attempts) {
+      try {
+        const run = await runApifyTask(env, taskId, attempt.inputOverride);
+        const datasetId = safeString(run.defaultDatasetId);
+        const health = datasetId
+          ? await inspectApifyDatasetHealth(env, datasetId)
+          : emptyDatasetHealth();
+
+        attemptResults.push({
+          attempt: attempt.attempt,
+          actorRunId: safeString(run.id),
+          status: safeString(run.status),
+          defaultDatasetId: datasetId,
+          rawCount: health.rawCount,
+          realRawCount: health.realRawCount,
+          actorMockCount: health.actorMockCount,
+        });
+
+        await recordRunEvent(env, {
+          runId: rotationRunId,
+          eventType: 'apify.rotation.task_started',
+          phase: 'apify_rotation',
+          categoryId: plan.source.category_id,
+          platform: plan.source.platform,
+          sourceId: plan.source.id,
+          datasetId: datasetId ?? undefined,
+          actorRunId: safeString(run.id) ?? undefined,
+          durationMs: Date.now() - started,
+          metadata: {
+            bucket,
+            attempt: attempt.attempt,
+            attemptReason: attempt.reason,
+            cohortName: plan.cohortName,
+            cohortIndex: plan.cohortIndex,
+            accounts: plan.accounts,
+            inputOverride: attempt.inputOverride,
+            status: safeString(run.status),
+            datasetHealth: health,
+          },
+        });
+
+        if (datasetId && health.realRawCount > 0) {
+          selected = { attempt, run };
+          break;
+        }
+
+        lastFailure = datasetId ? 'apify_actor_mock_no_results' : 'missing_default_dataset_id';
+
+        await recordRunEvent(env, {
+          runId: rotationRunId,
+          eventType: 'apify.rotation.dataset_unhealthy',
+          phase: 'apify_rotation',
+          severity: 'warn',
+          message: datasetId
+            ? 'Apify task succeeded but returned no real tweet rows; retrying with fallback query.'
+            : 'Apify task succeeded without a default dataset id; retrying with fallback query.',
+          categoryId: plan.source.category_id,
+          platform: plan.source.platform,
+          sourceId: plan.source.id,
+          datasetId: datasetId ?? undefined,
+          actorRunId: safeString(run.id) ?? undefined,
+          durationMs: Date.now() - started,
+          metadata: {
+            bucket,
+            attempt: attempt.attempt,
+            nextAttemptAvailable: attempts.indexOf(attempt) < attempts.length - 1,
+            cohortName: plan.cohortName,
+            cohortIndex: plan.cohortIndex,
+            accounts: plan.accounts,
+            inputOverride: attempt.inputOverride,
+            datasetHealth: health,
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        lastFailure = message;
+
+        attemptResults.push({
+          attempt: attempt.attempt,
+          error: message,
+        });
+
+        await recordRunEvent(env, {
+          runId: rotationRunId,
+          eventType: 'apify.rotation.task_failed',
+          phase: 'apify_rotation',
+          severity: 'error',
+          message,
+          categoryId: plan.source.category_id,
+          platform: plan.source.platform,
+          sourceId: plan.source.id,
+          durationMs: Date.now() - started,
+          metadata: {
+            bucket,
+            attempt: attempt.attempt,
+            attemptReason: attempt.reason,
+            cohortName: plan.cohortName,
+            cohortIndex: plan.cohortIndex,
+            accounts: plan.accounts,
+            inputOverride: attempt.inputOverride,
+          },
+        });
+      }
+    }
+
+    if (selected) {
       results.push({
         ...resultBase,
-        actorRunId: safeString(run.id),
-        status: safeString(run.status),
-        defaultDatasetId: safeString(run.defaultDatasetId),
+        inputOverride: selected.attempt.inputOverride,
+        finalAttempt: selected.attempt.attempt,
+        attempts: attemptResults,
+        actorRunId: safeString(selected.run.id),
+        status: safeString(selected.run.status),
+        defaultDatasetId: safeString(selected.run.defaultDatasetId),
       });
-
-      await recordRunEvent(env, {
-        runId: rotationRunId,
-        eventType: 'apify.rotation.task_started',
-        phase: 'apify_rotation',
-        categoryId: plan.source.category_id,
-        platform: plan.source.platform,
-        sourceId: plan.source.id,
-        datasetId: safeString(run.defaultDatasetId) ?? undefined,
-        actorRunId: safeString(run.id) ?? undefined,
-        durationMs: Date.now() - started,
-        metadata: {
-          bucket,
-          cohortName: plan.cohortName,
-          cohortIndex: plan.cohortIndex,
-          accounts: plan.accounts,
-          inputOverride: plan.inputOverride,
-          status: safeString(run.status),
-        },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      results.push({ ...resultBase, error: message });
-
-      await recordRunEvent(env, {
-        runId: rotationRunId,
-        eventType: 'apify.rotation.task_failed',
-        phase: 'apify_rotation',
-        severity: 'error',
-        message,
-        categoryId: plan.source.category_id,
-        platform: plan.source.platform,
-        sourceId: plan.source.id,
-        durationMs: Date.now() - started,
-        metadata: {
-          bucket,
-          cohortName: plan.cohortName,
-          cohortIndex: plan.cohortIndex,
-          accounts: plan.accounts,
-        },
+    } else {
+      results.push({
+        ...resultBase,
+        attempts: attemptResults,
+        error: lastFailure ?? 'apify_rotation_no_healthy_dataset',
       });
     }
   }
@@ -357,13 +464,10 @@ function buildCoreNewsTopicGate(): string {
   return [
     '(',
     'crypto OR bitcoin OR ethereum OR XRP OR ripple OR dogecoin OR DOGE OR SHIB OR TON OR',
-    'stablecoin OR USDT OR Tether OR USDC OR "spot ETF" OR "Bitcoin ETF" OR "Ethereum ETF" OR DeFi OR RWA OR tokenization OR exchange OR treasury OR Coinbase OR Binance OR wallet OR "digital asset"',
-    ')',
-    '(',
-    'SEC OR CFTC OR regulation OR lawsuit OR approval OR filing OR',
-    'launch OR partnership OR acquisition OR funding OR',
-    'hack OR exploit OR upgrade OR mainnet OR',
-    'listing OR "Binance listing" OR "Coinbase listing" OR "Bybit listing" OR "MEXC listing"',
+    'stablecoin OR USDT OR Tether OR USDC OR "spot ETF" OR "Bitcoin ETF" OR "Ethereum ETF" OR',
+    'DeFi OR RWA OR tokenization OR exchange OR treasury OR Coinbase OR Binance OR wallet OR',
+    '"digital asset" OR SEC OR CFTC OR regulation OR lawsuit OR approval OR filing OR',
+    'launch OR partnership OR acquisition OR funding OR hack OR exploit OR upgrade OR mainnet OR listing',
     ')',
   ].join(' ');
 }
@@ -374,7 +478,7 @@ function buildExpertSignalsTopicGate(): string {
     'BTC OR bitcoin OR ETH OR ethereum OR XRP OR DOGE OR SHIB OR TON OR',
     'ETF OR SEC OR CFTC OR liquidity OR liquidation OR liquidations OR',
     '"funding rate" OR "open interest" OR onchain OR whale OR USDT OR Tether OR',
-    'DeFi OR RWA OR listing OR hack OR exploit OR governance OR upgrade OR mainnet',
+    'DeFi OR RWA OR listing OR "crypto hack" OR "DeFi hack" OR "smart contract exploit" OR "protocol exploit" OR governance OR upgrade OR mainnet',
     ')',
   ].join(' ');
 }
@@ -436,7 +540,7 @@ function buildTokenProjectWatchTopicGate(): string {
     '(',
     '"mainnet" OR "testnet" OR "token launch" OR TGE OR',
     'listing OR "Binance listing" OR "Coinbase listing" OR "Bybit listing" OR "MEXC listing" OR',
-    '"protocol upgrade" OR governance OR exploit OR hack OR "security incident" OR',
+    '"protocol upgrade" OR governance OR "smart contract exploit" OR "protocol exploit" OR "bridge exploit" OR "DeFi hack" OR "crypto security incident" OR',
     '"funding round" OR "Series A" OR "Series B" OR "Series C" OR RWA OR "stablecoin launch" OR',
     'airdrop OR "token generation" OR "tap to earn" OR TON OR Notcoin OR DOGS OR "Hamster Kombat"',
     ')',
@@ -473,9 +577,9 @@ function buildSecurityAlertPlan(source: SourceRow, bucket: number, maxItems: num
 function buildSecurityAlertTopicGate(): string {
   return [
     '(',
-    'hack OR hacked OR exploit OR exploited OR "security incident" OR',
-    '"rug pull" OR phishing OR "private key" OR "seed phrase" OR',
-    '"smart contract vulnerability" OR "bridge attack" OR drained OR drain',
+    '"crypto hack" OR "DeFi hack" OR "protocol exploit" OR "smart contract exploit" OR',
+    '"crypto security incident" OR "rug pull" OR "wallet phishing" OR "private key" OR "seed phrase" OR',
+    '"smart contract vulnerability" OR "bridge attack" OR "wallet drained" OR "funds drained"',
     ')',
     '(',
     'crypto OR DeFi OR protocol OR wallet OR exchange OR blockchain OR web3',
@@ -491,23 +595,178 @@ function buildSecurityAlertTopicGate(): string {
     '-recipe',
     '-NSFW',
     '-adult',
+    '-pypi',
+    '-npm',
+    '-python',
+    '-bun',
+    '-package',
+    '-packages',
+    '-dependency',
+    '-dependencies',
+    '-ransomware',
+    '-breach',
+    '-"data breach"',
+    '-"supply chain"',
+    '-"supply-chain"',
   ].join(' ');
 }
 
-function buildSearchInputOverride(query: string, maxItems: number): Record<string, unknown> {
+function buildSearchInputOverride(query: string, maxItems: number, hoursBack = 72): Record<string, unknown> {
   return {
     query,
     twitterContent: query,
     maxItems,
     queryType: 'Latest',
     lang: 'en',
-    since_time: currentSinceTimeSeconds(),
+    since_time: currentSinceTimeSeconds(hoursBack),
   };
 }
 
 function currentSinceTimeSeconds(hoursBack = 24): string {
   return String(Math.floor(Date.now() / 1000) - hoursBack * 60 * 60);
 }
+
+
+function buildRotationAttempts(plan: RotationPlan): RotationAttemptPlan[] {
+  const baseMaxItems = positiveNumber(plan.inputOverride.maxItems, 18);
+  const attempts: RotationAttemptPlan[] = [
+    {
+      attempt: 'primary',
+      inputOverride: plan.inputOverride,
+    },
+  ];
+
+  const sameAccountsQuery = buildProfileTopicContent(plan.accounts, 'default');
+  attempts.push({
+    attempt: 'same_accounts_profile_7d',
+    reason: 'Primary query returned no real tweet rows; retry same accounts without strict topic/media gates.',
+    inputOverride: buildSearchInputOverride(
+      sameAccountsQuery,
+      Math.max(baseMaxItems, 30),
+      168,
+    ),
+  });
+
+  const rescueAccounts = rescueAccountsForSource(plan.source.id, plan.accounts);
+  if (rescueAccounts.join('|').toLowerCase() !== plan.accounts.join('|').toLowerCase()) {
+    const rescueQuery = buildProfileTopicContent(rescueAccounts, 'default', buildRescueTopicGate());
+    attempts.push({
+      attempt: 'source_rescue_pool_7d',
+      reason: 'Same-account fallback returned no real tweet rows; retry trusted high-yield source pool.',
+      inputOverride: buildSearchInputOverride(
+        rescueQuery,
+        Math.max(baseMaxItems, 40),
+        168,
+      ),
+    });
+  }
+
+  return attempts;
+}
+
+function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): string[] {
+  switch (sourceId) {
+    case 'src_crypto_x_news_media':
+    case 'src_crypto_x_news_text':
+      return [
+        'WatcherGuru',
+        'WuBlockchain',
+        'CoinDesk',
+        'Cointelegraph',
+        'TheBlock__',
+        'decryptmedia',
+        'BitcoinMagazine',
+        'News_Of_Alpha',
+      ];
+
+    case 'src_crypto_x_voices_media':
+    case 'src_crypto_x_voices_text':
+      return [
+        'EricBalchunas',
+        'JSeyff',
+        'NateGeraci',
+        'EleanorTerrett',
+        'zachxbt',
+        'PeckShieldAlert',
+        'SlowMist_Team',
+        'CoinbaseAssets',
+        'binance',
+      ];
+
+    case 'src_market_trending_x_media':
+    case 'src_market_trending_x_text':
+      return [
+        'DefiLlama',
+        'BanklessHQ',
+        'TheDefiantNews',
+        'Tree_of_Alpha',
+        'lookonchain',
+        'glassnode',
+        'cryptoquant_com',
+        'solana',
+        'base',
+        'chainlink',
+      ];
+
+    default:
+      return currentAccounts;
+  }
+}
+
+function buildRescueTopicGate(): string {
+  return [
+    '(',
+    'crypto OR bitcoin OR BTC OR ethereum OR ETH OR Solana OR stablecoin OR USDT OR USDC OR',
+    'ETF OR "spot ETF" OR SEC OR CFTC OR regulation OR lawsuit OR filing OR approval OR',
+    'hack OR exploit OR mainnet OR upgrade OR listing OR "token launch" OR DeFi OR RWA OR',
+    'onchain OR whale OR liquidation OR liquidations OR "open interest" OR "funding rate"',
+    ')',
+    '-giveaway',
+    '-presale',
+    '-"airdrop claim"',
+    '-referral',
+    '-"mint now"',
+    '-whitelist',
+    '-scam',
+    '-fake',
+    '-phishing',
+    '-lottery',
+    '-casino',
+    '-100x',
+  ].join(' ');
+}
+
+async function inspectApifyDatasetHealth(env: Env, datasetId: string): Promise<DatasetHealth> {
+  const raw = await fetchApifyDataset(datasetId, env.APIFY_TOKEN, getRotationDatasetProbeLimit(env));
+  const filtered = filterApifyActorMockNoResultItems(raw);
+
+  return {
+    rawCount: raw.length,
+    realRawCount: filtered.realItems.length,
+    actorMockCount: filtered.actorMockCount,
+    actorMockSamples: filtered.actorMockSamples,
+  };
+}
+
+function emptyDatasetHealth(): DatasetHealth {
+  return {
+    rawCount: 0,
+    realRawCount: 0,
+    actorMockCount: 0,
+    actorMockSamples: [],
+  };
+}
+
+function getRotationDatasetProbeLimit(env: Env): number {
+  const value = Number((env as any).APIFY_ROTATION_DATASET_PROBE_LIMIT ?? 30);
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 100) : 30;
+}
+
+function positiveNumber(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 
 async function runApifyTask(
   env: Env,

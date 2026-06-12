@@ -49,6 +49,103 @@ describe('crypto pre-AI content gate', () => {
     }), cryptoCategory)).toBeNull();
   });
 
+  it('rejects generic software supply-chain security even from crypto security accounts', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'SlowMist_Team',
+      text: 'Shai-Hulud Hades malware spreads through malicious PyPI packages like openai_mcp-2.41.2 and bramin-0.0.4, injects .pth files, and continues execution when Bun is detected.',
+    }), cryptoCategory)).toBe('pre_ai_generic_software_security');
+  });
+
+  it('allows security incidents only when explicitly connected to crypto assets, wallets, protocols, or on-chain funds', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'SlowMist_Team',
+      text: 'A DeFi protocol exploit on Ethereum drained user wallets and moved stolen funds on-chain through a crypto bridge.',
+    }), cryptoCategory)).toBeNull();
+  });
+
+  it('rejects generic cyberattack statistics without explicit crypto-security impact even from DefiLlama', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'DefiLlama',
+      text: 'The second half of 2026 saw around 70 cyberattacks, the highest number of attacks in a quarter. Despite attacks doubling, total losses were below previous peaks.',
+    }), cryptoCategory)).toBe('pre_ai_generic_software_security');
+  });
+
+  it('strictly rejects broad non-crypto news domains even from crypto-native accounts', () => {
+    const cases = [
+      {
+        sourceAccount: 'DefiLlama',
+        text: 'A major cloud outage affected API availability for thousands of developers worldwide.',
+      },
+      {
+        sourceAccount: 'SlowMist_Team',
+        text: 'A ransomware campaign targeted hospitals and public agencies after a data breach.',
+      },
+      {
+        sourceAccount: 'DecryptMedia',
+        text: 'OpenAI released a new model for coding and general productivity tasks.',
+      },
+      {
+        sourceAccount: 'CoinDesk',
+        text: 'SpaceX is reportedly preparing a new tender offer at a higher valuation.',
+      },
+      {
+        sourceAccount: 'WatcherGuru',
+        text: 'Tesla shares climbed after strong quarterly vehicle delivery numbers.',
+      },
+      {
+        sourceAccount: 'Cointelegraph',
+        text: 'A celebrity lawsuit drew attention after new court documents were released.',
+      },
+      {
+        sourceAccount: 'TheBlock__',
+        text: 'A national election poll showed a shift in voter sentiment.',
+      },
+      {
+        sourceAccount: 'DefiLlama',
+        text: 'The second half of 2026 saw around 70 cyberattacks and lower total losses than previous peaks.',
+      },
+    ];
+
+    for (const row of cases) {
+      expect(getPreAiContentRejectReason(item(row), cryptoCategory), row.text).not.toBeNull();
+    }
+  });
+
+  it('does not allow source reputation to replace explicit crypto relevance', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'SlowMist_Team',
+      text: 'Researchers found malicious Python packages using .pth injection and Bun runtime checks.',
+    }), cryptoCategory)).not.toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'DefiLlama',
+      text: 'A weekly cybersecurity report counted dozens of attacks but did not mention digital assets.',
+    }), cryptoCategory)).not.toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'DecryptMedia',
+      text: 'A gaming company announced layoffs after weaker quarterly revenue.',
+    }), cryptoCategory)).not.toBeNull();
+  });
+
+  it('allows mixed-domain stories only when the crypto connection is explicit in the source text', () => {
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'DecryptMedia',
+      text: 'GameStop extended support for Bitcoin payments across selected online purchases.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'DecryptMedia',
+      text: 'Crypto platforms cancelled a tokenized SpaceX equity product tied to RWA markets.',
+    }), cryptoCategory)).toBeNull();
+
+    expect(getPreAiContentRejectReason(item({
+      sourceAccount: 'SlowMist_Team',
+      text: 'A DeFi protocol exploit drained on-chain funds from user wallets through a bridge attack.',
+    }), cryptoCategory)).toBeNull();
+  });
+
+
   it('rejects generic equity, SpaceX, and stock-market items without crypto rails', () => {
     expect(getPreAiContentRejectReason(item({
       sourceAccount: 'WatcherGuru',
