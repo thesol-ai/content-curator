@@ -64,14 +64,14 @@ describe('category source strategy registry', () => {
     expect(cryptoStrategy.id).toBe('crypto');
     expect(cryptoStrategy.canHandleSource(source('src_crypto_x_news_text'))).toBe(true);
 
-    const defaultStrategy = getCategorySourceStrategy('movie');
+    const defaultStrategy = getCategorySourceStrategy('unregistered');
     expect(defaultStrategy.id).toBe('default');
-    expect(defaultStrategy.canHandleSource(source('src_movie_x_news_text', {
-      category_id: 'movie',
+    expect(defaultStrategy.canHandleSource(source('src_unregistered_x_news_text', {
+      category_id: 'unregistered',
       platform: 'x',
     }))).toBe(false);
-    expect(defaultStrategy.buildRotationPlan(source('src_movie_x_news_text', {
-      category_id: 'movie',
+    expect(defaultStrategy.buildRotationPlan(source('src_unregistered_x_news_text', {
+      category_id: 'unregistered',
       platform: 'x',
     }), 123)).toBeNull();
   });
@@ -87,7 +87,7 @@ describe('category source strategy registry', () => {
     }
 
     expect(cryptoSourceStrategy.canHandleSource(source('src_crypto_x_news_text', {
-      category_id: 'movie',
+      category_id: 'unregistered',
     }))).toBe(false);
 
     expect(cryptoSourceStrategy.canHandleSource(source('src_crypto_x_news_text', {
@@ -128,9 +128,9 @@ describe('category source strategy registry', () => {
 
   it('keeps runApifyRotation planning the same current crypto sources and skipping future categories', async () => {
     const result = await runApifyRotation(makeEnv([
-      source('src_movie_x_news_text', {
-        label: 'movie-x-news-text',
-        category_id: 'movie',
+      source('src_unregistered_x_news_text', {
+        label: 'unregistered-x-news-text',
+        category_id: 'unregistered',
         platform: 'x',
         apify_task_id: 'task_movie',
       }),
@@ -138,7 +138,7 @@ describe('category source strategy registry', () => {
 
     expect(result.ok).toBe(true);
     expect(result.plans.map((p: any) => p.sourceId).sort()).toEqual([...CURRENT_ROTATION_SOURCE_IDS].sort());
-    expect(result.plans.some((p: any) => p.sourceId === 'src_movie_x_news_text')).toBe(false);
+    expect(result.plans.some((p: any) => p.sourceId === 'src_unregistered_x_news_text')).toBe(false);
 
     for (const plan of result.plans) {
       const query = String(plan.inputOverride.query);

@@ -111,7 +111,7 @@ describe('category scoring policy registry', () => {
   it('exposes the crypto scoring policy through the category registry only for crypto', () => {
     expect(buildCryptoScoringPolicy()).toContain('CRYPTO HARD GATE');
     expect(getCategoryPolicy('crypto').buildScoringPolicy?.(category())).toContain('CRYPTO HARD GATE');
-    expect(getCategoryPolicy('movie').buildScoringPolicy?.(category({ id: 'movie', label: 'Movie' })) ?? '').toBe('');
+    expect(getCategoryPolicy('unregistered').buildScoringPolicy?.(category({ id: 'unregistered', label: 'Unregistered' })) ?? '').toBe('');
   });
 
   it('injects the crypto scoring policy into scoring prompts for crypto categories', async () => {
@@ -125,8 +125,8 @@ describe('category scoring policy registry', () => {
 
   it('does not inject the crypto scoring policy for non-crypto categories', async () => {
     const system = await captureScoringSystem(category({
-      id: 'movie',
-      label: 'Movie',
+      id: 'unregistered',
+      label: 'Unregistered',
       prompt_profile: 'default_editorial',
     }));
 

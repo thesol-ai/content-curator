@@ -9,7 +9,7 @@ import { getPreAiContentRejectReason } from '../apps/worker-api/src/services/con
 import { runApifyRotation } from '../apps/worker-api/src/services/apify-rotation-runner';
 
 const baseCategory = {
-  label: 'Movie',
+  label: 'Unregistered',
   prompt_profile: 'default_editorial',
   custom_prompt: null,
   score_threshold: 75,
@@ -52,9 +52,9 @@ function item(overrides: Partial<any> = {}) {
 
 function makeEnvWithFutureSourceOnly() {
   const sources = [{
-    id: 'src_movie_x_news_text',
-    label: 'movie-x-news-text',
-    category_id: 'movie',
+    id: 'src_unregistered_x_news_text',
+    label: 'unregistered-x-news-text',
+    category_id: 'unregistered',
     platform: 'x',
     apify_task_id: 'task_movie',
   }];
@@ -83,23 +83,23 @@ function makeEnvWithFutureSourceOnly() {
 
 describe('default category module and template safety', () => {
   it('resolves unknown categories to explicit default policy and source strategy modules', () => {
-    expect(getCategoryPolicy('movie')).toBe(defaultCategoryPolicy);
+    expect(getCategoryPolicy('unregistered')).toBe(defaultCategoryPolicy);
     expect(getCategoryPolicy(null)).toBe(defaultCategoryPolicy);
-    expect(getCategorySourceStrategy('movie')).toBe(defaultSourceStrategy);
+    expect(getCategorySourceStrategy('unregistered')).toBe(defaultSourceStrategy);
     expect(getCategorySourceStrategy(null)).toBe(defaultSourceStrategy);
   });
 
   it('keeps default policy no-op and does not inject crypto scoring policy', () => {
-    const movieCategory = { ...baseCategory, id: 'movie' } as any;
+    const movieCategory = { ...baseCategory, id: 'unregistered' } as any;
 
     expect(defaultCategoryPolicy.id).toBe('default');
     expect(defaultCategoryPolicy.getPreAiRejectReason).toBeUndefined();
     expect(buildDefaultScoringPolicy(movieCategory)).toBe('');
-    expect(getCategoryPolicy('movie').buildScoringPolicy?.(movieCategory)).toBe('');
+    expect(getCategoryPolicy('unregistered').buildScoringPolicy?.(movieCategory)).toBe('');
   });
 
   it('does not apply crypto pre-AI policy to unknown/default categories', () => {
-    const movieCategory = { ...baseCategory, id: 'movie' } as any;
+    const movieCategory = { ...baseCategory, id: 'unregistered' } as any;
 
     const genericCybersecurity = item({
       sourceAccount: 'DefiLlama',
@@ -111,9 +111,9 @@ describe('default category module and template safety', () => {
 
   it('keeps default source strategy as safe no-op and rotation skips future category sources', async () => {
     const futureMovieSource = {
-      id: 'src_movie_x_news_text',
-      label: 'movie-x-news-text',
-      category_id: 'movie',
+      id: 'src_unregistered_x_news_text',
+      label: 'unregistered-x-news-text',
+      category_id: 'unregistered',
       platform: 'x',
       apify_task_id: 'task_movie',
     } as any;

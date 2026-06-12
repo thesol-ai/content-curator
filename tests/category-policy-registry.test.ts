@@ -48,13 +48,13 @@ describe('category policy registry', () => {
   it('resolves crypto to the crypto policy and unknown categories to the default policy', () => {
     expect(getCategoryPolicy('crypto').id).toBe('crypto');
     expect(getCategoryPolicy(' Crypto ').id).toBe('crypto');
-    expect(getCategoryPolicy('movie').id).toBe('default');
+    expect(getCategoryPolicy('unregistered').id).toBe('default');
     expect(getCategoryPolicy(null).id).toBe('default');
   });
 
   it('keeps crypto pre-AI behavior available through the content-policy delegation path', () => {
     const cryptoCategory = { ...baseCategory, id: 'crypto', text_only_policy: 'penalize' } as any;
-    const movieCategory = { ...baseCategory, id: 'movie' } as any;
+    const movieCategory = { ...baseCategory, id: 'unregistered' } as any;
 
     const genericCybersecurity = item({
       sourceAccount: 'DefiLlama',
