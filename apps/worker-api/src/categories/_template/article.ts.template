@@ -1,0 +1,13 @@
+import type { CategoryRow, NormalizedItem } from '../../types';
+
+export interface TemplateArticleCandidateDecision {
+  candidate: boolean;
+  reason?: string;
+}
+
+export function detectTemplateArticleCandidate(
+  _item: NormalizedItem,
+  _category: CategoryRow,
+): TemplateArticleCandidateDecision {
+  return { candidate: false, reason: 'article_pipeline_not_enabled' };
+}

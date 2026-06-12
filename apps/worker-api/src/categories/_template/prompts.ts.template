@@ -1,0 +1,7 @@
+import type { CategoryRow } from '../../types';
+
+export function buildTemplateScoringPolicy(_category: CategoryRow): string {
+  // Return category-specific scoring guidance only.
+  // Do not copy crypto hard gates into non-crypto categories.
+  return '';
+}

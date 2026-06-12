@@ -1,20 +1,16 @@
 import type { CategoryPolicy, CategorySourceStrategy } from './types';
+import { defaultCategoryPolicy } from './default/policy';
+import { defaultSourceStrategy } from './default/sources';
 import { cryptoPolicy } from './crypto/policy';
 import { cryptoSourceStrategy } from './crypto/sources';
 
-const DEFAULT_POLICY: CategoryPolicy = {
-  id: 'default',
-};
+const DEFAULT_POLICY: CategoryPolicy = defaultCategoryPolicy;
 
 const POLICIES: Record<string, CategoryPolicy> = {
   crypto: cryptoPolicy,
 };
 
-const DEFAULT_SOURCE_STRATEGY: CategorySourceStrategy = {
-  id: 'default',
-  canHandleSource: () => false,
-  buildRotationPlan: () => null,
-};
+const DEFAULT_SOURCE_STRATEGY: CategorySourceStrategy = defaultSourceStrategy;
 
 const SOURCE_STRATEGIES: Record<string, CategorySourceStrategy> = {
   crypto: cryptoSourceStrategy,

@@ -1,0 +1,15 @@
+import type {
+  ApifyRotationPlan,
+  ApifyRotationSourceRow,
+  CategorySourceStrategy,
+} from '../types';
+
+export const templateSourceStrategy: CategorySourceStrategy = {
+  id: 'template',
+
+  canHandleSource: (_source: ApifyRotationSourceRow) => false,
+
+  buildRotationPlan: (_source: ApifyRotationSourceRow, _bucket: number): ApifyRotationPlan | null => {
+    return null;
+  },
+};
