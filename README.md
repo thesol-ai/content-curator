@@ -10,32 +10,33 @@
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [Pipeline Flow](#pipeline-flow)
-- [Current Production Architecture & Pilot State](#current-production-architecture--pilot-state)
-- [AI Candidate Backlog & Fair Source Distribution](#ai-candidate-backlog--fair-source-distribution)
+- [Current Production Architecture & Pilot State](#current-production-architecture-pilot-state)
+- [AI Candidate Backlog & Fair Source Distribution](#ai-candidate-backlog-fair-source-distribution)
 - [Apify Controlled Rotation](#apify-controlled-rotation)
-- [Crypto Quality Gate & Whale Alert Throttle](#crypto-quality-gate--whale-alert-throttle)
+- [Crypto Quality Gate & Whale Alert Throttle](#crypto-quality-gate-whale-alert-throttle)
+- [Pipeline Flow](#pipeline-flow)
 - [Media Processing](#media-processing)
-- [Category & Language System](#category--language-system)
+- [Category & Language System](#category-language-system)
 - [Project Structure](#project-structure)
-- [Tech Stack & Cost](#tech-stack--cost)
+- [Tech Stack & Cost](#tech-stack-cost)
 - [Prerequisites](#prerequisites)
 - [Setup Guide](#setup-guide)
 - [Configuration Reference](#configuration-reference)
 - [Apify Actors](#apify-actors)
-- [Telegram Bot & Channels](#telegram-bot--channels)
-- [AI Models & Cost](#ai-models--cost)
-- [Scheduling & Time Windows](#scheduling--time-windows)
+- [Telegram Bot & Channels](#telegram-bot-channels)
+- [AI Models & Cost](#ai-models-cost)
+- [Scheduling & Time Windows](#scheduling-time-windows)
 - [Market Snapshot](#market-snapshot)
 - [Operational Runbook](#operational-runbook)
-- [Documentation Consolidation & Cleanup](#documentation-consolidation--cleanup)
+- [Documentation & Release Hygiene](#documentation-release-hygiene)
 - [Dashboard](#dashboard)
 - [API Reference](#api-reference)
 - [Safety Switches](#safety-switches)
 - [Security](#security)
 - [GitHub Actions](#github-actions)
-- [Implementation Phases & Validation History](#implementation-phases--validation-history)
-- [Current Production Operations Addendum](#current-production-operations-addendum)
+- [Validation & Quality Gates](#validation-quality-gates)
+- [Release Hardening & Production Checklist](#release-hardening-production-checklist)
+- [Current Limitations & Next Improvements](#current-limitations-next-improvements)
 - [Troubleshooting](#troubleshooting)
 - [Monthly Cost Estimate](#monthly-cost-estimate)
 
@@ -104,10 +105,10 @@ Content Curator is a zero-touch content pipeline that discovers posts from socia
 │  │     └─ Extract: text, media URLs, thumbnailUrls      │   │
 │  │  3. Deduplicate (D1: postId + URL hash + text hash)  │   │
 │  │  4. Freshness pre-filter (before AI — saves cost)    │   │
-│  │  5. AI Gate Phase 1 — Claude Haiku                   │   │
+│  │  5. AI scoring — Claude Haiku                   │   │
 │  │     └─ Score 0–100, risk level, publish priority     │   │
 │  │     └─ Uses category custom_prompt if set            │   │
-│  │  6. AI Gate Phase 2 — Gemini / OpenAI                │   │
+│  │  6. Translation — Gemini / OpenAI                │   │
 │  │     └─ Translate + write captions per language       │   │
 │  │     └─ Uses channel custom_instructions if set       │   │
 │  │  7. Rule Gate — per-channel validation               │   │
@@ -159,69 +160,41 @@ Category: finance  (score_threshold: 80, freshness: 24h)
 
 ## Current Production Architecture & Pilot State
 
-The original architecture remains valid: Apify produces datasets, the Cloudflare Worker ingests them, Claude scores candidates, Gemini translates selected items, and Telegram publishes scheduled queue items. The current production crypto pilot adds several important operational layers on top of that base flow.
+The original architecture remains valid: Apify produces datasets, the Cloudflare Worker ingests them, Claude scores candidates, Gemini translates selected items, and Telegram publishes scheduled queue items. The current production crypto pilot adds several operational layers on top of that base flow.
 
 ### Effective production flow
 
 ```text
 Cloudflare cron every 5 minutes
-  -> optional scheduled dataset curation only if APIFY_SCHEDULED_CURATION_ENABLED=true
-  -> controlled Apify rotation if APIFY_ROTATION_ENABLED=true
-  -> market snapshot direct send if a configured slot is due
+  -> controlled Apify rotation, when APIFY_ROTATION_ENABLED=true
+  -> market snapshot direct send, when a configured slot is due
   -> publish due Telegram queue items
-  -> recover/skip/fail stale AI candidates
+  -> recover, skip, or fail stale AI candidates
   -> drain AI candidate backlog in bounded batches
-  -> cleanup old dedupe keys
+  -> clean old dedupe keys
 ```
 
-Production intentionally keeps `APIFY_SCHEDULED_CURATION_ENABLED=false` so the Worker does not repeatedly reprocess old datasets. Freshness is normally driven by Apify task runs, source-scoped webhooks, and controlled Apify rotation.
+`APIFY_SCHEDULED_CURATION_ENABLED=false` in production on purpose. Fresh datasets should come from source-scoped Apify webhooks and controlled rotation, not repeated reprocessing of old datasets.
 
-### Current production knobs
-
-```toml
-APIFY_ROTATION_ENABLED = "true"
-APIFY_ROTATION_INTERVAL_HOURS = "3"
-APIFY_ROTATION_MAX_SOURCES_PER_TICK = "2"
-APIFY_ROTATION_WAIT_FOR_FINISH_SECONDS = "60"
-
-AI_CANDIDATE_BACKLOG_ENABLED = "true"
-AI_FAIR_SOURCE_PICKER_ENABLED = "true"
-AI_SCORING_BATCH_SIZE = "5"
-AI_MAX_SCORING_BATCHES_PER_RUN = "1"
-AI_CANDIDATE_BACKLOG_DRAIN_LIMIT = "10"
-AI_CANDIDATE_MAX_ATTEMPTS = "2"
-AI_CANDIDATE_MAX_AGE_HOURS = "12"
-
-AI_MAX_CALLS_PER_DAY = "100"
-AI_DAILY_TOKEN_BUDGET = "200000"
-
-TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
-TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
-TELEGRAM_PUBLISH_DUE_LIMIT = "4"
-
-MEDIA_PROCESSING_MODE = "binary_upload"
-STREAM_TRANSCODE_ENABLED = "false"
-```
-
-### Crypto Persian pilot channel
-
-The current pilot channel is configured for high-frequency publishing, but it is still bounded by editorial quality, queue availability, and channel rate limits.
+### Current crypto pilot
 
 ```text
+Worker URL: https://content-curator.thesol-ai.workers.dev
+D1 database: content-curator-db-v2
 category_id: crypto
 channel_id: crypto_fa_pilot
+Telegram channel: @thesolcrypto_fa
 language: fa
 timezone: Asia/Tehran
-allowed windows: 07:00-23:59 and 00:00-01:00
-blocked window: 01:00-07:00
-max_per_day: 72
-max_per_hour: 4
-min_gap_minutes: 15
+media mode: binary_upload
+Cloudflare Stream fallback: disabled by default
 ```
 
-This means the theoretical maximum is 72 posts/day only when enough high-quality queue items exist. If the queue runs empty for several hours, the system cannot safely publish 72 quality posts without either increasing candidate supply, improving source diversity, or changing editorial constraints.
+### Current capacity target
 
----
+The Persian crypto pilot is configured for a high-volume target of up to 72 posts/day. With `max_per_hour=4` and `min_gap_minutes=15`, that target is only reachable if the queue stays ahead of the scheduler throughout the active posting windows.
+
+Operationally, the system should create roughly 12 usable scheduled items per active 3-hour rotation window. If natural runs consistently create fewer items, fix candidate supply and source/query quality before loosening editorial gates or raising AI spend.
 
 ## AI Candidate Backlog & Fair Source Distribution
 
@@ -713,7 +686,7 @@ Do not edit already-applied migrations. Add a new numbered migration for future 
 ```bash
 git clone https://github.com/your-org/content-curator.git
 cd content-curator
-pnpm install
+npm install
 wrangler login
 ```
 
@@ -769,7 +742,7 @@ wrangler secret put R2_PUBLIC_BASE_URL    # https://media.yourdomain.com
 ### 5. Deploy
 
 ```bash
-wrangler deploy --env production
+npx wrangler deploy --env production
 ```
 
 Verify:
@@ -1340,34 +1313,34 @@ These actions can spend money, publish posts, or change production state:
 - `/internal/queue/:id/publish-now`
 - `/internal/market-snapshot/send-now`
 - D1 `UPDATE` statements against `publish_queue`, `ai_usage`, `settings`, `channels`, or `apify_sources`
-- `wrangler deploy --env production`
+- `npx wrangler deploy --env production`
 
 Do not paste secrets into chat or logs. For local checks, load `.dev.vars.production` privately and only verify presence/length, not the value.
 
 ---
 
-## Documentation Consolidation & Cleanup
+## Documentation & Release Hygiene
 
-The repository has accumulated several `.md` files from phased implementation and rollout planning. The README should be the durable source of truth for architecture, setup, API, operations, and troubleshooting.
+The README is the durable source of truth for architecture, setup, configuration, API usage, operations, and troubleshooting.
 
-### Keep
+`RELEASE_CHECKLIST.md` should remain separate because it is an operational deployment gate, not general product documentation.
 
-| File | Why |
-|---|---|
-| `README.md` | Main architecture, setup, API, operations, and production reference. |
-| `RELEASE_CHECKLIST.md` | Final deployment checklist and production safety gate. |
+Historical planning documents can be useful while a feature is still being designed, but they should not remain as competing architecture references after the implementation has landed. If a planning document is fully represented in the README and no longer matches production, archive or delete it in a separate documentation-cleanup commit.
 
-### Candidates to consolidate into README, then delete in a separate cleanup commit
+Recommended cleanup policy:
 
-| File | Reason |
-|---|---|
-| `docs/ai-candidate-backlog-and-fair-source-distribution.md` | Useful historically, but much of it describes a draft plan that is now implemented and active in production. The durable parts are now covered by the AI Candidate Backlog section. |
-| `docs/market-trending-source-rollout.md` | Useful rollout context, but the source model has evolved into text/media market-trending sources and controlled rotation. Durable parts are now covered by Apify Controlled Rotation and Operational Runbook. |
-| `RELEASE_NOTES_NEXT.md` | Release notes for a rollout that has effectively happened. Keep only if archival release notes are needed; otherwise consolidate durable notes into README and remove the stale “next” file. |
+```text
+Keep:
+  README.md
+  RELEASE_CHECKLIST.md
 
-Cleanup should be a separate commit after README review so documentation deletion does not hide content changes in one giant diff.
+Review separately before deleting:
+  docs/ai-candidate-backlog-and-fair-source-distribution.md
+  docs/market-trending-source-rollout.md
+  RELEASE_NOTES_NEXT.md
+```
 
----
+Do not mix documentation deletion with runtime code changes. Keep those commits separate so review does not become archaeology with syntax highlighting.
 
 ## Dashboard
 
@@ -1574,8 +1547,8 @@ All admin endpoints validate:
 Steps:
   1. Checkout
   2. Setup Node 22 + npm
-  3. pnpm install --frozen-lockfile
-  4. pnpm typecheck          ← TypeScript must compile cleanly
+  3. npm install --frozen-lockfile
+  4. npm run typecheck          ← TypeScript must compile cleanly
   5. wrangler deploy --dry-run  ← Build must succeed
   6. Secret scan             ← Regex check: no API keys in source
 ```
@@ -1589,8 +1562,8 @@ Trigger: workflow_dispatch → input: environment (production)
 
 Steps:
   1. Checkout + install
-  2. pnpm typecheck
-  3. wrangler deploy --env production
+  2. npm run typecheck
+  3. npx wrangler deploy --env production
   4. Health check: curl WORKER_URL/health → must return 200
 ```
 
@@ -1599,1097 +1572,33 @@ Steps:
 
 ---
 
-## Implementation Phases & Validation History
+## Validation & Quality Gates
 
-This section consolidates the previously separate phase documents into the main README so setup, validation, operational history, and release-readiness notes stay in one place.
-
-The phased work intentionally followed a low-risk sequence: first add tests and guardrails, then fix scheduling, publisher reliability, R2 behavior, thumbnail validation, media observability, Apify normalization, AI prompt wiring, optional Stream fallback hardening, AI cost guardrails, and final end-to-end validation.
-
-### Phase 0 — Baseline
-
-This phase adds a test and validation baseline without changing the Worker runtime behavior.
-
-#### What changed
-
-- Added Vitest coverage for media resolution, media processing forms, Apify normalization, rule gate basics, Telegram publisher behavior, and video blob analysis.
-- Added Apify fixture objects for Twitter/X video, Instagram carousel/reel, LinkedIn video, and LinkedIn document posts.
-- Added `npm run validate`, which runs typecheck, tests, and Wrangler dry-run build.
-- Updated GitHub Actions to use the existing `package-lock.json` with `npm ci` and to run the validation baseline.
-- Switched package manager metadata to npm to match the existing lockfile and CI path.
-
-#### Runtime behavior
-
-No production runtime logic was intentionally changed in this phase.
-
-The tests intentionally document some current baseline behavior that may be changed in later phases, including:
-
-- direct URL video publish currently falls back from `sendVideo` to text + source link after a Telegram media error.
-- media group processing currently supports partial media publishing by filtering failed items.
-
-Later phases should update the affected tests when those behaviors are intentionally changed.
-
-#### Validation command
+Run validation from the repository root before every production deploy or documentation cleanup commit.
 
 ```bash
-npm run validate
-```
-
-Current validation result:
-
-- TypeScript typecheck: pass
-- Vitest: 24 tests pass
-- Wrangler dry-run build: pass
-
-### Phase 1 — Configuration Consistency & No-Cost Stream Safety
-
-This phase intentionally does **not** change the core publishing behavior, media fallback behavior, scheduling logic, Apify normalization, or AI prompts.
-
-The goal is to prevent accidental paid Cloudflare Stream usage and make runtime media/Stream settings visible to operators.
-
-#### Changes
-
-##### 1. Explicit Stream Safety Gate
-
-A new centralized helper was added:
-
-- `apps/worker-api/src/services/stream-config.ts`
-
-Cloudflare Stream is now enabled only when all of these are true:
-
-1. `STREAM_TRANSCODE_ENABLED === "true"`
-2. `CLOUDFLARE_ACCOUNT_ID` is configured
-3. `CLOUDFLARE_STREAM_API_TOKEN` is configured
-
-Credentials alone are not enough.
-
-##### 2. Stream Guard in Transcoder
-
-`transcodeViaStream()` now checks the centralized Stream gate before making any Cloudflare API call.
-
-If Stream is disabled or incomplete, it returns a normal failure result and does not call `fetch()`.
-
-##### 3. Stream Guard in Telegram Publisher
-
-`telegram-publisher.ts` now checks the same Stream gate before attempting the paid fallback.
-
-If a binary `sendVideo` fails with `media_error` and Stream is disabled, the system logs the skip reason and continues to the existing `sendDocument` fallback.
-
-##### 4. Wrangler Defaults
-
-`STREAM_TRANSCODE_ENABLED = "false"` was added to both local/default and production vars.
-
-This keeps paid video transcoding disabled by default even if Stream credentials are later added.
-
-##### 5. Runtime Visibility
-
-`/internal/stats` now includes a non-secret `runtime_config` object with:
-
-- environment
-- media processing mode
-- effective curation state
-- effective dry-run state
-- effective Telegram publish state
-- Telegram scheduler env state
-- Stream transcode status
-
-No secret values are returned.
-
-##### 6. Dashboard Minimal Update
-
-The AI Settings page now shows a small Cloudflare Stream fallback status alert.
-
-No dashboard navigation, layout structure, data model, or existing workflow was changed.
-
-#### Not Changed
-
-This phase does not fix:
-
-- direct URL video fallback behavior
-- R2 single photo/video stable URL usage
-- scheduling windows
-- thumbnail validation
-- Cloudflare Stream download flow
-- media processing status lifecycle
-- custom prompt/channel instruction wiring
-
-Those belong to later phases.
-
-#### Validation
-
-Executed successfully:
-
-```bash
-npm run validate
-```
-
-Result:
-
-- TypeScript typecheck passed
-- Vitest passed: 29 tests
-- Wrangler dry-run build passed
-
-#### Safety Notes
-
-Cloudflare Stream can only create cost if `STREAM_TRANSCODE_ENABLED=true` and both required Stream credentials are present. By default, even production has `STREAM_TRANSCODE_ENABLED=false`.
-
-### Phase 2 — Scheduling Correctness
-
-Phase 2 was applied on top of `content-curator-phase1.zip`.
-
-#### Scope
-
-This phase only changes scheduling-related behavior:
-
-- `allowed_windows`
-- `blocked_windows`
-- channel timezone handling
-- channel-local daily quota checks
-- `min_gap_minutes` planning
-- dashboard/API defaults for allowed windows
-
-No media publishing behavior, Cloudflare Stream behavior, Apify normalization, AI prompts, or Telegram fallback behavior was changed in this phase.
-
-#### What changed
-
-##### 1. Timezone-aware local day bounds
-
-`rule-gate.ts` now computes the channel-local day start and end using `Intl.DateTimeFormat` and a timezone offset iteration helper. Daily quota checks are based on the local day of the computed `scheduled_at`, not the worker/server day.
-
-##### 2. Window handling
-
-The scheduler now supports:
-
-- Normal windows, for example `09:00-17:00`
-- Early-day windows, for example `00:00-08:00`
-- Overnight windows, for example `22:00-02:00`
-- Legacy near-midnight windows, for example `08:00-00:00`
-
-Window end times are treated as exclusive. For example, `00:00-08:00` means blocked until exactly `08:00`.
-
-##### 3. Blocked windows take priority
-
-The scheduling normalizer first moves a candidate into an allowed window, then moves it out of blocked windows. It repeats this normalization to avoid ending in an invalid slot after a blocked-window adjustment.
-
-##### 4. Daily quota includes scheduled work
-
-Daily quota now counts both:
-
-- published items in the relevant channel-local day
-- already scheduled/retry/publishing items in the same channel-local day
-
-This prevents overfilling a channel day before publish time.
-
-##### 5. `min_gap_minutes` still applies during planning
-
-The scheduler keeps respecting the latest scheduled/published item when choosing the next schedule time.
-
-##### 6. Safer defaults
-
-New channel creation now defaults `allowed_windows` to:
-
-```json
-["08:00-23:59"]
-```
-
-instead of:
-
-```json
-["08:00-00:00"]
-```
-
-The legacy `08:00-00:00` value is still supported, but new defaults avoid ambiguity.
-
-The dashboard channel modal and setup wizard were updated only for this default value. The dashboard structure was not changed.
-
-#### Files changed
-
-- `apps/worker-api/src/services/rule-gate.ts`
-- `apps/worker-api/src/routes/admin.ts`
-- `apps/dashboard/index.html`
-- `tests/rule-gate.test.ts`
-- documentation references for the safer default window
-
-#### Validation
-
-The full validation suite passed:
-
-```text
-npm run typecheck: passed
-npm test: 37 tests passed
-npm run build: wrangler dry-run passed
-npm run validate: passed
-```
-
-#### Intentional non-changes
-
-Phase 2 did not change:
-
-- Telegram media publishing
-- direct URL video fallback
-- partial media group policy
-- Cloudflare Stream behavior
-- R2 behavior
-- thumbnail validation
-- Apify extraction logic
-- AI scoring or translation logic
-
-### Phase 3 — Telegram Publisher Reliability
-
-This phase starts from `content-curator-phase2.zip` and intentionally limits changes to Telegram publishing reliability in the free path. It does not change Apify normalization, AI scoring, translation, scheduling, R2 behavior, or Cloudflare Stream behavior.
-
-#### What changed
-
-##### Direct URL video fallback
-
-`direct_url` video publishing now uses a safer fallback chain:
-
-1. `sendVideo` with the original URL.
-2. If Telegram returns a media/fetch/format/size URL error, try `sendDocument` with the same URL.
-3. If `sendDocument` also fails, publish text plus the source link.
-
-This preserves the no-cost path while giving Telegram one more chance to deliver the video as a downloadable file before falling back to text.
-
-##### Partial media group policy
-
-Binary media groups now make partial publishing explicit and configurable.
-
-`MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED=true` is the default. In this mode, if some album items fail processing but at least one item is valid, the valid items are published and the queue warning records the failed indexes.
-
-`MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED=false` fails the whole media group if any item fails processing.
-
-This keeps the flexible product behavior while making it visible and testable instead of hidden.
-
-##### Telegram error classification
-
-Telegram API errors are now classified more specifically:
-
-- `rate_limit`
-- `media_error`
-- `file_too_large`
-- `expired_url`
-- `invalid_format`
-- `network`
-- `auth`
-- `unknown`
-
-The existing `retry_after` handling remains in place.
-
-##### Caption follow-up and partial publish warnings
-
-Warnings for partial media groups and follow-up caption failures continue to be stored through `captionError`, which the orchestrator writes to `publish_queue.publish_error` for published items.
-
-##### Dashboard visibility
-
-The dashboard structure was not changed. The existing AI Settings runtime panel now shows whether media group partial publishing is enabled.
-
-#### What did not change
-
-- Cloudflare Stream is still disabled by default and still gated by Phase 1 safety controls.
-- No video transcoding behavior was added or modified.
-- No R2 single-media behavior was changed.
-- No thumbnail validation was added in this phase.
-- No Apify, AI, or scheduler logic was changed.
-- Human review remains out of scope.
-
-#### Validation
-
-Phase 3 should pass:
-
-```bash
-npm run typecheck
-npm test
-npm run build
-npm run validate
-```
-
-The test suite now includes 41 tests, including direct URL video document fallback and partial media group policy tests.
-
-### Phase 4 — R2 Stable URL Behavior
-
-#### Scope
-
-Phase 4 is intentionally limited to R2 stable URL behavior for single `sendPhoto` and `sendVideo` publishing paths.
-
-No dashboard layout changes were made. No changes were made to Apify normalization, AI scoring, translation, scheduling, Cloudflare Stream, thumbnail validation, or media-group partial publishing policy.
-
-#### Problem
-
-Before this phase, `media-processor.ts` correctly stored media in R2 when `MEDIA_PROCESSING_MODE=r2_storage` and returned `processed.stableUrl`.
-
-However, `telegram-publisher.ts` only used `processed.blob` for single `sendPhoto` and `sendVideo` paths. In R2 mode, the processor intentionally clears `processed.blob` after storing the file in R2, so single photo/video publishing silently fell back to the original Apify/CDN URL.
-
-That meant `r2_storage` worked better for media groups than for single media posts.
-
-#### Changes
-
-##### Single photo
-
-When `MEDIA_PROCESSING_MODE !== direct_url`, `sendPhoto` now uses this priority order:
-
-1. Existing Telegram `file_id`
-2. Downloaded `blob` via multipart upload
-3. R2 `stableUrl`
-4. Original source URL only if processing failed or no stable URL exists
-
-##### Single video
-
-When `MEDIA_PROCESSING_MODE !== direct_url`, `sendVideo` now uses this priority order:
-
-1. Existing Telegram `file_id`
-2. R2 `stableUrl` when the processor returns a stable URL and no blob
-3. Downloaded `blob` via multipart upload
-4. Original source URL only if processing failed or no stable URL exists
-
-For R2 stable video URLs, the same free fallback chain is used:
-
-```text
-stableUrl sendVideo
-  -> if Telegram media/fetch/format error
-stableUrl sendDocument
-  -> if document also fails
-text + source link
-```
-
-Cloudflare Stream is not introduced or changed in this phase.
-
-#### Tests Added
-
-- `processMediaItem()` in `r2_storage` mode stores media and returns `stableUrl` without retaining `blob`.
-- Single `sendPhoto` uses the R2 stable URL instead of the original CDN URL.
-- Single `sendVideo` uses the R2 stable URL and falls the same stable URL back to `sendDocument` before text fallback.
-
-#### Validation
-
-The full validation suite passed after this phase:
-
-```text
-npm run typecheck: passed
-npm test: 44 tests passed
-npm run build: wrangler dry-run passed
-npm run validate: passed
-```
-
-#### Explicit Non-Goals
-
-- No thumbnail validation changes.
-- No R2 lifecycle/status persistence changes.
-- No Telegram `file_id` persistence changes.
-- No Cloudflare Stream hardening.
-- No dashboard redesign.
-- No media group behavior changes.
-
-### Phase 5 — Thumbnail Validation
-
-#### Scope
-
-Phase 5 only tightens thumbnail handling for Telegram video uploads. It does not change the media publishing strategy, Cloudflare Stream behavior, R2 behavior, Apify normalization, AI prompts, scheduling, or dashboard layout.
-
-#### Why this phase exists
-
-Telegram video thumbnails are not generic images. For reliable Bot API usage, a thumbnail must be a JPEG image, must be small, and must not exceed Telegram's thumbnail dimensions. Previous versions accepted any `image/*` blob up to 5MB, which meant PNG/WebP/oversized images could be attached and then rejected or ignored by Telegram.
-
-#### Runtime behavior changes
-
-- Video thumbnails are now validated before being attached to multipart Telegram uploads.
-- Only JPEG thumbnails are accepted.
-- Thumbnail size must be under 200KB.
-- Thumbnail width and height must not exceed 320px.
-- JPEG dimensions are read from the JPEG SOF marker before attach.
-- Invalid thumbnails are skipped, but the video remains publishable.
-- Invalid thumbnail outcomes are recorded on the processed media object as `thumbnailStatus` and `thumbnailError`.
-- URL-based `sendVideo` no longer sends a raw `thumbnail` URL because Telegram video thumbnails are only reliable in multipart upload flows.
-- Cloudflare Stream thumbnail URLs, if returned later, are also passed through the same validation before attach.
-
-#### Explicit non-goals
-
-- No thumbnail generation was added.
-- No image resizing or format conversion was added.
-- No paid service was introduced.
-- No Cloudflare Stream behavior was changed.
-- No dashboard layout or navigation was changed.
-- No media status persistence was added; that belongs to Phase 6.
-
-#### Important product note
-
-This phase validates thumbnails that already exist. It does not guarantee a thumbnail for every video. If a source platform provides no thumbnail, or provides an invalid thumbnail, the video can still be published without an attached thumbnail. Generating thumbnails from video frames remains a later, separate decision.
-
-#### Validation
-
-Phase 5 adds tests for:
-
-- valid JPEG thumbnail under Telegram limits
-- non-JPEG thumbnail rejection
-- oversized thumbnail rejection
-- oversized dimension rejection
-- binary video thumbnail attach only when valid
-- invalid thumbnail skip while video remains usable
-- direct URL video publishing not sending raw thumbnail URLs
-
-All validation commands passed:
-
-```text
-npm run typecheck
-npm test
-npm run build
-npm run validate
-```
-
-### Phase 6 — Media Status & Observability
-
-#### Scope
-
-This phase adds observability for media processing and Telegram publishing without changing the core publishing policy.
-
-No changes were made to:
-
-- Cloudflare Stream behavior
-- R2 storage behavior
-- thumbnail validation rules
-- Apify normalization
-- AI prompts/scoring/translation
-- scheduling logic
-- partial media group policy
-- dashboard structure/navigation
-
-#### What changed
-
-##### 1. Telegram publish results now include per-media metadata
-
-`publishToTelegram()` now returns optional `mediaResults` with one entry per source media item when media publishing is attempted.
-
-Each entry can include:
-
-- `mediaIndex`
-- `processing_status`
-- processing error
-- Telegram `file_id`
-- Telegram `message_id`
-- thumbnail status/error
-
-This does not change how media is sent. It only makes the outcome inspectable.
-
-##### 2. Telegram file IDs are parsed from successful responses
-
-The publisher now extracts file IDs from Telegram responses for:
-
-- `photo`
-- `video`
-- `document`
-- `animation`
-
-For photos, the largest returned size is used.
-
-For media groups, Telegram result order is mapped back to original source media indexes, even when partial publishing skipped failed items.
-
-##### 3. Discovery media rows are synced after publish attempts
-
-`publishDueItems()` now:
-
-- loads existing `telegram_file_id`s for the queue item before publishing
-- passes them to the publisher for reuse
-- updates `discovery_media` after publish attempts
-
-Updated columns include:
-
-- `processing_status`
-- `processing_error`
-- `telegram_file_id`
-- `telegram_message_id`
-- `thumbnail_status`
-- `thumbnail_error`
-- `validated_at`
-
-##### 4. New media observability migration
-
-Added migration:
-
-```text
-migrations/0006_media_observability.sql
-```
-
-It adds:
-
-- `discovery_media.telegram_message_id`
-- `discovery_media.thumbnail_status`
-- `discovery_media.thumbnail_error`
-- useful media indexes
-
-##### 5. New internal media diagnostics endpoint
-
-Added:
-
-```http
-GET /internal/media?item={item_id}
-GET /internal/media?status=failed
-GET /internal/media?limit=100
-```
-
-This endpoint is protected by the existing `/internal/*` secret check.
-
-##### 6. Stats include media counters
-
-`GET /internal/stats` now includes:
-
-- `media_pending`
-- `media_failed`
-- `media_uploaded`
-
-##### 7. Queue dashboard shows existing media warning/message metadata
-
-The dashboard structure was not redesigned. The existing queue row template now displays:
-
-- `media_warning`
-- `all_message_ids`
-
-when these values exist.
-
-#### Important behavior notes
-
-Partial media group publishing remains enabled by default, unchanged from Phase 3.
-
-If partial publishing occurs:
-
-- successful media are marked `uploaded`
-- failed media keep their specific failure status/error
-- Telegram message IDs and file IDs are mapped to the original media indexes that were actually sent
-
-If Telegram falls all the way back to text for a video, the media item is marked with a failed/unsupported status while the queue item can still be considered published as a text fallback.
-
-#### Validation
-
-Phase 6 validation covered:
-
-- TypeScript typecheck
-- Vitest regression tests
-- Wrangler dry-run build
-- Full `npm run validate`
-
-New tests verify:
-
-- Telegram file IDs are extracted from photo responses
-- media group file IDs are mapped back to original media indexes after partial publish
-
-### Phase 7 — Apify Normalization Hardening
-
-#### Scope
-
-Phase 7 hardens source normalization for Apify outputs without changing Telegram publishing behavior, scheduling, AI selection, Cloudflare Stream, R2, or dashboard structure.
-
-The goal is to reduce media loss caused by actor schema variation and make extraction problems visible before publish.
-
-#### Changes
-
-##### 1. More defensive X/Twitter media extraction
-
-`apify-client.ts` now checks multiple Twitter/X media shapes:
-
-- `extendedEntities.media`
-- `extended_entities.media`
-- `entities.media`
-- `media`
-- `attachments.media`
-- `legacy.extended_entities.media`
-- `legacy.entities.media`
-
-For video media, it selects the highest bitrate MP4 variant and rejects HLS/DASH/manifest URLs before they reach Telegram.
-
-If a video only has HLS/DASH variants, it is skipped with an extraction warning.
-
-##### 2. More defensive Instagram media extraction
-
-Instagram extraction now supports:
-
-- `childPosts`
-- `sidecarChildren`
-- `carouselMedia`
-- `carousel_media`
-- `shortcode_media.edge_sidecar_to_children.edges[].node`
-- `edge_sidecar_to_children.edges[].node`
-- `images[]`
-- single image, single video, and Reel-like fields
-
-Video URL and thumbnail URL are handled separately.
-
-Unsupported stream URLs such as `.m3u8` and `manifest.mpd` are rejected with warnings.
-
-##### 3. More defensive LinkedIn media extraction
-
-LinkedIn extraction now supports:
-
-- `postVideo`
-- alternate `video` / `videos[0]` shapes
-- `postImages`
-- `images`
-- `imageUrls`
-- `document.coverPages`
-- `document.pages`
-- article image fallback
-
-Important behavior: if a LinkedIn post includes both `postVideo` and `postImages`, the video is preferred. Some actors expose video preview frames inside `postImages`; treating those as the main media would lose the actual video.
-
-##### 4. Extraction diagnostics
-
-`NormalizedItem` now carries:
-
-- `expectedMediaCount`
-- `mediaWarnings`
-
-These are persisted to `discovery_items` via migration `0007_apify_extraction_diagnostics.sql`:
-
-- `media_expected_count`
-- `media_extracted_count`
-- `media_extraction_warnings`
-
-The admin items endpoint now includes these fields so diagnostics can be inspected without direct DB access.
-
-##### 5. Fixture coverage
-
-New fixtures cover:
-
-- Twitter/X HLS-only video
-- Instagram `sidecarChildren`
-- Instagram `carousel_media` with manifest video
-- LinkedIn alternate video schema
-- LinkedIn video with `postImages` preview frame
-- LinkedIn document carousel with more than 10 pages
-
-#### Intentional Non-Changes
-
-This phase does not change:
-
-- Telegram publisher fallback logic
-- partial media group policy
-- R2 behavior
-- Cloudflare Stream behavior
-- thumbnail validation rules
-- scheduling
-- AI prompts
-- dashboard layout or navigation
-
-#### Validation
-
-The full validation suite passed after this phase:
-
-```text
-npm run typecheck: passed
-npm test: 57 tests passed
-npm run build: wrangler dry-run passed
-npm run validate: passed
-```
-
-### Phase 8 — Category & Channel Prompt Wiring
-
-#### Scope
-
-This phase wires existing schema fields into API persistence, dashboard forms, and AI target selection. It does not change Telegram publishing, media processing, scheduling, Cloudflare Stream, R2, or Apify normalization behavior.
-
-#### What changed
-
-##### Category prompt wiring
-
-- `custom_prompt` is now persisted when creating categories through `POST /internal/categories`.
-- `custom_prompt` is now updateable through `PATCH /internal/categories/:id`.
-- `runScoring()` already prioritizes `category.custom_prompt` over the built-in `prompt_profile`; this behavior is now reachable from API/dashboard configuration.
-
-##### Channel prompt wiring
-
-- `custom_instructions`, `tone_profile`, and `channel_label` are now persisted when creating channels through `POST /internal/channels`.
-- These fields are now updateable through `PATCH /internal/channels/:id`.
-- Dashboard channel modal now exposes these fields without changing the dashboard layout/navigation.
-
-##### Translation target behavior
-
-The existing language-level translation behavior is preserved.
-
-For normal channels without custom AI context, translations remain keyed by language:
-
-```json
-{
-  "fa": { "caption_short": "...", "caption_full": "...", "hashtags": [] },
-  "en": { "caption_short": "...", "caption_full": "...", "hashtags": [] }
-}
-```
-
-For channels with at least one of the following:
-
-- `custom_instructions`
-- non-neutral `tone_profile`
-- `channel_label`
-
-an additional channel-specific translation target is requested using this key format:
-
-```text
-channel:<channel_id>
-```
-
-The orchestrator then prefers the channel-specific translation and falls back to the language-level translation:
-
-```text
-ai.translations[`channel:${channel.id}`] ?? ai.translations[channel.language]
-```
-
-This keeps backwards compatibility and avoids multiplying translation output for every channel unnecessarily.
-
-#### Dashboard changes
-
-Dashboard structure was not redesigned.
-
-Only existing modals were extended:
-
-- Category modal: added `Custom Prompt` textarea.
-- Category modal: added branding and finance prompt profiles to the existing select.
-- Channel modal: added `Channel Label`, `Tone Profile`, and `Custom Instructions` fields.
-- Category/channel edit now uses PATCH when editing an existing entity, instead of always attempting POST.
-
-#### Tests added
-
-- `tests/ai-gate-phase8.test.ts`
-  - Verifies language-level translation keys remain unchanged for channels without custom AI context.
-  - Verifies a channel-specific key is added only when a channel has custom tone/instructions/label.
-
-- `tests/admin-phase8.test.ts`
-  - Verifies category `custom_prompt` is persisted on create and patch.
-  - Verifies channel AI context fields are persisted on create and patch.
-
-#### Validation
-
-Phase 8 passed:
-
-```text
-npm run typecheck
-npm test
-npm run build
-npm run validate
-```
-
-Final test count after this phase: 63 tests.
-
-#### Deliberately unchanged
-
-- No media behavior changed.
-- No Telegram fallback behavior changed.
-- No Cloudflare Stream behavior changed.
-- No R2 behavior changed.
-- No scheduling behavior changed.
-- No Apify normalization behavior changed.
-- No human review workflow added.
-
-### Phase 9 — Cloudflare Stream Fallback Hardening
-
-#### Scope
-
-Phase 9 hardens the optional Cloudflare Stream fallback path without changing the default free publishing path.
-
-Cloudflare Stream remains disabled by default. It is still called only when all of the following are true:
-
-1. `STREAM_TRANSCODE_ENABLED=true`
-2. `CLOUDFLARE_ACCOUNT_ID` is configured
-3. `CLOUDFLARE_STREAM_API_TOKEN` is configured
-4. Telegram has already rejected the first binary `sendVideo` attempt with a media-compatible fallback error
-
-No direct URL video, R2 stable URL video, image publishing, scheduling, Apify normalization, AI prompt, or dashboard behavior is changed in this phase.
-
-#### What changed
-
-##### 1. No fabricated Cloudflare Stream download URLs
-
-The previous Stream fallback constructed a URL like:
-
-```text
-https://customer-${accountId}.cloudflarestream.com/${videoId}/downloads/default.mp4
-```
-
-That is not safe because the Stream customer subdomain is not guaranteed to be the Cloudflare account ID.
-
-The new flow only uses MP4 download URLs returned by Cloudflare API response metadata.
-
-##### 2. Download generation is re-checked properly
-
-If an MP4 download URL is not already present on the Stream video object, the worker requests download generation through the Stream downloads endpoint, then polls the Stream video metadata until a usable download URL appears.
-
-It does not call `.blob()` on an earlier failed download response.
-
-##### 3. Stream asset deletion no longer happens before Telegram send
-
-`transcodeViaStream()` now returns the transcoded MP4 blob and `streamVideoId` without deleting the Stream asset immediately.
-
-`telegram-publisher.ts` deletes the Stream asset only after the transcoded video has been successfully sent to Telegram.
-
-If Telegram rejects the transcoded video too, the Stream asset is left in place for debugging rather than being deleted before the failure can be inspected.
-
-##### 4. Stream logic is covered by mocked tests
-
-New tests cover:
-
-- Stream remains disabled unless `STREAM_TRANSCODE_ENABLED=true`.
-- Download URLs are extracted only from API-returned metadata.
-- No `customer-${accountId}` URL is fabricated.
-- Publisher calls Stream only after a binary `sendVideo` media error.
-- Publisher deletes the Stream asset only after successful Telegram send.
-
-#### Side effects deliberately avoided
-
-This phase does not:
-
-- Route all videos to Cloudflare Stream.
-- Enable Stream by default.
-- Change direct URL publishing.
-- Change R2 behavior.
-- Change thumbnail validation.
-- Change media group partial publishing.
-- Change dashboard structure.
-- Add any new paid path unless Stream is explicitly enabled.
-
-#### Validation
-
-Expected validation commands:
-
-```bash
-npm run typecheck
-npm test
-npm run build
-npm run validate
-```
-
-### Phase 10 — AI Reliability & Cost Guardrails
-
-Phase 10 is intentionally limited to AI scoring/translation reliability and usage observability. It does not change Telegram publishing, media processing, R2, Cloudflare Stream, scheduling, Apify normalization, or dashboard layout.
-
-#### What changed
-
-##### Claude scoring budget guardrails
-
-Claude scoring now checks the existing scoring budget configuration before making an Anthropic API call:
-
-- `AI_MAX_CALLS_PER_DAY`
-- `AI_DAILY_TOKEN_BUDGET`
-
-The guardrail is intentionally scoped to Claude scoring because these variables were already documented as Claude/scoring budget controls. Translation behavior is not blocked by this budget in Phase 10 to avoid surprising queue volume changes.
-
-If the scoring budget is exhausted, items are rejected with:
-
-- `riskFlags: ["ai_budget_exceeded"]`
-- no external AI call is made
-- a skipped usage record is written when the `ai_usage` migration is available
-
-If the `ai_usage` table is missing, budget checks and usage writes fail open. This avoids taking the production pipeline down during staged migrations.
-
-##### AI usage telemetry
-
-A new migration adds `ai_usage`:
-
-```text
-migrations/0008_ai_usage.sql
-```
-
-The table records:
-
-- provider
-- purpose: `scoring` or `translation`
-- model
-- input/output tokens
-- status: `success`, `failed`, or `skipped`
-- error message
-- created timestamp
-
-Token usage is recorded from provider metadata where available:
-
-- Anthropic: `usage.input_tokens`, `usage.output_tokens`
-- Gemini: `usageMetadata.promptTokenCount`, `usageMetadata.candidatesTokenCount`
-- OpenAI: `usage.prompt_tokens`, `usage.completion_tokens`
-
-##### Runtime stats
-
-`/internal/stats` now includes 24-hour AI usage counters:
-
-- `ai_calls_24h`
-- `ai_tokens_24h`
-- `ai_scoring_calls_24h`
-- `ai_scoring_tokens_24h`
-- `ai_translation_calls_24h`
-- `ai_translation_tokens_24h`
-
-`runtime_config` also exposes the active AI guardrail settings without exposing any secrets.
-
-##### More robust AI result matching
-
-AI scoring and translation matching now normalize URLs before matching. It handles common tracking query parameters such as:
-
-- `utm_*`
-- `fbclid`
-- `gclid`
-- `ref`
-- `ref_src`
-- `igshid`
-
-Scoring also accepts optional `post_id` in AI output and falls back to matching by `postId` if URL matching fails.
-
-##### Missing translation visibility
-
-If an item gets only some of the required translation targets, it is no longer silently opaque. The item remains publishable if at least one usable translation exists, but missing targets are surfaced in `riskFlags` as:
-
-```text
-translation_missing:<target_key>
-```
-
-If all translations are missing, the item is marked not publishable with `translation_missing`.
-
-##### Output token setting
-
-Provider calls now respect `AI_MAX_OUTPUT_TOKENS` instead of hardcoded `4096` values for translation and hardcoded `2048` for Claude scoring.
-
-#### What did not change
-
-- No dashboard redesign.
-- No media behavior changes.
-- No Telegram publisher changes.
-- No Cloudflare Stream behavior changes.
-- No R2 behavior changes.
-- No scheduling changes.
-- No Apify normalization changes.
-- No human review flow.
-
-#### Validation
-
-Phase 10 validation passed:
-
-```text
-npm run typecheck: passed
-npm test: 69 tests passed
-npm run build: wrangler dry-run passed
-npm run validate: passed
-```
-
-### Phase 11 — End-to-End Validation Baseline
-
-Phase 11 adds a non-invasive validation layer on top of the previous ten phases. It does not change production publishing behavior, scheduling behavior, AI behavior, media processing, Cloudflare Stream, R2, Apify normalization, or the dashboard structure.
-
-#### What this phase validates
-
-The goal is to confirm that the integrated pipeline pieces still work together after all earlier phased changes:
-
-- Apify normalization preserves media order, media type, and thumbnail metadata.
-- Media resolution chooses the expected Telegram method.
-- Telegram publisher fallback behavior works without paid services.
-- Video fallback uses `sendDocument` before falling back to text.
-- Cloudflare Stream stays disabled unless explicitly enabled.
-- Media group publishing can remain partial and observable.
-- Long album captions still create a follow-up text message.
-- Phase documents and migrations are present and ordered.
-
-#### No-cost guardrail
-
-`STREAM_TRANSCODE_ENABLED` must remain `false` by default. Phase 11 validation explicitly checks this so a future config edit does not accidentally enable paid Stream usage.
-
-#### Dashboard impact
-
-None. The dashboard was not modified in this phase.
-
-#### Scripts
-
-```bash
-npm run validate
-npm run validate:phase11
-npm run validate:e2e
-```
-
-`validate:e2e` runs the standard build/test validation and then checks phase-specific release-readiness invariants.
-
-#### Manual staging checklist
-
-Use a private Telegram test channel before enabling public channels:
-
-1. Text-only post publishes as `sendMessage`.
-2. Single image publishes as `sendPhoto`.
-3. Single video publishes as `sendVideo` if accepted by Telegram.
-4. If video `sendVideo` is rejected, it falls back to `sendDocument` before text+link.
-5. Instagram carousel publishes as a media group.
-6. Mixed image/video album preserves item order for valid items.
-7. Partial album warnings appear when some media fail and partial publishing is enabled.
-8. Thumbnail is attached only when it passes Telegram constraints.
-9. `MEDIA_PROCESSING_MODE=binary_upload` does not call Cloudflare Stream unless `STREAM_TRANSCODE_ENABLED=true`.
-10. Channel scheduling respects timezone, allowed windows, blocked windows, daily quota, and min gap.
-11. AI scoring stops before Anthropic calls when the daily scoring call budget is exhausted.
-12. Missing translation targets are surfaced as risk flags.
-
-#### Intentionally unchanged
-
-- No live Telegram API calls are added to automated tests.
-- No paid Cloudflare Stream calls are made.
-- No dashboard redesign is made.
-- No production toggles are changed.
-
-### Phase 12 — Release Hardening, Formatting, and Editorial Controls
-
-After the Phase 11 validation baseline, the system added production-facing editorial and formatting hardening.
-
-#### What changed
-
-- Telegram message formatting moved behind a backend formatter so dashboard preview and real publish output do not diverge.
-- Raw source URLs are hidden behind source labels instead of being printed into message bodies.
-- Link preview is disabled in text fallback paths.
-- Channel-level controls were added for source attribution, signature, footer, and link preview behavior.
-- Reply, retweet, quote, and text-only controls became configurable.
-- Queue preview and publish-now endpoints were added for operational QA.
-- Apify sources gained task/actor metadata and last dataset tracking.
-- Release hardening validation was added through `npm run validate:release` and `npm run validate:release:strict`.
-
-### Phase 13 — AI Candidate Backlog, Query-First Discovery, and Production Throughput Work
-
-This phase addressed the core production bottleneck: the system could scrape enough raw data but still fail to create enough high-quality Telegram queue items.
-
-#### What changed
-
-- Added durable `ai_candidate_queue` between dedupe and Claude scoring.
-- Added bounded backlog drain through cron and admin endpoint.
-- Added source-account fair picker for Claude scoring batches.
-- Changed `AI_MAX_CANDIDATES_PER_RUN` from a lossy cutoff into a safe batch concept when backlog is enabled.
-- Added controlled Apify rotation with cohorts and topic gates.
-- Added source-account balancing before final source limit slicing.
-- Added raw fetch limit so the Worker can fetch a larger raw dataset, balance by account, then process a smaller final candidate set.
-- Added market-trending text/media source families for controlled experimentation.
-- Added ops/debug reports for backlog, recent runs, and pipeline state.
-
-#### Production posture
-
-```text
-AI_CANDIDATE_BACKLOG_ENABLED=true
-AI_FAIR_SOURCE_PICKER_ENABLED=true
-APIFY_ROTATION_ENABLED=true
-APIFY_SCHEDULED_CURATION_ENABLED=false
-```
-
-### Phase 14 — Dependency Audit Remediation
-
-#### What changed
-
-- Upgraded `vitest` to the current 4.x line.
-- Upgraded `wrangler` to the current 4.x line.
-- Added `npm run validate:audit`.
-- Verified the updated toolchain with typecheck, tests, dry-run build, media validation, release validation, and npm audit.
-
-### Phase 15 — Crypto Input Quality Gate and Whale Alert Throttle
-
-This phase tightened the crypto pilot after production showed too much low-value AI/geopolitics/general news and too many Whale Alert queue items.
-
-#### What changed
-
-- Tightened Apify rotation topic gates for crypto relevance.
-- Removed `whale_alert` from general voices cohorts.
-- Kept only high-signal whale/on-chain use cases.
-- Added deterministic pre-AI rejects for generic AI, generic equities/SpaceX, generic geopolitics, engagement bait, non-crypto posts, and low-signal Whale Alert transfers.
-- Added Whale Alert daily queue throttle so a valid on-chain item can still publish, but the channel cannot become mostly wallet-transfer posts.
-
-#### Validation
-
-```bash
-npm test -- --run tests/apify-rotation-query-buckets.test.ts tests/content-policy-crypto-pre-ai.test.ts
-npm test -- --run tests/backlog-drain.test.ts tests/discovery-quality-phase9a.test.ts
 npm run typecheck
 npm test -- --run
+npm run build
+npm run validate:release
 ```
 
----
+Use stricter release validation when production flags are intentionally enabled in `wrangler.toml`:
+
+```bash
+RELEASE_STRICT=1 npm run validate:release
+```
+
+Recommended release review:
+
+- `git status --short` is clean except for intended files.
+- No `.dev.vars*`, secrets, local snapshots, ZIPs, generated diffs, or backup files are staged.
+- D1 migrations apply locally before remote.
+- `TELEGRAM_FINAL_PUBLISH_ENABLED`, `TELEGRAM_PUBLISH_SCHEDULER_ENABLED`, channel `publish_enabled`, and DB `telegram_publish_enabled` are intentionally reviewed.
+- Queue preview matches the expected Telegram message format.
+- Raw source URLs are not visible in final messages.
+- Link previews are disabled in text fallback paths.
+- Production write actions are not run during validation unless explicitly intended.
 
 ## Release Hardening & Production Checklist
 
@@ -2729,7 +1638,7 @@ The final manual pre-deploy review must include:
 - Queue preview output matches expected Telegram output.
 - Raw source URLs are not visible in messages.
 - Link preview is disabled in all text fallback paths.
-- Media QA scenarios in `MEDIA_QA.md` are complete for the pilot category.
+- Media QA scenarios are covered by `npm run validate:media` and a private Telegram test-channel check before broad rollout.
 
 Dashboard styling and structure are intentionally not changed by release hardening. Dashboard changes should remain additive and use the existing `apps/dashboard/index.html` structure unless a separate refactor PR is explicitly approved.
 
@@ -2737,402 +1646,18 @@ Dashboard styling and structure are intentionally not changed by release hardeni
 
 <!-- README-PRODUCTION-OPS-ADDENDUM:START -->
 
-## Current Production Operations Addendum
+## Current Limitations & Next Improvements
 
-This section captures the current production operating model after the recent crypto-pipeline, Apify rotation, AI backlog, Telegram scheduling, and quality-gate changes. It is intentionally written as an operational supplement to the existing README rather than a replacement for the older architecture, setup, API, and phase-history sections.
+The current production system is stable enough to run the crypto pilot, but the following areas still need measurement or future tuning:
 
-### Current production baseline
+- Natural Apify runs must be measured over several rotation windows to confirm whether they can supply enough fresh candidates for 72 posts/day.
+- Duplicate rate can still make scrape volume look healthy while producing too few new candidates.
+- Source cohorts may need tuning if queue depth stays low after natural runs.
+- `whale_alert` is intentionally throttled; it should not be used to fill volume gaps.
+- Market snapshot posts are direct sends and should be monitored separately from normal `publish_queue` throughput.
+- `APIFY_MAX_ITEMS_PER_SOURCE` and source cadence should be raised only after measuring Apify cost, duplicate rate, AI token cost, and queue creation rate together.
+- Cloudflare Stream remains disabled by default; enable it only after explicit cost and reliability review.
 
-The current live deployment is a Cloudflare Worker backed by Cloudflare D1, Apify, Claude scoring, Gemini translation, and Telegram publishing.
-
-Current production assumptions:
-
-| Area | Current value / behavior |
-|---|---|
-| Worker URL | `https://content-curator.thesol-ai.workers.dev` |
-| D1 database | `content-curator-db-v2` |
-| Primary live category | `crypto` |
-| Primary live channel | `crypto_fa_pilot` |
-| Primary public Telegram channel | `@thesolcrypto_fa` |
-| Main live platform | X/Twitter through Apify task rotation |
-| Worker cron | Every 5 minutes: `*/5 * * * *` |
-| Apify rotation cadence | 3-hour source buckets, with max 2 sources per tick by default |
-| Publishing mode | Scheduled queue + Telegram publisher, guarded by env and DB locks |
-| Media mode | `binary_upload` in production |
-| Market snapshot | Direct Telegram send, not `publish_queue` |
-| AI scoring provider | Anthropic Claude Haiku |
-| Translation provider | Gemini Flash-Lite |
-
-The production model is no longer just webhook-driven dataset ingestion. It now combines controlled Apify task rotation, webhook-scoped curation, AI candidate backlog draining, scheduled publishing, direct market snapshots, and operational reporting.
-
-### Current cron order
-
-The Worker scheduled handler performs these operations in order:
-
-1. Load effective runtime config and stop immediately if maintenance mode is active.
-2. Optionally run legacy scheduled curation only when `APIFY_SCHEDULED_CURATION_ENABLED=true`.
-3. Run controlled Apify rotation when `APIFY_ROTATION_ENABLED=true`.
-4. Send due market snapshots directly, if a configured snapshot slot is due.
-5. Publish due queue items through Telegram.
-6. Recover, fail, skip, and drain AI candidate backlog when enabled.
-7. Cleanup old dedupe keys.
-
-Publishing is intentionally executed before backlog drain so already-scheduled posts are not delayed by scoring work. Backlog failures are isolated and should not block scheduled publishing.
-
-### Crypto pilot throughput target
-
-The current crypto FA pilot target is high-volume publishing:
-
-```text
-Target: 72 Telegram posts / day
-Channel max_per_day: 72
-Channel max_per_hour: 4
-Minimum gap: 15 minutes
-Practical active window: about 18 hours / day
-Required pace: 4 posts/hour during active windows
-Required supply: about 12 publishable items every 3 hours
-Recommended queue buffer: 85-100 scheduled/queued items per 24 hours
-```
-
-This means the system has almost no slack. If the queue is empty for several hours, it becomes difficult to recover the 72/day target without reducing quality or forcing bursts. The correct fix is usually source/query tuning, not bypassing rate limits.
-
-### Natural-run measurement protocol
-
-When validating whether production can naturally fill the queue, do not manually spam Apify, drain, or publish-now. Take snapshots every 30 minutes for at least 3 hours.
-
-```bash
-BASE="https://content-curator.thesol-ai.workers.dev"
-
-curl -s "$BASE/internal/backlog/stats"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.ai_budget,.status_counts,.top_pending_accounts'
-
-curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.queue[] | {id,source_url,caption_short,scheduled_at,status}'
-
-curl -s "$BASE/internal/debug/crypto-pipeline"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.recent_runs[0:20] | map({dataset:.apify_dataset_id,fetched:.items_fetched,new:.items_new,duplicate:.items_duplicate,queued:.items_queued,rejected:.items_ai_rejected,created:.created_at,error:.error_message})'
-```
-
-For a file snapshot:
-
-```bash
-mkdir -p ops-snapshots
-TS=$(TZ=Asia/Tehran date '+%Y%m%d-%H%M')
-OUT="ops-snapshots/crypto-ops-$TS.txt"
-
-{
-  echo "=== SNAPSHOT $TS Tehran ==="
-  echo "--- backlog / AI budget ---"
-  curl -s "$BASE/internal/backlog/stats" -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.ai_budget,.status_counts,.top_pending_accounts'
-  echo "--- scheduled queue ---"
-  curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50" -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.queue[] | {source_url,caption_short,scheduled_at}'
-  echo "--- recent runs ---"
-  curl -s "$BASE/internal/debug/crypto-pipeline" -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq '.recent_runs[0:20] | map({dataset:.apify_dataset_id,fetched:.items_fetched,new:.items_new,duplicate:.items_duplicate,queued:.items_queued,rejected:.items_ai_rejected,created:.created_at,error:.error_message})'
-} | tee "$OUT"
-```
-
-Never paste secrets into issue comments, PR comments, README changes, screenshots, or chat logs. If auth fails, check secret length locally with `echo ${#INTERNAL_API_SECRET}`, not the secret value.
-
-### Capacity and cost KPIs
-
-Use these ratios to understand whether the bottleneck is scraping, dedupe, AI selection, queue scheduling, or Telegram publishing.
-
-| KPI | Formula | Healthy signal | What it means if unhealthy |
-|---|---|---:|---|
-| Freshness yield | `items_new / items_fetched` | Source-dependent, should not stay near 0 | Apify is buying duplicates or query/source overlap is too high |
-| Duplicate rate | `items_duplicate / items_fetched` | Preferably below 60% for experimental sources | Queries overlap too much or scraping is too frequent |
-| AI select rate | `ai_selected / candidates_scored` | Usually above 10% for trusted crypto sources | Query is too broad, source is noisy, or AI threshold is too strict |
-| Queue rate | `items_queued / items_fetched` | Enough to sustain 72/day | Rule gate, translation, dedupe, or source quality is blocking output |
-| AI cost efficiency | `tokens_today / queued_today` | Stable over time | Prompt size, batch size, or low select rate is wasting AI budget |
-| Publish completion | `published / scheduled` | High | Telegram errors, rate limits, media failures, or window constraints are blocking publish |
-
-Apify cost should be estimated from fetched result volume and the actual actor price:
-
-```text
-Apify cost ~= total_items_fetched * actor_price_per_result
-```
-
-Claude scoring cost should be estimated from `ai_usage`:
-
-```text
-Claude scoring tokens = SUM(input_tokens + output_tokens)
-Daily remaining budget = AI_DAILY_TOKEN_BUDGET - tokens_today
-```
-
-For the current crypto pilot, do not judge success by AI usage alone. A low AI bill with an empty queue is not success; it just means the system has learned frugality while starving the channel. Very inspirational, in the way an empty fridge is inspirational.
-
-### Apify controlled rotation
-
-Current rotation source IDs:
-
-```text
-src_crypto_x_news_media
-src_crypto_x_news_text
-src_crypto_x_voices_media
-src_crypto_x_voices_text
-src_market_trending_x_media
-src_market_trending_x_text
-```
-
-The rotation runner builds source-specific query plans and sends both `query` and `twitterContent` in the Apify task input override for compatibility with older/newer task schemas.
-
-Current production rotation principles:
-
-- Use cohort rotation instead of scraping every account every tick.
-- Keep `APIFY_ROTATION_MAX_SOURCES_PER_TICK` low to avoid cost spikes.
-- Use `maxItems` per source family instead of one large global value.
-- Prefer query-first topic gates over profile-only scraping.
-- Do not run force rotation repeatedly unless diagnosing a specific source.
-- If `items_fetched > 0` but `items_new = 0`, do not drain more; there is nothing new to score.
-
-Dry-run rotation is safe and does not call Apify:
-
-```bash
-curl -s -X POST "$BASE/internal/apify/rotation/run"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"dryRun":true,"force":true}' | jq .
-```
-
-A real force run spends Apify budget:
-
-```bash
-curl -s -X POST "$BASE/internal/apify/rotation/run"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"force":true,"onlySourceId":"src_crypto_x_news_text"}' | jq .
-```
-
-### AI candidate backlog lifecycle
-
-The current production path is:
-
-```text
-Apify dataset
-  -> normalize
-  -> dedupe
-  -> freshness check
-  -> ai_candidate_queue pending
-  -> fair source picker
-  -> pre-AI content policy
-  -> Claude scoring
-  -> translation
-  -> semantic/rule gate
-  -> publish_queue scheduled
-  -> Telegram publisher
-```
-
-Important behavior:
-
-- Fresh items are stored in `ai_candidate_queue` before Claude scoring.
-- Backlog drain claims a bounded batch and respects daily AI budget.
-- Fair source picker prevents one source account from dominating a scoring batch.
-- Pre-AI policy can reject candidates before Claude, saving budget.
-- Candidates have bounded attempts and stale candidate handling.
-- Queue creation is separated from publication.
-
-Safe manual drain:
-
-```bash
-curl -s -X POST "$BASE/internal/backlog/drain"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"category_id":"crypto","limit":10,"maxBatches":1,"skipStale":true,"recoverStale":true}' | jq '.drain'
-```
-
-Do not run drain when `pending=0`. The result will correctly be `candidatesPulled: 0`, because apparently even software cannot score imaginary candidates. Miracles remain out of scope.
-
-### Crypto pre-AI quality gate
-
-The crypto pre-AI gate exists to prevent avoidable Claude calls. It rejects common low-value classes before scoring:
-
-- Empty text.
-- Engagement bait.
-- Generic AI news without an explicit crypto/digital-asset angle.
-- Generic equity, IPO, SpaceX, or stock-market news without a crypto angle.
-- Generic geopolitics without explicit crypto, oil/liquidity, stablecoin, Bitcoin, Ethereum, ETF, DeFi, or digital-asset relevance.
-- Non-crypto content from noisy crypto-adjacent sources.
-
-Allowed crypto anchors include Bitcoin, Ethereum, stablecoins, ETFs, DeFi, RWA, tokenization, exchanges, wallets, protocol upgrades, mainnet/testnet, hacks, exploits, and digital-asset regulation.
-
-### Whale Alert policy
-
-`whale_alert` is intentionally treated as a special source. It can produce useful liquidity signals, but it can also flood the channel with repetitive wallet-transfer noise.
-
-Current policy:
-
-Allowed before Claude only when high-signal:
-
-- USDC / USDT / Tether mint or burn events above roughly 100M USD.
-- Large stablecoin flows to major exchanges above roughly 100M USD.
-- Large BTC / ETH exchange flows above roughly 100M USD.
-- Large stablecoin movement into DeFi venues such as Aave, Compound, Maker, or Curve.
-
-Rejected before Claude:
-
-- Unknown wallet to unknown wallet.
-- Non-core assets.
-- Coinbase Institutional / custody to unknown wallet by default.
-- BTC / ETH movements below the configured high-signal threshold.
-- Generic “could indicate market movement” transfers without a stronger reason.
-
-Queue-level cap:
-
-```text
-At most 2 whale_alert posts per channel in the last 24 hours
-Statuses counted: scheduled, retry, publishing, published
-```
-
-If too many whale posts are already scheduled, cancel extra queue items rather than deleting rows. Historical rows are useful for debugging and quality review.
-
-### Market snapshot publishing
-
-Market snapshots are sent directly and no longer use `publish_queue`. The direct route exists because snapshots are time-slot based and operationally different from curated social posts.
-
-Useful endpoints:
-
-```bash
-curl -s "$BASE/internal/market-snapshot/preview"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-
-curl -s -X POST "$BASE/internal/market-snapshot/send-now"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"channel_id":"crypto_fa_pilot","force":true}' | jq .
-```
-
-The `send-now` route is a production write. Use it for diagnostics or intentional manual snapshots, not as a replacement for scheduled operation.
-
-### Queue operations
-
-Read scheduled queue:
-
-```bash
-curl -s "$BASE/internal/queue?status=scheduled&channel=crypto_fa_pilot&limit=50"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-```
-
-Preview one queue item with the real Telegram formatter:
-
-```bash
-curl -s "$BASE/internal/queue/$QUEUE_ID/preview"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-```
-
-Publish due items:
-
-```bash
-curl -s -X POST "$BASE/internal/publish/due"   -H "x-internal-api-secret: $INTERNAL_API_SECRET"   -H "Content-Type: application/json"   --data '{"limit":4}' | jq .
-```
-
-Publish one item now:
-
-```bash
-curl -s -X POST "$BASE/internal/queue/$QUEUE_ID/publish-now"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-```
-
-`publish-now` bypasses schedule timing only. It should still respect final publish locks and channel rate limits. If it returns `rate_limit_min_gap`, that is expected behavior, not a failure.
-
-Cancel one scheduled/retry/failed item safely:
-
-```bash
-curl -s -X DELETE "$BASE/internal/queue/$QUEUE_ID"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-```
-
-For bulk cleanup, prefer soft-cancel updates over deletion:
-
-```sql
-UPDATE publish_queue
-SET status='cancelled', publish_error='manual_cleanup_reason'
-WHERE status='scheduled'
-  AND channel_id='crypto_fa_pilot'
-  AND source_url LIKE '%/whale_alert/%';
-```
-
-### Underfilled queue playbook
-
-If the scheduled queue is too small for the 72/day target:
-
-1. Check `pending` in `/internal/backlog/stats`.
-2. If `pending > 0`, run one bounded backlog drain.
-3. If `pending = 0`, inspect recent Apify runs.
-4. If recent Apify runs have `fetched > 0` and `new = 0`, do not drain more. Tune source/query/cadence.
-5. If `new > 0` but `queued = 0`, inspect AI rejection reasons, rule gate rejections, translation missing flags, and semantic dedupe.
-6. If queue is healthy but published count is low, inspect publish windows, `min_gap_minutes`, Telegram errors, and media failures.
-
-Do not solve queue starvation by resetting AI budget unless the only proven blocker is a previously exhausted budget and the operator has explicitly accepted the cost risk.
-
-### Overfilled or low-quality queue playbook
-
-If queue is large but quality is poor:
-
-1. Cancel low-quality scheduled rows; do not delete.
-2. Inspect source accounts dominating the queue.
-3. Tighten Apify query terms for that cohort.
-4. Add or tighten pre-AI reject logic if Claude is seeing obvious junk.
-5. Use fair source picker and source-level caps instead of manually fighting the queue forever, because apparently humans do have other hobbies.
-
-### Operational reports
-
-Use built-in reports before writing new SQL whenever possible:
-
-```bash
-curl -s "$BASE/internal/report/ops?hours=24&category=crypto"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-
-curl -s "$BASE/internal/report/ops/telegram-preview?hours=24&category=crypto"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-
-curl -s "$BASE/internal/report/daily?hours=24&category=crypto"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-
-curl -s "$BASE/internal/report/market-trending?hours=24"   -H "x-internal-api-secret: $INTERNAL_API_SECRET" | jq .
-```
-
-Useful SQL when deeper inspection is needed:
-
-```bash
-npx wrangler d1 execute content-curator-db-v2 --remote --command "SELECT status, COUNT(*) AS count FROM publish_queue WHERE channel_id='crypto_fa_pilot' AND COALESCE(published_at, scheduled_at) >= unixepoch('now','-24 hours') GROUP BY status ORDER BY status;"
-
-npx wrangler d1 execute content-curator-db-v2 --remote --command "SELECT provider, purpose, status, COUNT(*) AS calls, SUM(COALESCE(input_tokens,0)) AS input_tokens, SUM(COALESCE(output_tokens,0)) AS output_tokens, SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)) AS total_tokens FROM ai_usage WHERE created_at > datetime('now','-24 hours') GROUP BY provider, purpose, status ORDER BY provider, purpose, status;"
-
-npx wrangler d1 execute content-curator-db-v2 --remote --command "SELECT COUNT(*) AS runs, SUM(items_fetched) AS fetched, SUM(items_new) AS new_items, SUM(items_duplicate) AS duplicates, SUM(items_queued) AS queued, SUM(items_ai_rejected) AS ai_rejected FROM discovery_runs WHERE category_id='crypto' AND created_at > datetime('now','-24 hours');"
-```
-
-### README and documentation maintenance rules
-
-This README is the canonical operating document. Keep separate docs only when they are actively useful and current.
-
-Recommended documentation policy:
-
-- Keep `README.md` as the main product, architecture, setup, API, and operations reference.
-- Keep `RELEASE_CHECKLIST.md` as the pre-merge/pre-deploy checklist.
-- Keep additional docs only if they describe a living process not already covered here.
-- If an old phase plan has been fully implemented and summarized here, archive or delete it in a separate cleanup commit.
-- Never commit generated patch scripts, downloaded ZIPs, README backups, local snapshots, or one-off investigation files.
-
-Common files to keep out of commits:
-
-```text
-README.md.bak-*
-readme-update.diff.txt
-update_readme_*.py
-admin-bot-*.zip
-ops-snapshots/
-*.tsbuildinfo
-.dev.vars.production
-```
-
-### Branch and PR hygiene
-
-If a PR is stale, draft, conflicts with `main`, and its work has already landed through later commits, close it instead of resolving conflicts and merging it.
-
-Do not resolve conflicts on old PR branches just to make GitHub look clean. That can accidentally reintroduce older logic over newer production fixes. The `main` branch and deployed production commit are the source of truth.
-
-Recommended stale PR close comment:
-
-```text
-Closing stale draft PR. The work has already landed on main and production through later commits.
-```
-
-### Current known limitations and next work
-
-Known limitations:
-
-- Natural source throughput is still being measured against the 72/day target.
-- Some source cohorts may return `items_new=0` during quiet windows because dedupe is doing its job or queries are too narrow.
-- Apify cost needs continued measurement from actual fetched result volume, not estimates alone.
-- Queue starvation should be solved by source/query strategy, not by force-running the same empty sources.
-- Whale Alert is capped, but source quality should still be monitored because liquidity signals can become repetitive quickly.
-
-Next likely work:
-
-- Tune Apify source cohorts based on natural-run data.
-- Add more high-quality crypto-native accounts only after measuring duplicate and AI select rates.
-- Improve operational dashboards for queue fill-rate, cost-per-queued-post, and source-level yield.
-- Add source-level daily caps for other noisy accounts if Whale Alert-style flooding appears elsewhere.
-- Keep pre-AI gates strict so Claude is used for judgment, not garbage collection.
-
-<!-- README-PRODUCTION-OPS-ADDENDUM:END -->
 ## Troubleshooting
 
 ### Scheduled queue is empty
@@ -3245,7 +1770,7 @@ curl ".../internal/queue?status=failed&limit=10" -H "..."
 # Switch to binary_upload mode to handle expiring CDN URLs
 # In wrangler.toml:
 MEDIA_PROCESSING_MODE = "binary_upload"
-# Then redeploy: wrangler deploy --env production
+# Then redeploy: npx wrangler deploy --env production
 
 # Retry a specific failed item
 curl -X POST .../internal/queue/QUEUE_ITEM_ID/retry -H "..."
