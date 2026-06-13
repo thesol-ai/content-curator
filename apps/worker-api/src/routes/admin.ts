@@ -15,8 +15,21 @@ import { sanitizeRunDebugId } from '../services/run-events';
 import { buildMarketSnapshotText, sendMarketSnapshotDirect } from '../services/market-snapshot';
 import { buildOperationalReport } from '../services/operational-report';
 import { formatOperationalReportForTelegram } from '../services/report-message-formatter';
+import { buildQueueHealthReport } from '../services/queue-health';
+import { buildRejectionFunnel } from '../services/rejection-funnel';
+import { buildSourcePerformanceReport } from '../services/source-reputation';
+import { buildStoryStabilityReport } from '../services/story-intelligence';
+import {
+  buildQueueQualityReport,
+  buildSourceYieldReport,
+  buildTopicMixReport,
+  buildSourceCapPreview,
+  buildAiCostBySourceReport,
+  buildApifyQueryYieldReport,
+  buildGapFillPreview,
+} from '../services/observability-reports';
 import { drainAICandidateQueue } from '../services/backlog-drain';
-import { runApifyRotation } from '../services/apify-rotation-runner';
+import { buildSourceReputationPreview, runApifyRotation } from '../services/apify-rotation-runner';
 import {
   getCandidateBacklogDrainLimit,
   getCandidateMaxAgeHours,
@@ -36,6 +49,11 @@ function isValidId(id: string | undefined): id is string {
 function sanitizeDebugId(value: string | null, fallback: string): string {
   const raw = String(value ?? '').trim();
   return /^[\w-]{1,64}$/.test(raw) ? raw : fallback;
+}
+
+function sanitizeOptionalId(value: string | null): string | undefined {
+  const raw = String(value ?? '').trim();
+  return /^[\w-]{1,64}$/.test(raw) ? raw : undefined;
 }
 
 // Path segment safe extraction
@@ -189,6 +207,87 @@ export async function handleAdmin(
         parse_mode: 'HTML',
         text: formatOperationalReportForTelegram(report as any),
       });
+    }
+
+    // ── Queue-health report (read-only, Phase 6E) ─────────────
+    if (path === '/internal/report/queue-health' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      return ok(await buildQueueHealthReport(env, categoryId));
+    }
+
+    // ── Rejection funnel "why is the queue empty?" (read-only, Phase 6E) ─
+    if (path === '/internal/report/funnel' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 24);
+      return ok(await buildRejectionFunnel(env, { categoryId, windowHours }));
+    }
+
+    // ── Source performance + reputation (read-only, Phase 6I observe) ─────
+    if (path === '/internal/report/source-performance' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 48);
+      return ok(await buildSourcePerformanceReport(env, { categoryId, windowHours }));
+    }
+
+    // ── Story-intelligence stability (read-only, Phase 6K observe) ─────────
+    if (path === '/internal/report/story-intelligence' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 72);
+      return ok(await buildStoryStabilityReport(env, { categoryId, windowHours }));
+    }
+
+    // ── Queue QUALITY/diversity (read-only) ───────────────────────────────
+    if (path === '/internal/report/queue-quality' && m === 'GET') {
+      const channelId = sanitizeOptionalId(url.searchParams.get('channel'))
+        || (env as any).QUEUE_HEALTH_CHANNEL_ID?.trim() || 'crypto_fa_pilot';
+      return ok(await buildQueueQualityReport(env, channelId));
+    }
+
+    // ── Source YIELD per account (read-only) ──────────────────────────────
+    if (path === '/internal/report/source-yield' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 48);
+      return ok(await buildSourceYieldReport(env, { categoryId, windowHours }));
+    }
+
+    // ── Topic MIX of published output (read-only) ─────────────────────────
+    if (path === '/internal/report/topic-mix' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 48);
+      return ok(await buildTopicMixReport(env, { categoryId, windowHours }));
+    }
+
+    // ── Source daily-cap PREVIEW (report-only; what WOULD be capped) ───────
+    if (path === '/internal/report/source-cap-preview' && m === 'GET') {
+      const channelId = sanitizeOptionalId(url.searchParams.get('channel'))
+        || (env as any).QUEUE_HEALTH_CHANNEL_ID?.trim() || 'crypto_fa_pilot';
+      return ok(await buildSourceCapPreview(env, channelId));
+    }
+
+    // ── AI cost attribution by source (needs migration 0019 + flag) ───────
+    if (path === '/internal/report/ai-cost-by-source' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 72);
+      return ok(await buildAiCostBySourceReport(env, { categoryId, windowHours }));
+    }
+
+    // ── Apify/source query yield (fetched→rejected→published per source) ──
+    if (path === '/internal/report/apify-query-yield' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 72);
+      return ok(await buildApifyQueryYieldReport(env, { categoryId, windowHours }));
+    }
+
+    // ── Gap-fill PREVIEW (report-only; current vs backloaded) ─────────────
+    if (path === '/internal/report/gap-fill-preview' && m === 'GET') {
+      const channelId = sanitizeOptionalId(url.searchParams.get('channel'))
+        || (env as any).QUEUE_HEALTH_CHANNEL_ID?.trim() || 'crypto_fa_pilot';
+      return ok(await buildGapFillPreview(env, channelId));
+    }
+
+    // ── Source reputation-weighting PREVIEW (read-only; what weighting WOULD do) ─
+    if (path === '/internal/report/source-reputation-preview' && m === 'GET') {
+      return ok(await buildSourceReputationPreview(env));
     }
 
     // ── Daily operational report (read-only) ───────────────────

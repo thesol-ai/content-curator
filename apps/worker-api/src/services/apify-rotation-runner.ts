@@ -26,6 +26,8 @@ export interface ApifyRotationOptions {
   force?: boolean;
   dryRun?: boolean;
   onlySourceId?: string;
+  /** Hard cap on number of sources fired this invocation (applies even with force). Phase 6F. */
+  maxSources?: number;
 }
 
 export interface ApifyRotationResult {
@@ -84,21 +86,56 @@ export async function runApifyRotation(
     .map(source => buildRotationPlan(source, bucket))
     .filter((plan): plan is RotationPlan => Boolean(plan));
 
-  const maxSourcesPerTick = options.force || options.dryRun
-    ? allPlans.length
-    : getMaxSourcesPerTick(env);
+  const continuous = isContinuousRotationEnabled(env);
+
+  // Phase 6F: in continuous mode, exactly ONE designated source fires per time
+  // slot, so coverage is spread evenly across the interval instead of bursting
+  // all sources in the first ~15 minutes. Legacy mode keeps the prior behavior.
+  const hardCap = options.maxSources != null && options.maxSources > 0
+    ? Math.max(1, Math.floor(options.maxSources))
+    : Number.POSITIVE_INFINITY;
 
   const plans: RotationPlan[] = [];
-  for (const plan of allPlans) {
-    if (plans.length >= maxSourcesPerTick) break;
 
-    if (options.force || options.dryRun) {
+  if (options.force || options.dryRun) {
+    for (const plan of allPlans) {
+      if (plans.length >= hardCap) break;
       plans.push(plan);
-      continue;
     }
-
-    const claimed = await claimRotationSourceBucket(env, bucket, plan.source.id);
-    if (claimed) plans.push(plan);
+  } else if (continuous) {
+    const slotMinutes = getRotationSlotMinutes(env);
+    const slot = Math.floor(Date.now() / (slotMinutes * 60 * 1000));
+    let ordered = orderPlansForSlot(allPlans, slot);
+    // Phase-next: optional reputation weighting with exploration (default off).
+    if (isSourceReputationWeightingEnabled(env)) {
+      try {
+        const cfg = getSourceWeightConfig(env);
+        const weights = await loadSourceWeightMap(env, cfg);
+        const recentRuns = await loadRecentRunsMap(env);
+        ordered = orderByReputationWeight(ordered, weights, slot, getReputationExplorationPct(env), recentRuns);
+      } catch (err) {
+        console.warn('[ApifyRotation] reputation weighting skipped:', err instanceof Error ? err.message : String(err));
+      }
+    }
+    const perSlot = Math.min(hardCap, getContinuousSourcesPerSlot(env));
+    // Claim the SLOT once (not per-source). The first cron tick inside a slot
+    // wins and fires exactly the designated source(s); later ticks in the same
+    // slot find the slot already claimed and skip — so we never fall through to
+    // other sources and never re-create the burst.
+    const claimed = await claimRotationSlot(env, slot);
+    if (claimed) {
+      for (const plan of ordered) {
+        if (plans.length >= perSlot) break;
+        plans.push(plan);
+      }
+    }
+  } else {
+    const maxSourcesPerTick = Math.min(hardCap, getMaxSourcesPerTick(env));
+    for (const plan of allPlans) {
+      if (plans.length >= maxSourcesPerTick) break;
+      const claimed = await claimRotationSourceBucket(env, bucket, plan.source.id);
+      if (claimed) plans.push(plan);
+    }
   }
 
   if (plans.length === 0) {
@@ -121,7 +158,8 @@ export async function runApifyRotation(
       bucket,
       intervalHours,
       dryRun: options.dryRun === true,
-      maxSourcesPerTick,
+      mode: continuous ? 'continuous' : 'bucket',
+      firedSources: plans.length,
       remainingPlannedSources: allPlans.length,
       plannedSources: plans.map(plan => ({
         sourceId: plan.source.id,
@@ -423,6 +461,148 @@ function isRotationEnabled(env: Env): boolean {
   return String(env.APIFY_ROTATION_ENABLED ?? '').toLowerCase() === 'true';
 }
 
+function isContinuousRotationEnabled(env: Env): boolean {
+  return String((env as any).APIFY_ROTATION_CONTINUOUS_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+export function getRotationSlotMinutes(env: Env): number {
+  const value = Number((env as any).APIFY_ROTATION_SLOT_MINUTES ?? 30);
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.max(Math.floor(value), 5), 180) : 30;
+}
+
+function getContinuousSourcesPerSlot(env: Env): number {
+  const value = Number((env as any).APIFY_ROTATION_CONTINUOUS_SOURCES_PER_SLOT ?? 1);
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 6) : 1;
+}
+
+/**
+ * Pure: rotate the plan order so a different source leads each slot. The
+ * designated source for `slot` is `slot % N`; remaining sources follow as
+ * fallbacks (used only if perSlot > 1). This spreads coverage across the
+ * interval deterministically.
+ */
+export function orderPlansForSlot<T>(plans: T[], slot: number): T[] {
+  const n = plans.length;
+  if (n <= 1) return plans.slice();
+  const start = ((slot % n) + n) % n;
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(plans[(start + i) % n]!);
+  return out;
+}
+
+async function claimRotationSlot(env: Env, slot: number): Promise<boolean> {
+  const key = `apify_rotation_slot_${slot}`;
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
+    VALUES (?, 'claimed', CURRENT_TIMESTAMP)
+  `).bind(key).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Pick the source the starvation controller should scrape. Instead of always
+ * hitting the alphabetically-first source (the old `force` behavior), return
+ * the source designated for the CURRENT slot, so repeated starvation triggers
+ * rotate across sources and don't re-create dominance. Returns null if no
+ * eligible source.
+ */
+export async function getStarvationRotationSourceId(env: Env): Promise<string | null> {
+  try {
+    const sources = await loadRotationSources(env);
+    const bucket = Math.floor(Date.now() / (getRotationIntervalHours(env) * 60 * 60 * 1000));
+    const plans = sources
+      .map(source => buildRotationPlan(source, bucket))
+      .filter((plan): plan is RotationPlan => Boolean(plan));
+    if (plans.length === 0) return null;
+    const slotMinutes = getRotationSlotMinutes(env);
+    const slot = Math.floor(Date.now() / (slotMinutes * 60 * 1000));
+    return orderPlansForSlot(plans, slot)[0]?.source.id ?? null;
+  } catch (err) {
+    console.warn('[ApifyRotation] starvation source pick skipped:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Phase-next: pick a rotation source that IMPROVES queue diversity by avoiding
+ * the account currently dominating the scheduled queue. Falls back to the
+ * normal starvation pick when no avoid hint is given or every candidate maps to
+ * the dominant account.
+ */
+export async function getDiversityRotationSourceId(
+  env: Env, opts: { avoidAccount?: string | null; avoidSourceId?: string | null } = {},
+): Promise<string | null> {
+  const avoid = normalizeHandle(opts.avoidAccount);
+  const avoidSid = String(opts.avoidSourceId ?? '').trim();
+  if (!avoid && !avoidSid) return getStarvationRotationSourceId(env);
+  try {
+    const sources = await loadRotationSources(env);
+    const bucket = Math.floor(Date.now() / (getRotationIntervalHours(env) * 60 * 60 * 1000));
+    const plans = sources
+      .map(source => buildRotationPlan(source, bucket))
+      .filter((plan): plan is RotationPlan => Boolean(plan));
+    if (plans.length === 0) return null;
+    const slotMinutes = getRotationSlotMinutes(env);
+    const slot = Math.floor(Date.now() / (slotMinutes * 60 * 1000));
+    const ordered = orderPlansForSlot(plans, slot);
+    // first slot-ordered plan that is NOT the dominant source_id and whose
+    // accounts do NOT include the dominant account
+    const diverse = ordered.find(p =>
+      (!avoidSid || String(p.source.id) !== avoidSid) &&
+      (!avoid || !(p.accounts ?? []).some(a => normalizeHandle(a) === avoid)),
+    );
+    return (diverse ?? ordered[0])?.source.id ?? null;
+  } catch (err) {
+    console.warn('[ApifyRotation] diversity source pick skipped:', err instanceof Error ? err.message : String(err));
+    return getStarvationRotationSourceId(env);
+  }
+}
+
+function normalizeHandle(v: unknown): string {
+  return String(v ?? '').toLowerCase().replace(/^@/, '').trim();
+}
+
+/**
+ * Phase 6I maintenance: rotation claim keys (`apify_rotation_bucket_*` and
+ * `apify_rotation_slot_*`) are written every bucket/slot and were never
+ * cleaned up — production had 150+ stale rows. Delete keys whose bucket/slot
+ * index is well in the past. Safe + idempotent; failures are swallowed.
+ */
+export async function cleanupOldRotationClaims(env: Env): Promise<{ deleted: number }> {
+  try {
+    const intervalHours = getRotationIntervalHours(env);
+    const slotMinutes = getRotationSlotMinutes(env);
+    const currentBucket = Math.floor(Date.now() / (intervalHours * 60 * 60 * 1000));
+    const currentSlot = Math.floor(Date.now() / (slotMinutes * 60 * 1000));
+    const keepBucketsFrom = currentBucket - 8;   // ~24h of buckets at 3h
+    const keepSlotsFrom = currentSlot - 96;       // ~48h of slots at 30m
+
+    const rows = await env.DB.prepare(
+      `SELECT key FROM settings WHERE key LIKE 'apify_rotation_bucket_%' OR key LIKE 'apify_rotation_slot_%'`,
+    ).all<{ key: string }>();
+
+    const stale: string[] = [];
+    for (const r of rows.results ?? []) {
+      const m = /^apify_rotation_(bucket|slot)_(\d+)/.exec(r.key);
+      if (!m) continue;
+      const idx = Number(m[2]);
+      if (m[1] === 'bucket' && idx < keepBucketsFrom) stale.push(r.key);
+      if (m[1] === 'slot' && idx < keepSlotsFrom) stale.push(r.key);
+    }
+
+    let deleted = 0;
+    for (const key of stale) {
+      await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
+      deleted++;
+    }
+    if (deleted > 0) console.log('[ApifyRotation] claim cleanup deleted', deleted, 'stale rotation keys');
+    return { deleted };
+  } catch (err) {
+    console.warn('[ApifyRotation] claim cleanup skipped:', err instanceof Error ? err.message : String(err));
+    return { deleted: 0 };
+  }
+}
+
 function getRotationIntervalHours(env: Env): number {
   const value = Number(env.APIFY_ROTATION_INTERVAL_HOURS ?? 2);
   return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 24) : 2;
@@ -445,4 +625,227 @@ function safeString(value: unknown): string | null {
 
 function makeRotationRunId(): string {
   return `apify_rotation_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ── Phase-next: active source-reputation weighting (flag-gated, default off) ──
+// Pure scaffolding so it can be enabled later WITHOUT another code change.
+
+export function isSourceReputationWeightingEnabled(env: Env): boolean {
+  return String((env as any).SOURCE_REPUTATION_WEIGHTING_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+export interface SourceWeightStats {
+  published: number;
+  rejected: number;
+  sample: number; // total scored/seen
+}
+
+export interface SourceWeightConfig {
+  minSample: number;   // below this, return neutral weight (exploration protects new sources)
+  maxWeight: number;
+  minWeight: number;
+}
+
+export function getSourceWeightConfig(env: Env): SourceWeightConfig {
+  const num = (k: string, d: number) => {
+    const n = parseFloat(String((env as any)[k] ?? ''));
+    return Number.isFinite(n) ? n : d;
+  };
+  return {
+    minSample: Math.max(1, Math.floor(num('SOURCE_REPUTATION_MIN_SAMPLE', 20))),
+    maxWeight: num('SOURCE_REPUTATION_MAX_WEIGHT', 2.0),
+    minWeight: num('SOURCE_REPUTATION_MIN_WEIGHT', 0.3),
+  };
+}
+
+export function getReputationExplorationPct(env: Env): number {
+  const n = parseFloat(String((env as any).SOURCE_REPUTATION_EXPLORATION_PCT ?? '20'));
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 20;
+}
+
+/** Pure: a selection weight in [minWeight, maxWeight] from a source's stats. */
+export function computeSourceSelectionWeight(stats: SourceWeightStats, cfg: SourceWeightConfig): number {
+  if (!stats || stats.sample < cfg.minSample) return 1; // neutral until enough data
+  const denom = stats.published + stats.rejected;
+  const acceptance = denom > 0 ? stats.published / denom : 0; // 0..1
+  // map acceptance 0..1 → [minWeight, maxWeight]
+  const w = cfg.minWeight + acceptance * (cfg.maxWeight - cfg.minWeight);
+  return Math.max(cfg.minWeight, Math.min(cfg.maxWeight, w));
+}
+
+/**
+ * Pure: weighted-FAIR ordering with a recent-run cooldown. Reputation biases
+ * the order, but a source that ran recently is penalised so a single
+ * high-reputation source can't dominate every non-exploration slot (which would
+ * re-create the source-dominance we are trying to fix). An exploration fraction
+ * of slots is still pure round-robin so new/low-data sources get real turns.
+ *
+ * effectiveScore = weight / (1 + recentRuns); ties broken by fewer recent runs,
+ * then original order.
+ */
+export function orderByReputationWeight<T extends { source: { id: string } }>(
+  plans: T[],
+  weightBySourceId: Map<string, number>,
+  slot: number,
+  explorationPct: number,
+  recentRunsBySourceId?: Map<string, number>,
+): T[] {
+  if (plans.length <= 1) return plans;
+  const everyN = explorationPct > 0 ? Math.max(2, Math.round(100 / explorationPct)) : 0;
+  if (everyN > 0 && slot % everyN === 0) return plans; // exploration slot → round-robin
+  return plans
+    .map((p, i) => {
+      const w = weightBySourceId.get(p.source.id) ?? 1;
+      const recent = recentRunsBySourceId?.get(p.source.id) ?? 0;
+      return { p, i, recent, eff: w / (1 + recent) };
+    })
+    .sort((a, b) => (b.eff - a.eff) || (a.recent - b.recent) || (a.i - b.i))
+    .map(s => s.p);
+}
+
+/** Build a source.id → selection-weight map from recent candidate outcomes. */
+/** Build a source.id → selection-weight map from recent candidate OUTCOMES.
+ *  Positive signal is weighted by how far an item actually got:
+ *  published (1.0) > queued (0.7) > ai_selected-but-not-queued (0.25). A source
+ *  that only gets `ai_selected` but never reaches the queue earns little weight,
+ *  so a single AI "smile" can't push a low-yield source back into dominance. */
+async function loadSourceWeightMap(env: Env, cfg: SourceWeightConfig): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (!env.DB) return map;
+  try {
+    const res = await env.DB.prepare(`
+      SELECT source_id AS sid,
+             SUM(CASE WHEN status = 'queued'      THEN 1 ELSE 0 END) AS queued,
+             SUM(CASE WHEN status = 'ai_selected' THEN 1 ELSE 0 END) AS ai_selected,
+             SUM(CASE WHEN status = 'ai_rejected' THEN 1 ELSE 0 END) AS rejected,
+             COUNT(*) AS sample
+      FROM ai_candidate_queue
+      WHERE created_at > datetime('now','-7 day')
+      GROUP BY source_id
+    `).all<{ sid: string; queued: number; ai_selected: number; rejected: number; sample: number }>();
+
+    // real published counts per source_id (publish_queue → ai_candidate_queue)
+    const publishedBySid = new Map<string, number>();
+    try {
+      const pub = await env.DB.prepare(`
+        SELECT c.source_id AS sid, COUNT(*) AS published
+        FROM publish_queue q JOIN ai_candidate_queue c ON c.id = q.candidate_id
+        WHERE q.status='published' AND q.published_at >= unixepoch('now','-7 day')
+        GROUP BY c.source_id
+      `).all<{ sid: string; published: number }>();
+      for (const r of pub.results ?? []) if (r.sid) publishedBySid.set(String(r.sid), Number(r.published) || 0);
+    } catch { /* publish_queue join best-effort */ }
+
+    for (const r of res.results ?? []) {
+      if (!r.sid) continue;
+      const queued = Number(r.queued) || 0;
+      const aiSelected = Number(r.ai_selected) || 0;
+      const rejected = Number(r.rejected) || 0;
+      const published = publishedBySid.get(String(r.sid)) ?? 0;
+      const weightedPositive = published * 1.0 + queued * 0.7 + aiSelected * 0.25;
+      map.set(String(r.sid), computeSourceSelectionWeight(
+        { published: weightedPositive, rejected, sample: Number(r.sample) || 0 },
+        cfg,
+      ));
+    }
+  } catch (err) {
+    console.warn('[ApifyRotation] loadSourceWeightMap skipped:', err instanceof Error ? err.message : String(err));
+  }
+  return map;
+}
+
+export function getRecentRunCooldownSlots(env: Env): number {
+  const n = parseInt(String((env as any).SOURCE_REPUTATION_RECENT_RUN_COOLDOWN_SLOTS ?? '6'), 10);
+  return Number.isFinite(n) && n > 0 ? n : 6;
+}
+
+/** Count how many candidates each source produced in the recent cooldown window
+ *  (a cheap proxy for "scraped recently" used to cool down dominant sources). */
+/** Count how many times each source was actually SCRAPED in the recent cooldown
+ *  window. Prefers run_events (apify.rotation.task_started) — the true scrape
+ *  signal — and falls back to ai_candidate_queue when run_events lacks rows. */
+async function loadRecentRunsMap(env: Env): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (!env.DB) return map;
+  const slots = getRecentRunCooldownSlots(env);
+  const minutes = getRotationSlotMinutes(env) * slots;
+  try {
+    const res = await env.DB.prepare(`
+      SELECT source_id AS sid, COUNT(*) AS runs
+      FROM run_events
+      WHERE event_type = 'apify.rotation.task_started'
+        AND source_id IS NOT NULL
+        AND created_at > datetime('now','-' || ? || ' minutes')
+      GROUP BY source_id
+    `).bind(String(minutes)).all<{ sid: string; runs: number }>();
+    for (const r of res.results ?? []) if (r.sid) map.set(String(r.sid), Number(r.runs) || 0);
+    if (map.size > 0) return map;
+  } catch (err) {
+    console.warn('[ApifyRotation] loadRecentRunsMap(run_events) skipped:', err instanceof Error ? err.message : String(err));
+  }
+  // Fallback: candidate-queue activity (a source that produced candidates was scraped).
+  try {
+    const res = await env.DB.prepare(`
+      SELECT source_id AS sid, COUNT(DISTINCT run_id) AS runs
+      FROM ai_candidate_queue
+      WHERE created_at > datetime('now','-' || ? || ' minutes')
+      GROUP BY source_id
+    `).bind(String(minutes)).all<{ sid: string; runs: number }>();
+    for (const r of res.results ?? []) if (r.sid) map.set(String(r.sid), Number(r.runs) || 0);
+  } catch (err) {
+    console.warn('[ApifyRotation] loadRecentRunsMap(fallback) skipped:', err instanceof Error ? err.message : String(err));
+  }
+  return map;
+}
+
+// ── Read-only preview of what reputation weighting WOULD do (no side effects) ──
+
+export interface SourceReputationPreviewRow {
+  sourceId: string;
+  currentWeight: number;
+  recentRuns: number;
+  effectiveWeight: number;
+  wouldRank: number; // 1 = picked first in a weighted (non-exploration) slot
+}
+export interface SourceReputationPreview {
+  generatedAt: string;
+  weightingEnabled: boolean;
+  explorationPct: number;
+  cooldownSlots: number;
+  nextSlotIsExploration: boolean;
+  rows: SourceReputationPreviewRow[];
+}
+
+export async function buildSourceReputationPreview(env: Env): Promise<SourceReputationPreview> {
+  const explorationPct = getReputationExplorationPct(env);
+  const cooldownSlots = getRecentRunCooldownSlots(env);
+  const slotMinutes = getRotationSlotMinutes(env);
+  const slot = Math.floor(Date.now() / (slotMinutes * 60 * 1000));
+  const everyN = explorationPct > 0 ? Math.max(2, Math.round(100 / explorationPct)) : 0;
+  // the NEXT slot (slot+1) is the one operators care about
+  const nextSlotIsExploration = everyN > 0 && (slot + 1) % everyN === 0;
+
+  const base: SourceReputationPreview = {
+    generatedAt: new Date().toISOString(),
+    weightingEnabled: isSourceReputationWeightingEnabled(env),
+    explorationPct, cooldownSlots, nextSlotIsExploration, rows: [],
+  };
+  if (!env.DB) return base;
+  try {
+    const cfg = getSourceWeightConfig(env);
+    const weights = await loadSourceWeightMap(env, cfg);
+    const recent = await loadRecentRunsMap(env);
+    const sids = new Set<string>([...weights.keys(), ...recent.keys()]);
+    const rows: SourceReputationPreviewRow[] = Array.from(sids).map(sid => {
+      const w = weights.get(sid) ?? 1;
+      const r = recent.get(sid) ?? 0;
+      return { sourceId: sid, currentWeight: Math.round(w * 1000) / 1000, recentRuns: r, effectiveWeight: Math.round((w / (1 + r)) * 1000) / 1000, wouldRank: 0 };
+    });
+    rows.sort((a, b) => (b.effectiveWeight - a.effectiveWeight) || (a.recentRuns - b.recentRuns) || a.sourceId.localeCompare(b.sourceId));
+    rows.forEach((row, i) => { row.wouldRank = i + 1; });
+    return { ...base, rows };
+  } catch (err) {
+    console.warn('[ApifyRotation] reputation preview skipped:', err instanceof Error ? err.message : String(err));
+    return base;
+  }
 }

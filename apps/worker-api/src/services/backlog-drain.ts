@@ -1,5 +1,5 @@
 import type { Env, AICandidateRow, AIGateResult, CategoryRow, ChannelRow, NormalizedItem } from '../types';
-import { runAIGate } from './ai-gate';
+import { attachTranslations, runAIGate, scoreItems } from './ai-gate';
 import { recordDedupeKeys } from './dedupe';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { runRuleGate } from './rule-gate';
@@ -32,6 +32,17 @@ import {
   getCryptoThemeDailyCap,
   getSourceAudienceRejectReason,
 } from './story-quality-guard';
+import { getStarvingMaxBatches } from './queue-health';
+import {
+  getStoryIntelligenceWindowHours,
+  isStoryFollowupAllowEnabled,
+  isStoryIntelligenceEnabled,
+  isStoryIntelligenceRejectActive,
+  isFollowUpEventType,
+  recordStoryEvent,
+  shouldRejectByStoryKey,
+  storyKeySeenInWindow,
+} from './story-intelligence';
 
 export interface BacklogDrainOptions {
   categoryId?: string;
@@ -39,6 +50,8 @@ export interface BacklogDrainOptions {
   maxBatches?: number;
   skipStale?: boolean;
   recoverStale?: boolean;
+  /** Phase 6F: temporary extra scoring-call budget while the queue is starving. */
+  scoringCallBonus?: number;
 }
 
 export interface BacklogDrainResult {
@@ -95,9 +108,17 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesSkipped += await skipStaleCandidates(env);
   }
 
-  const drainLimit = Math.max(1, Math.min(options.limit ?? getCandidateBacklogDrainLimit(env), getCandidateBacklogDrainLimit(env)));
-  const batchSize = Math.max(1, Math.min(getScoringBatchSize(env), drainLimit));
-  const maxBatches = Math.max(1, Math.min(options.maxBatches ?? getMaxScoringBatchesPerRun(env), getMaxScoringBatchesPerRun(env)));
+  // Phase 6F fix: when the queue-health controller passes an elevated
+  // maxBatches (starving), clamp it against an INDEPENDENT hard cap — not the
+  // normal per-run max — otherwise the controller's signal is silently lost.
+  // Also raise the drain limit so the extra batches can actually be pulled.
+  const scoringBatchSize = Math.max(1, getScoringBatchSize(env));
+  const normalMaxBatches = getMaxScoringBatchesPerRun(env);
+  const hardMaxBatches = Math.max(normalMaxBatches, getStarvingMaxBatches(env, normalMaxBatches), 1);
+  const maxBatches = Math.max(1, Math.min(options.maxBatches ?? normalMaxBatches, hardMaxBatches));
+  const baseDrainLimit = Math.max(1, Math.min(options.limit ?? getCandidateBacklogDrainLimit(env), getCandidateBacklogDrainLimit(env)));
+  const drainLimit = Math.max(baseDrainLimit, maxBatches * scoringBatchSize);
+  const batchSize = Math.max(1, Math.min(scoringBatchSize, drainLimit));
 
   for (let batchNo = 0; batchNo < maxBatches && result.candidatesPulled < drainLimit; batchNo++) {
     const remaining = drainLimit - result.candidatesPulled;
@@ -113,7 +134,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     if (pending.length === 0) break;
     result.candidatesPulled += pending.length;
 
-    const budget = await checkScoringBudgetForBacklog(env);
+    const budget = await checkScoringBudgetForBacklog(env, options.scoringCallBonus ?? 0);
     if (!budget.allowed) {
       result.stoppedByBudget = true;
       result.error = budget.reason;
@@ -134,7 +155,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesClaimed += claimed.length;
     result.batchesAttempted++;
 
-    const batchResult = await processClaimedBatch(env, claimed);
+    const batchResult = await processClaimedBatch(env, claimed, options.scoringCallBonus ?? 0);
     result.candidatesScored += batchResult.scored;
     result.candidatesSelected += batchResult.selected;
     result.candidatesRejected += batchResult.rejected;
@@ -151,7 +172,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   return result;
 }
 
-async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
+async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCallBonus = 0): Promise<{
   scored: number;
   selected: number;
   rejected: number;
@@ -171,7 +192,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
     return { ...zero, failed: rows.length, error: 'category_not_found' };
   }
 
-  const budget = await checkScoringBudgetForBacklog(env);
+  const budget = await checkScoringBudgetForBacklog(env, scoringCallBonus);
   if (!budget.allowed) {
     await releaseClaimedCandidatesToPending(env, rows.map(r => r.id), budget.reason ?? 'ai_budget_exceeded', { decrementAttempt: true });
     return { ...zero, stoppedByBudget: true, error: budget.reason };
@@ -221,10 +242,25 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
   const whitelist = await loadWhitelistedAccounts(env, category.id);
   const channels = await loadChannels(env, category.id);
   const items = prepared.map(x => x.item);
+  // Full per-item attribution context (used only when AI_COST_ATTRIBUTION_ENABLED).
+  const attributionItems = prepared.map(x => ({
+    sourceAccount: x.item.sourceAccount,
+    sourceId: x.row.source_id ?? null,
+    candidateId: x.row.id,
+    discoveryItemId: itemIdForCandidate(x.row.id),
+    channelId: channels[0]?.id ?? null,
+  }));
 
   let aiResults: AIGateResult[];
+  const translateAfterGates = String((env as any).BACKLOG_TRANSLATE_AFTER_GATES_ENABLED ?? '').toLowerCase() === 'true';
   try {
-    aiResults = await runAIGate(env, items, category, whitelist, channels);
+    // Phase 6H: when enabled, only SCORE here (cheap Claude batch). Translation
+    // (the expensive Gemini step) is deferred until after the deterministic
+    // dedupe/theme/audience gates, so we never pay to translate items that get
+    // rejected. When disabled, behavior is identical to before (runAIGate).
+    aiResults = translateAfterGates
+      ? await scoreItems(env, items, category, whitelist, channels, attributionItems)
+      : await runAIGate(env, items, category, whitelist, channels);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await releaseClaimedCandidatesToPending(env, prepared.map(x => x.row.id), `scoring_error: ${msg}`);
@@ -243,107 +279,356 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
   let selected = 0;
   let queued = 0;
 
+  if (!translateAfterGates) {
+    // ── Legacy path: decide + queue interleaved (unchanged behavior). ──
+    for (let i = 0; i < prepared.length; i++) {
+      const candidate = prepared[i]!;
+      const ai = aiResults[i];
+      if (!ai) {
+        await releaseClaimedCandidatesToPending(env, [candidate.row.id], 'missing_ai_result');
+        continue;
+      }
+
+      const ev = await evaluateCandidateDb(env, channels, candidate, ai);
+      const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+      const counts = await persistCandidateDecision(env, channels, category, candidate, ai, ev, rejectReason);
+      selected += counts.selected;
+      rejected += counts.rejected;
+      queued += counts.queued;
+    }
+    return { ...zero, scored: prepared.length, selected, rejected, queued, skipped };
+  }
+
+  // ── Phase 6H path: decide everything, translate survivors, then queue. ──
+  const seenFingerprints = new Set<string>();
+  const seenStoryClusters = new Set<string>();
+  const seenStoryKeys = new Set<string>();
+  const themeBatchCounts = new Map<string, number>();
+  const decisions: Array<{
+    candidate: typeof prepared[number];
+    ai: AIGateResult;
+    ev: CandidateEvaluation;
+    rejectReason: string | null;
+  } | null> = [];
+
   for (let i = 0; i < prepared.length; i++) {
     const candidate = prepared[i]!;
     const ai = aiResults[i];
     if (!ai) {
       await releaseClaimedCandidatesToPending(env, [candidate.row.id], 'missing_ai_result');
+      decisions.push(null);
       continue;
     }
 
-    const itemId = itemIdForCandidate(candidate.row.id);
-    const storyClusterKey = buildCryptoStoryClusterKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
-    const themeKey = buildCryptoThemeKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
-    const recentTopicDuplicate = await hasRecentTopicMatchForAnySemanticChannel(env, channels, ai.topicFingerprint);
-    const recentStoryClusterDuplicate = await hasRecentStoryClusterMatchForAnySemanticChannel(env, channels, storyClusterKey);
-    const themeCapRejectReason = await getThemeCapRejectReason(env, channels, themeKey);
-    const audienceRejectReason = getSourceAudienceRejectReason(candidate.item, ai);
-    const rejectReason = recentTopicDuplicate
-      ? 'similar_topic_recent_channel'
-      : recentStoryClusterDuplicate
-        ? 'similar_story_cluster_recent_channel'
-        : themeCapRejectReason
-          ?? audienceRejectReason
-          ?? getItemRejectReason(ai, category, candidate.item, similarTopicRejects.has(i));
-    const isRejected = rejectReason !== null;
+    const ev = await evaluateCandidateDb(env, channels, candidate, ai);
 
-    await saveDiscoveryItem(env, itemId, candidate.row.run_id ?? 'backlog', candidate.row.category_id, candidate.item, ai, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason);
-    await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai, {
-      topicFingerprint: ai.topicFingerprint,
-      storyClusterKey,
-      themeKey,
-      recentTopicDuplicate,
-      recentStoryClusterDuplicate,
-      themeCapRejectReason,
-      audienceRejectReason,
-    });
-
-    if (isRejected) {
-      await recordDedupeKeys(env, candidate.keys, itemId);
-      await updateCandidateStatus(env, candidate.row.id, 'ai_rejected', { lastError: rejectReason ?? undefined });
-      rejected++;
-      continue;
+    // Intra-batch dedupe: items earlier in this same batch are not yet in the
+    // DB, so mirror the legacy "queued rows block later items" behavior with
+    // in-memory sets that we update only when an item survives the gates.
+    const fpNorm = normalizeFingerprintForBatch(ai.topicFingerprint);
+    if (!ev.recentTopicDuplicate && fpNorm && seenFingerprints.has(fpNorm)) ev.recentTopicDuplicate = true;
+    if (!ev.recentStoryClusterDuplicate && ev.storyClusterKey && seenStoryClusters.has(ev.storyClusterKey)) ev.recentStoryClusterDuplicate = true;
+    // Phase 6K intra-batch story-key dedup (only when reject is active).
+    if (!ev.storyKeyRejectReason && ev.storyKey
+        && isStoryIntelligenceRejectActive(env)
+        && seenStoryKeys.has(ev.storyKey)
+        && !(isStoryFollowupAllowEnabled(env) && isFollowUpEventType(ai.storyFields?.eventType))) {
+      ev.storyKeyRejectReason = 'similar_story_key_recent_channel';
     }
-
-    selected++;
-    await recordDedupeKeys(env, candidate.keys, itemId);
-    await saveDiscoveryMedia(env, itemId, candidate.item);
-
-    const mediaRes = resolveMedia(candidate.item.media, category.media_mode as any);
-    const mediaTypes = extractMediaTypes(candidate.item.media, category.media_mode as any);
-    let candidateQueued = 0;
-
-    for (const channel of channels) {
-      if (!channel.enabled) continue;
-      const translationKey = channelTranslationKey(channel.id);
-      const translation = ai.translations[translationKey] ?? ai.translations[channel.language];
-      if (!translation) {
-        await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'translation_missing', 'translation_missing', ai, { channelId: channel.id, language: channel.language });
-        continue;
-      }
-
-      const rule = await runRuleGate(env, ai, channel, candidate.item.mediaUrlExpiresSoon);
-      if (!rule.approved || !rule.scheduledAt) {
-        await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', rule.reason ?? 'rule_gate_rejected', ai, { channelId: channel.id, language: channel.language });
-        continue;
-      }
-
-      if (normalizeAccount(candidate.item.sourceAccount) === 'whale_alert') {
-        const alreadyQueued = await countRecentWhaleAlertQueueItems(env, channel.id);
-        if (alreadyQueued >= 2) {
-          await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', 'whale_alert_daily_cap', ai, { channelId: channel.id, language: channel.language, alreadyQueued });
-          continue;
-        }
-      }
-
-      const scheduledAt = await adjustScheduledAtForFairSourceSpacing(env, channel, candidate.item.sourceAccount, rule.scheduledAt);
-      const inserted = await saveQueueItem(env, {
-        candidateId: candidate.row.id,
-        itemId,
-        channelId: channel.id,
-        language: channel.language,
-        sourceUrl: candidate.item.sourceUrl,
-        captionShort: translation.captionShort,
-        captionFull: translation.captionFull,
-        hashtags: translation.hashtags,
-        method: mediaRes.method,
-        mediaUrls: mediaRes.mediaUrls,
-        thumbnailUrls: mediaRes.thumbnailUrls,
-        mediaTypes,
-        scheduledAt,
-      });
-
-      if (inserted) {
-        candidateQueued++;
-        queued++;
-        await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'queue_created', null, ai, { channelId: channel.id, language: channel.language, scheduledAt: rule.scheduledAt });
+    if (!ev.themeCapRejectReason && ev.themeKey) {
+      const cap = getCryptoThemeDailyCap(ev.themeKey);
+      if (cap != null && (themeBatchCounts.get(ev.themeKey) ?? 0) >= cap) {
+        ev.themeCapRejectReason = `theme_daily_cap:${ev.themeKey}`;
       }
     }
 
-    await updateCandidateStatus(env, candidate.row.id, candidateQueued > 0 ? 'queued' : 'ai_selected');
+    const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+    if (rejectReason === null) {
+      if (fpNorm) seenFingerprints.add(fpNorm);
+      if (ev.storyClusterKey) seenStoryClusters.add(ev.storyClusterKey);
+      if (ev.storyKey) seenStoryKeys.add(ev.storyKey);
+      if (ev.themeKey) themeBatchCounts.set(ev.themeKey, (themeBatchCounts.get(ev.themeKey) ?? 0) + 1);
+    }
+    decisions.push({ candidate, ai, ev, rejectReason });
+  }
+
+  // Translate ONLY survivors (cost saving) — one batched call.
+  const survivorIdx = decisions
+    .map((d, i) => (d && d.rejectReason === null ? i : -1))
+    .filter(i => i >= 0);
+  if (survivorIdx.length > 0) {
+    const survivorItems = survivorIdx.map(i => prepared[i]!.item);
+    const survivorAi = survivorIdx.map(i => decisions[i]!.ai);
+    const survivorAttribution = survivorIdx.map(i => ({
+      sourceAccount: prepared[i]!.item.sourceAccount,
+      sourceId: prepared[i]!.row.source_id ?? null,
+      candidateId: prepared[i]!.row.id,
+      discoveryItemId: itemIdForCandidate(prepared[i]!.row.id),
+      channelId: channels[0]?.id ?? null,
+    }));
+    try {
+      const translated = await attachTranslations(env, survivorItems, survivorAi, category, channels, survivorAttribution);
+      survivorIdx.forEach((i, k) => { decisions[i]!.ai = translated[k]!; });
+    } catch (err) {
+      // A transient translation-provider failure must NOT strand survivors in
+      // 'claimed'. Release them back to pending (retryable) and skip persisting
+      // them this tick; already-rejected items below are still recorded.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('[BacklogDrain] attachTranslations failed; releasing survivors to retry:', msg);
+      await releaseClaimedCandidatesToPending(
+        env,
+        survivorIdx.map(i => prepared[i]!.row.id),
+        `translation_error: ${msg}`,
+        { decrementAttempt: true },
+      );
+      survivorIdx.forEach(i => { decisions[i] = null; });
+      skipped += survivorIdx.length;
+    }
+  }
+
+  for (const decision of decisions) {
+    if (!decision) continue;
+    const { candidate, ai, ev, rejectReason } = decision;
+    const counts = await persistCandidateDecision(env, channels, category, candidate, ai, ev, rejectReason);
+    selected += counts.selected;
+    rejected += counts.rejected;
+    queued += counts.queued;
   }
 
   return { ...zero, scored: prepared.length, selected, rejected, queued, skipped };
+}
+
+// ── Phase 6H helpers (shared by both paths) ───────────────────
+
+interface CandidateEvaluation {
+  itemId: string;
+  storyClusterKey: string | null;
+  themeKey: string | null;
+  recentTopicDuplicate: boolean;
+  recentStoryClusterDuplicate: boolean;
+  themeCapRejectReason: string | null;
+  audienceRejectReason: string | null;
+  storyKey: string | null;
+  storyKeyRejectReason: string | null;
+}
+
+function normalizeFingerprintForBatch(value: unknown): string | null {
+  const fp = String(value ?? '').trim().toLowerCase();
+  if (!fp || fp.startsWith('ns-') || fp.startsWith('fp-') || fp.startsWith('err-') || fp.startsWith('budget-')) return null;
+  return fp;
+}
+
+async function evaluateCandidateDb(
+  env: Env,
+  channels: ChannelRow[],
+  candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
+  ai: AIGateResult,
+): Promise<CandidateEvaluation> {
+  const itemId = itemIdForCandidate(candidate.row.id);
+  const storyClusterKey = buildCryptoStoryClusterKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
+  const themeKey = buildCryptoThemeKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
+  const recentTopicDuplicate = await hasRecentTopicMatchForAnySemanticChannel(env, channels, ai.topicFingerprint);
+  const recentStoryClusterDuplicate = await hasRecentStoryClusterMatchForAnySemanticChannel(env, channels, storyClusterKey);
+  const themeCapRejectReason = await getThemeCapRejectReason(env, channels, themeKey);
+  const audienceRejectReason = getSourceAudienceRejectReason(candidate.item, ai);
+
+  // Phase 6K: story-key de-dup (active only when ENABLED + REJECT_ENABLED).
+  const storyKey = ai.storyKey ?? null;
+  let storyKeyRejectReason: string | null = null;
+  if (storyKey && isStoryIntelligenceRejectActive(env)) {
+    const channelId = channels[0]?.id ?? null;
+    const seen = await storyKeySeenInWindow(env, {
+      categoryId: candidate.row.category_id,
+      channelId,
+      storyKey,
+      windowHours: getStoryIntelligenceWindowHours(env),
+    });
+    if (shouldRejectByStoryKey({
+      rejectEnabled: true,
+      storyKeySeenInWindow: seen,
+      eventType: ai.storyFields?.eventType,
+      followupAllowEnabled: isStoryFollowupAllowEnabled(env),
+    })) {
+      storyKeyRejectReason = 'similar_story_key_recent_channel';
+    }
+  }
+
+  return { itemId, storyClusterKey, themeKey, recentTopicDuplicate, recentStoryClusterDuplicate, themeCapRejectReason, audienceRejectReason, storyKey, storyKeyRejectReason };
+}
+
+function resolveCandidateRejectReason(
+  ev: CandidateEvaluation,
+  ai: AIGateResult,
+  category: CategoryRow,
+  item: NormalizedItem,
+  similarTopicRejected: boolean,
+): string | null {
+  return ev.recentTopicDuplicate
+    ? 'similar_topic_recent_channel'
+    : ev.recentStoryClusterDuplicate
+      ? 'similar_story_cluster_recent_channel'
+      : ev.storyKeyRejectReason
+        ?? ev.themeCapRejectReason
+        ?? ev.audienceRejectReason
+        ?? getItemRejectReason(ai, category, item, similarTopicRejected);
+}
+
+/**
+ * Persist one candidate decision and, when accepted, run the publish gates and
+ * queue per channel. Returns count deltas. Shared by both drain paths so the
+ * legacy behavior and the gated-translation behavior cannot drift apart.
+ */
+async function persistCandidateDecision(
+  env: Env,
+  channels: ChannelRow[],
+  category: CategoryRow,
+  candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
+  ai: AIGateResult,
+  ev: CandidateEvaluation,
+  rejectReason: string | null,
+): Promise<{ selected: number; rejected: number; queued: number }> {
+  const itemId = ev.itemId;
+  const isRejected = rejectReason !== null;
+
+  await saveDiscoveryItem(env, itemId, candidate.row.run_id ?? 'backlog', candidate.row.category_id, candidate.item, ai, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason);
+  await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai, {
+    topicFingerprint: ai.topicFingerprint,
+    storyClusterKey: ev.storyClusterKey,
+    themeKey: ev.themeKey,
+    recentTopicDuplicate: ev.recentTopicDuplicate,
+    recentStoryClusterDuplicate: ev.recentStoryClusterDuplicate,
+    themeCapRejectReason: ev.themeCapRejectReason,
+    audienceRejectReason: ev.audienceRejectReason,
+    storyKey: ai.storyKey ?? null, // Phase 6K observe-only: recorded, not enforced
+  });
+
+  // Phase 6K: also record into the queryable story_intelligence_events table
+  // (needs migration 0019) so de-dup/reporting can use an indexed lookup.
+  // IMPORTANT: at this point an AI-selected item has NOT yet been queued — it
+  // may still fail the rule gate, lack a translation, or hit the source cap. So
+  // we record 'selected' here and only record 'queued' after a real
+  // publish_queue row is inserted (below). This prevents a never-queued "ghost"
+  // from locking a story_key and blocking a better version of the same story.
+  if (ai.storyKey && isStoryIntelligenceEnabled(env)) {
+    await recordStoryEvent(env, {
+      categoryId: candidate.row.category_id,
+      channelId: channels[0]?.id ?? null,
+      storyKey: ai.storyKey,
+      fields: ai.storyFields ?? null,
+      topicFingerprint: ai.topicFingerprint,
+      sourceId: candidate.row.source_id ?? null,
+      sourceAccount: candidate.item.sourceAccount ?? null,
+      discoveryItemId: itemId,
+      candidateId: candidate.row.id,
+      status: isRejected ? 'rejected' : 'selected',
+    });
+  } else if (isStoryIntelligenceEnabled(env)) {
+    // 6K is on but the model returned no usable story fields — track it so the
+    // report can surface a missing_pct instead of looking falsely healthy.
+    await recordStoryEvent(env, {
+      categoryId: candidate.row.category_id,
+      channelId: channels[0]?.id ?? null,
+      storyKey: '__missing__',
+      fields: null,
+      topicFingerprint: ai.topicFingerprint,
+      sourceId: candidate.row.source_id ?? null,
+      sourceAccount: candidate.item.sourceAccount ?? null,
+      discoveryItemId: itemId,
+      candidateId: candidate.row.id,
+      status: 'story_key_missing',
+    });
+  }
+
+  if (isRejected) {
+    await recordDedupeKeys(env, candidate.keys, itemId);
+    await updateCandidateStatus(env, candidate.row.id, 'ai_rejected', { lastError: rejectReason ?? undefined });
+    return { selected: 0, rejected: 1, queued: 0 };
+  }
+
+  await recordDedupeKeys(env, candidate.keys, itemId);
+  await saveDiscoveryMedia(env, itemId, candidate.item);
+
+  const mediaRes = resolveMedia(candidate.item.media, category.media_mode as any);
+  const mediaTypes = extractMediaTypes(candidate.item.media, category.media_mode as any);
+  let candidateQueued = 0;
+
+  for (const channel of channels) {
+    if (!channel.enabled) continue;
+    const translationKey = channelTranslationKey(channel.id);
+    const translation = ai.translations[translationKey] ?? ai.translations[channel.language];
+    if (!translation) {
+      await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'translation_missing', 'translation_missing', ai, { channelId: channel.id, language: channel.language });
+      continue;
+    }
+
+    const rule = await runRuleGate(env, ai, channel, candidate.item.mediaUrlExpiresSoon);
+    if (!rule.approved || !rule.scheduledAt) {
+      await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', rule.reason ?? 'rule_gate_rejected', ai, { channelId: channel.id, language: channel.language });
+      continue;
+    }
+
+    if (normalizeAccount(candidate.item.sourceAccount) === 'whale_alert') {
+      const alreadyQueued = await countRecentWhaleAlertQueueItems(env, channel.id);
+      if (alreadyQueued >= 2) {
+        await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', 'whale_alert_daily_cap', ai, { channelId: channel.id, language: channel.language, alreadyQueued });
+        continue;
+      }
+    }
+
+    // Phase 6I: enforce channels.max_posts_per_source_per_day. This column is
+    // configured in production (=5) but was never enforced anywhere, which is
+    // why a few outlets dominated the channel. Flag-gated + null-safe so the
+    // default behavior is unchanged until the operator opts in.
+    if (isSourceDailyCapEnabled(env) && channel.max_posts_per_source_per_day != null) {
+      const cap = channel.max_posts_per_source_per_day;
+      const alreadyFromSource = await countTodaysQueueItemsForSource(env, channel.id, candidate.item.sourceAccount);
+      if (alreadyFromSource >= cap) {
+        await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', 'source_daily_cap', ai, { channelId: channel.id, language: channel.language, sourceAccount: candidate.item.sourceAccount, alreadyFromSource, cap });
+        continue;
+      }
+    }
+
+    const scheduledAt = await adjustScheduledAtForFairSourceSpacing(env, channel, candidate.item.sourceAccount, rule.scheduledAt);
+    const inserted = await saveQueueItem(env, {
+      candidateId: candidate.row.id,
+      itemId,
+      channelId: channel.id,
+      language: channel.language,
+      sourceUrl: candidate.item.sourceUrl,
+      captionShort: translation.captionShort,
+      captionFull: translation.captionFull,
+      hashtags: translation.hashtags,
+      method: mediaRes.method,
+      mediaUrls: mediaRes.mediaUrls,
+      thumbnailUrls: mediaRes.thumbnailUrls,
+      mediaTypes,
+      scheduledAt,
+    });
+
+    if (inserted) {
+      candidateQueued++;
+      await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'queue_created', null, ai, { channelId: channel.id, language: channel.language, scheduledAt: rule.scheduledAt });
+      // Now (and only now) this story_key truly reached the queue → record it so
+      // storyKeySeenInWindow (which matches queued/published) can de-dup later.
+      if (ai.storyKey && isStoryIntelligenceEnabled(env)) {
+        await recordStoryEvent(env, {
+          categoryId: candidate.row.category_id,
+          channelId: channel.id,
+          storyKey: ai.storyKey,
+          fields: ai.storyFields ?? null,
+          topicFingerprint: ai.topicFingerprint,
+          sourceId: candidate.row.source_id ?? null,
+          sourceAccount: candidate.item.sourceAccount ?? null,
+          discoveryItemId: itemId,
+          candidateId: candidate.row.id,
+          status: 'queued',
+        });
+      }
+    }
+  }
+
+  await updateCandidateStatus(env, candidate.row.id, candidateQueued > 0 ? 'queued' : 'ai_selected');
+  return { selected: 1, rejected: 0, queued: candidateQueued };
 }
 
 function parseCandidateRow(row: AICandidateRow): { item: NormalizedItem; keys: string[] } | null {
@@ -357,8 +642,10 @@ function parseCandidateRow(row: AICandidateRow): { item: NormalizedItem; keys: s
   }
 }
 
-async function checkScoringBudgetForBacklog(env: Env): Promise<ScoringBudgetSnapshot> {
-  const maxCalls = Math.max(0, parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0);
+async function checkScoringBudgetForBacklog(env: Env, callBonus = 0): Promise<ScoringBudgetSnapshot> {
+  const baseMaxCalls = Math.max(0, parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0);
+  // Phase 6F: while starving, the controller may grant a temporary call bonus.
+  const maxCalls = baseMaxCalls > 0 ? baseMaxCalls + Math.max(0, Math.floor(callBonus)) : baseMaxCalls;
   const tokenBudget = Math.max(0, parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0);
   const fallback: ScoringBudgetSnapshot = { allowed: true, callsToday: 0, tokensToday: 0, maxCalls, tokenBudget };
   if (!env.DB || (maxCalls === 0 && tokenBudget === 0)) return fallback;
@@ -698,6 +985,43 @@ function normalizeAccount(value: unknown): string {
     .trim()
     .toLowerCase()
     .replace(/^@+/, '');
+}
+
+function isSourceDailyCapEnabled(env: Env): boolean {
+  return String((env as any).PUBLISH_ENFORCE_SOURCE_DAILY_CAP_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+/**
+ * Phase 6I: count publish_queue items (scheduled/retry/publishing/published)
+ * for a given source account on the current local day. publish_queue has no
+ * source_account column, so we join discovery_items via item_id (same join the
+ * operator's distribution query uses). Null/error-safe.
+ */
+async function countTodaysQueueItemsForSource(
+  env: Env,
+  channelId: string,
+  sourceAccount: string,
+): Promise<number> {
+  const account = normalizeAccount(sourceAccount);
+  if (!account) return 0;
+  try {
+    // Local-day boundary: compute "start of today" in the channel timezone by
+    // offsetting from UTC midnight is fragile; instead use a rolling 24h window
+    // which is what the whale cap uses and is robust across DST/timezones.
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM publish_queue q
+      JOIN discovery_items d ON d.id = q.item_id
+      WHERE q.channel_id = ?
+        AND q.status IN ('scheduled','retry','publishing','published')
+        AND LOWER(REPLACE(d.source_account, '@', '')) = ?
+        AND COALESCE(q.published_at, q.scheduled_at) >= unixepoch('now', '-24 hours')
+    `).bind(channelId, account).first<{ count: number }>();
+    return Number(row?.count ?? 0);
+  } catch (err) {
+    console.warn('[BacklogDrain] source daily cap check skipped:', err instanceof Error ? err.message : String(err));
+    return 0;
+  }
 }
 
 function channelTranslationKey(channelId: string): string {
