@@ -1,0 +1,47 @@
+import { describe, expect, it } from 'vitest';
+import {
+  getGenericCryptoEditorialRejectReason,
+  getSourceAudienceRejectReason,
+} from '../apps/worker-api/src/services/story-quality-guard';
+
+describe('generic editorial quality gate', () => {
+  it('rejects generic marketing or campaign language even when the brand name is new', () => {
+    expect(getGenericCryptoEditorialRejectReason(
+      'randomprotocol',
+      'Our integration is now live. Get access to the new crypto product and start trading today.',
+    )).toBe('iran_audience_generic_marketing_or_campaign');
+  });
+
+  it('rejects low-utility private asset access stories without relying on a specific company name', () => {
+    expect(getGenericCryptoEditorialRejectReason(
+      'marketnews',
+      'Retail access to private assets expands through tokenized stocks and private shares.',
+    )).toBe('iran_audience_low_utility_product_access');
+  });
+
+  it('rejects evergreen interviews and explainers when there is no material market or user-impact signal', () => {
+    expect(getGenericCryptoEditorialRejectReason(
+      'cointelegraph',
+      'Watch the full interview to learn what crypto founders think about adoption.',
+    )).toBe('iran_audience_evergreen_or_interview_low_utility');
+  });
+
+  it('rejects soft speculation when the text has no concrete evidence or event', () => {
+    expect(getGenericCryptoEditorialRejectReason(
+      'watcherguru',
+      'This could signal growing adoption and may pave the way for a bullish crypto future.',
+    )).toBe('iran_audience_soft_speculation_without_evidence');
+  });
+
+  it('allows material crypto news with concrete security, regulatory, or liquidity impact', () => {
+    expect(getGenericCryptoEditorialRejectReason(
+      'securityresearcher',
+      'A DeFi protocol exploit stole $120 million and the team froze affected smart contracts.',
+    )).toBeNull();
+
+    expect(getSourceAudienceRejectReason({
+      sourceAccount: 'CoinDesk',
+      text: 'The SEC approved a spot Bitcoin ETF filing after months of regulatory review.',
+    })).toBeNull();
+  });
+});
