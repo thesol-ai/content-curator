@@ -55,6 +55,9 @@ export function getSourceAudienceRejectReason(
     return 'iran_audience_private_asset_tokenization_low_utility';
   }
 
+  const genericRejectReason = getGenericCryptoEditorialRejectReason(account, combined, ai);
+  if (genericRejectReason) return genericRejectReason;
+
   return null;
 }
 
@@ -264,6 +267,116 @@ function isPrivateEquityRetailAccessWithoutIranUtility(body: string): boolean {
     'rwa',
     'tokenized equity',
     'crypto platforms',
+  ]);
+}
+
+export function getGenericCryptoEditorialRejectReason(
+  sourceAccount: unknown,
+  text: unknown,
+  ai?: Pick<AIGateResult, 'score' | 'topicFingerprint' | 'riskFlags' | 'publishPriority'>,
+): string | null {
+  const account = normalizeAccount(sourceAccount);
+  const body = normalizeText(text);
+  const score = Number(ai?.score ?? NaN);
+
+  if (!body) return 'iran_audience_empty_context';
+
+  if (
+    hasAny(body, ['cancelled', 'canceled'])
+    && hasAny(body, ['crypto platforms', 'tokenized', 'tokenized equity', 'rwa', 'rwa markets'])
+    && hasAny(body, ['product', 'market', 'markets', 'equity'])
+  ) {
+    return null;
+  }
+
+  if (isEvergreenInterviewOrExplainer(body) && !hasMaterialCryptoImpact(body)) {
+    return 'iran_audience_evergreen_or_interview_low_utility';
+  }
+
+  if (isGenericMarketingOrCampaignLanguage(body) && !hasMaterialCryptoImpact(body)) {
+    return 'iran_audience_generic_marketing_or_campaign';
+  }
+
+  if (isLowUtilityProductAccessStory(body) && !hasMaterialCryptoImpact(body)) {
+    return 'iran_audience_low_utility_product_access';
+  }
+
+  if (isSoftSpeculationWithoutEvidence(body)) {
+    return 'iran_audience_soft_speculation_without_evidence';
+  }
+
+  if (isProtocolOrProjectUpdate(body) && !hasMaterialCryptoImpact(body)) {
+    return 'iran_audience_project_update_without_material_impact';
+  }
+
+  if ((PROMOTIONAL_SOURCE_ACCOUNTS.has(account) || WATCH_SOURCE_ACCOUNTS.has(account))
+    && Number.isFinite(score)
+    && score < 85
+    && !hasMaterialCryptoImpact(body)) {
+    return 'iran_audience_watch_source_requires_material_impact';
+  }
+
+  return null;
+}
+
+function hasMaterialCryptoImpact(body: string): boolean {
+  return hasAny(body, [
+    'hack', 'hacked', 'exploit', 'exploited', 'stolen', 'drained', 'blacklist', 'freeze', 'froze',
+    'security incident', 'vulnerability', 'phishing', 'private key', 'seed phrase', 'wallet drained',
+    'sec', 'cftc', 'regulator', 'regulatory', 'lawsuit', 'settlement', 'charged', 'indicted',
+    'approved', 'approval', 'filing', 's-1', '19b-4', 'listing announcement', 'delisting',
+    'mainnet upgrade', 'outage', 'governance vote', 'hard fork', 'exploit fix',
+    'net inflow', 'net outflow', 'inflow', 'outflow', 'liquidation', 'liquidations',
+    'open interest', 'funding rate', 'exchange reserves', 'minted', 'burned', 'treasury',
+    'reserve', 'reserves', 'billion', 'million', '$', '%',
+    'هک', 'سرقت', 'پولشویی', 'مسدود', 'مسدودسازی', 'قانون', 'رگولاتوری', 'کمیسیون',
+    'شکایت', 'تسویه', 'تأیید', 'پرونده', 'لیست شدن', 'نقدینگی', 'لیکویید',
+    'ورودی', 'خروجی', 'ذخایر', 'خزانه', 'میلیون', 'میلیارد',
+  ]) || /(?:[$€£]\s*)?[0-9۰-۹٠-٩][0-9۰-۹٠-٩,._\s]*(?:%|percent|bps|million|billion|trillion|m|b|k|btc|eth|usdt|usdc)/iu.test(body);
+}
+
+function isGenericMarketingOrCampaignLanguage(body: string): boolean {
+  return hasAny(body, [
+    'now live', 'is live', 'goes live', 'powered by', 'get access', 'join now', 'start trading',
+    'trade now', 'limited time', 'campaign', 'contest', 'competition', 'voucher', 'reward',
+    'rewards', 'claim', 'claim your share', "don't miss out", 'learn more', 'full interview',
+    'watch the full interview', 'ecosystem news', 'integration is live', 'partnership is live',
+    'اکنون فعال', 'هم اکنون فعال', 'دسترسی پیدا کنید', 'کمپین', 'مسابقه', 'جایزه', 'پاداش',
+  ]);
+}
+
+function isLowUtilityProductAccessStory(body: string): boolean {
+  return hasAny(body, [
+    'private assets', 'retail access', 'tokenized stocks', 'pre-ipo', 'pre ipo',
+    'synthetic stock', 'stock token', 'tokenized shares', 'trade tokenized',
+    'direct stock offering', 'equity product', 'private shares',
+    'دارایی خصوصی', 'سهام خصوصی', 'سهام توکنیزه', 'عرضه سهام',
+  ]);
+}
+
+function isEvergreenInterviewOrExplainer(body: string): boolean {
+  return hasAny(body, [
+    'what is', 'how to', 'guide', 'explainer', 'thread', 'opinion', 'interview', 'podcast',
+    'watch:', 'watch ', 'read more', 'deep dive', 'we break down', 'everything you need to know',
+    'راهنما', 'مصاحبه', 'پادکست', 'همه چیز درباره', 'بررسی می کنیم',
+  ]);
+}
+
+function isSoftSpeculationWithoutEvidence(body: string): boolean {
+  if (hasMaterialCryptoImpact(body)) return false;
+  return hasAny(body, [
+    'could signal', 'may signal', 'might signal', 'could indicate', 'may indicate', 'could pave the way',
+    'potentially', 'potential for', 'suggests growing interest', 'shows growing adoption',
+    'canary in the macro coal mine', 'could be huge', 'bullish', 'bearish',
+    'می تواند نشان دهنده', 'می تواند زمینه ساز', 'پتانسیل', 'نشانه ای از رشد پذیرش',
+  ]);
+}
+
+function isProtocolOrProjectUpdate(body: string): boolean {
+  return hasAny(body, [
+    'supports', 'adds support', 'integrates', 'integration', 'partners with', 'partnership',
+    'launches on', 'available on', 'deployed on', 'built on', 'powered by',
+    'پشتیبانی از', 'یکپارچه سازی', 'همکاری با', 'روی شبکه', 'بر بستر',
   ]);
 }
 

@@ -51,6 +51,30 @@ const MARKET_IMPACT_COHORTS = [
   ['VitalikButerin', 'ethereum', 'solana', 'base', 'chainlink'],
 ];
 
+const GENERIC_LOW_QUALITY_QUERY_EXCLUSIONS = [
+  '-giveaway',
+  '-contest',
+  '-competition',
+  '-voucher',
+  '-vouchers',
+  '-rewards',
+  '-campaign',
+  '-referral',
+  '-"claim your share"',
+  '-"watch the full interview"',
+  '-"full interview"',
+  '-"get access"',
+  '-"now live"',
+  '-"limited time"',
+  '-"retail access"',
+  '-"private assets"',
+  '-"trade now"',
+];
+
+function withGenericLowQualityExclusions(parts: string[]): string[] {
+  return [...parts, ...GENERIC_LOW_QUALITY_QUERY_EXCLUSIONS];
+}
+
 export const cryptoSourceStrategy: CategorySourceStrategy = {
   id: 'crypto',
   canHandleSource: (source) => isCryptoRotationSource(source),
@@ -180,7 +204,7 @@ function buildProfileTopicContent(
 }
 
 function buildCoreNewsTopicGate(): string {
-  return [
+  return withGenericLowQualityExclusions([
     '(',
     'crypto OR bitcoin OR ethereum OR XRP OR ripple OR dogecoin OR DOGE OR SHIB OR TON OR',
     'stablecoin OR USDT OR Tether OR USDC OR "spot ETF" OR "Bitcoin ETF" OR "Ethereum ETF" OR',
@@ -188,18 +212,18 @@ function buildCoreNewsTopicGate(): string {
     '"digital asset" OR SEC OR CFTC OR regulation OR lawsuit OR approval OR filing OR',
     'launch OR partnership OR acquisition OR funding OR hack OR exploit OR upgrade OR mainnet OR listing',
     ')',
-  ].join(' ');
+  ]).join(' ');
 }
 
 function buildExpertSignalsTopicGate(): string {
-  return [
+  return withGenericLowQualityExclusions([
     '(',
     'BTC OR bitcoin OR ETH OR ethereum OR XRP OR DOGE OR SHIB OR TON OR',
     'ETF OR SEC OR CFTC OR liquidity OR liquidation OR liquidations OR',
     '"funding rate" OR "open interest" OR onchain OR whale OR USDT OR Tether OR',
     'DeFi OR RWA OR listing OR "crypto hack" OR "DeFi hack" OR "smart contract exploit" OR "protocol exploit" OR governance OR upgrade OR mainnet',
     ')',
-  ].join(' ');
+  ]).join(' ');
 }
 
 function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, mode: ApifyRotationMode, maxItems: number): ApifyRotationPlan {
@@ -217,7 +241,7 @@ function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, m
 }
 
 function buildMarketImpactTopicGate(): string {
-  return [
+  return withGenericLowQualityExclusions([
     '(',
     'BTC OR bitcoin OR ETH OR ethereum OR XRP OR DOGE OR SHIB OR TON OR',
     'ETF OR "spot ETF" OR "ETF flows" OR USDT OR Tether OR stablecoin OR',
@@ -237,7 +261,7 @@ function buildMarketImpactTopicGate(): string {
     '-casino',
     '-prediction',
     '-astrology',
-  ].join(' ');
+  ]).join(' ');
 }
 
 function buildTokenProjectWatchPlan(source: ApifyRotationSourceRow, bucket: number, maxItems: number): ApifyRotationPlan {
@@ -255,7 +279,7 @@ function buildTokenProjectWatchPlan(source: ApifyRotationSourceRow, bucket: numb
 }
 
 function buildTokenProjectWatchTopicGate(): string {
-  return [
+  return withGenericLowQualityExclusions([
     '(',
     '"mainnet" OR "testnet" OR "token launch" OR TGE OR',
     'listing OR "Binance listing" OR "Coinbase listing" OR "Bybit listing" OR "MEXC listing" OR',
@@ -276,7 +300,7 @@ function buildTokenProjectWatchTopicGate(): string {
     '-scam',
     '-fake',
     '-phishing',
-  ].join(' ');
+  ]).join(' ');
 }
 
 function buildSecurityAlertPlan(source: ApifyRotationSourceRow, bucket: number, maxItems: number): ApifyRotationPlan {
@@ -294,7 +318,7 @@ function buildSecurityAlertPlan(source: ApifyRotationSourceRow, bucket: number, 
 }
 
 function buildSecurityAlertTopicGate(): string {
-  return [
+  return withGenericLowQualityExclusions([
     '(',
     '"crypto hack" OR "DeFi hack" OR "protocol exploit" OR "smart contract exploit" OR',
     '"crypto security incident" OR "rug pull" OR "wallet phishing" OR "private key" OR "seed phrase" OR',
@@ -327,7 +351,7 @@ function buildSecurityAlertTopicGate(): string {
     '-"data breach"',
     '-"supply chain"',
     '-"supply-chain"',
-  ].join(' ');
+  ]).join(' ');
 }
 
 function buildSearchInputOverride(query: string, maxItems: number, hoursBack = 72): Record<string, unknown> {
@@ -395,7 +419,7 @@ function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): s
 }
 
 function buildRescueTopicGate(): string {
-  return [
+  return withGenericLowQualityExclusions([
     '(',
     'crypto OR bitcoin OR BTC OR ethereum OR ETH OR Solana OR stablecoin OR USDT OR USDC OR',
     'ETF OR "spot ETF" OR SEC OR CFTC OR regulation OR lawsuit OR filing OR approval OR',
@@ -414,7 +438,7 @@ function buildRescueTopicGate(): string {
     '-lottery',
     '-casino',
     '-100x',
-  ].join(' ');
+  ]).join(' ');
 }
 
 function positiveNumber(value: unknown, fallback: number): number {
