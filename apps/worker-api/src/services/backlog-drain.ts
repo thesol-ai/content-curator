@@ -26,6 +26,12 @@ import {
   getPreAiContentRejectReason,
 } from './content-policy';
 import { selectCandidateBatchForScoring } from './fair-source-picker';
+import {
+  buildCryptoStoryClusterKey,
+  buildCryptoThemeKey,
+  getCryptoThemeDailyCap,
+  getSourceAudienceRejectReason,
+} from './story-quality-guard';
 
 export interface BacklogDrainOptions {
   categoryId?: string;
@@ -246,14 +252,31 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
     }
 
     const itemId = itemIdForCandidate(candidate.row.id);
+    const storyClusterKey = buildCryptoStoryClusterKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
+    const themeKey = buildCryptoThemeKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
     const recentTopicDuplicate = await hasRecentTopicMatchForAnySemanticChannel(env, channels, ai.topicFingerprint);
+    const recentStoryClusterDuplicate = await hasRecentStoryClusterMatchForAnySemanticChannel(env, channels, storyClusterKey);
+    const themeCapRejectReason = await getThemeCapRejectReason(env, channels, themeKey);
+    const audienceRejectReason = getSourceAudienceRejectReason(candidate.item, ai);
     const rejectReason = recentTopicDuplicate
       ? 'similar_topic_recent_channel'
-      : getItemRejectReason(ai, category, candidate.item, similarTopicRejects.has(i));
+      : recentStoryClusterDuplicate
+        ? 'similar_story_cluster_recent_channel'
+        : themeCapRejectReason
+          ?? audienceRejectReason
+          ?? getItemRejectReason(ai, category, candidate.item, similarTopicRejects.has(i));
     const isRejected = rejectReason !== null;
 
     await saveDiscoveryItem(env, itemId, candidate.row.run_id ?? 'backlog', candidate.row.category_id, candidate.item, ai, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason);
-    await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai, recentTopicDuplicate ? { topicFingerprint: ai.topicFingerprint } : undefined);
+    await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai, {
+      topicFingerprint: ai.topicFingerprint,
+      storyClusterKey,
+      themeKey,
+      recentTopicDuplicate,
+      recentStoryClusterDuplicate,
+      themeCapRejectReason,
+      audienceRejectReason,
+    });
 
     if (isRejected) {
       await recordDedupeKeys(env, candidate.keys, itemId);
@@ -293,6 +316,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
         }
       }
 
+      const scheduledAt = await adjustScheduledAtForFairSourceSpacing(env, channel, candidate.item.sourceAccount, rule.scheduledAt);
       const inserted = await saveQueueItem(env, {
         candidateId: candidate.row.id,
         itemId,
@@ -306,7 +330,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[]): Promise<{
         mediaUrls: mediaRes.mediaUrls,
         thumbnailUrls: mediaRes.thumbnailUrls,
         mediaTypes,
-        scheduledAt: rule.scheduledAt,
+        scheduledAt,
       });
 
       if (inserted) {
@@ -460,6 +484,132 @@ async function hasRecentTopicMatchForAnySemanticChannel(
     if (await hasRecentChannelTopicMatch(env, channel, topicFingerprint)) return true;
   }
   return false;
+}
+
+async function hasRecentStoryClusterMatchForAnySemanticChannel(
+  env: Env,
+  channels: ChannelRow[],
+  storyClusterKey: string | null,
+): Promise<boolean> {
+  if (!storyClusterKey) return false;
+  const semanticChannels = channels.filter(channel => channel.enabled && channel.semantic_dedupe_enabled !== 0);
+  for (const channel of semanticChannels) {
+    if (await hasRecentStoryClusterMatch(env, channel, storyClusterKey)) return true;
+  }
+  return false;
+}
+
+async function hasRecentStoryClusterMatch(env: Env, channel: ChannelRow, storyClusterKey: string): Promise<boolean> {
+  const windowHoursRaw = Number((channel as any).semantic_dedupe_window_hours);
+  const windowHours = Number.isFinite(windowHoursRaw) && windowHoursRaw > 0
+    ? Math.min(Math.max(windowHoursRaw, 1), 168)
+    : 48;
+
+  try {
+    const rows = await env.DB.prepare(`
+      SELECT d.topic_fingerprint, d.text AS item_text, d.source_account, q.caption_short, q.caption_full
+      FROM publish_queue q
+      JOIN discovery_items d ON d.id = q.item_id
+      WHERE q.channel_id = ?
+        AND q.status IN ('scheduled','retry','publishing','published')
+        AND COALESCE(q.published_at, q.scheduled_at) >= unixepoch('now', '-' || ? || ' hours')
+      ORDER BY COALESCE(q.published_at, q.scheduled_at) DESC
+      LIMIT 120
+    `).bind(channel.id, String(windowHours)).all<any>();
+
+    for (const row of rows.results ?? []) {
+      const existingKey = buildCryptoStoryClusterKey(
+        row.topic_fingerprint,
+        `${row.item_text ?? ''} ${row.caption_short ?? ''} ${row.caption_full ?? ''}`,
+        row.source_account,
+      );
+      if (existingKey === storyClusterKey) return true;
+    }
+  } catch (err) {
+    console.warn('[BacklogDrain] story cluster dedupe skipped:', err instanceof Error ? err.message : String(err));
+  }
+
+  return false;
+}
+
+async function getThemeCapRejectReason(env: Env, channels: ChannelRow[], themeKey: string | null): Promise<string | null> {
+  const cap = getCryptoThemeDailyCap(themeKey);
+  if (!themeKey || cap == null) return null;
+
+  const semanticChannels = channels.filter(channel => channel.enabled && channel.semantic_dedupe_enabled !== 0);
+  for (const channel of semanticChannels) {
+    const count = await countRecentThemeMatches(env, channel, themeKey);
+    if (count >= cap) return `theme_daily_cap:${themeKey}`;
+  }
+  return null;
+}
+
+async function countRecentThemeMatches(env: Env, channel: ChannelRow, themeKey: string): Promise<number> {
+  try {
+    const rows = await env.DB.prepare(`
+      SELECT d.topic_fingerprint, d.text AS item_text, d.source_account, q.caption_short, q.caption_full
+      FROM publish_queue q
+      JOIN discovery_items d ON d.id = q.item_id
+      WHERE q.channel_id = ?
+        AND q.status IN ('scheduled','retry','publishing','published')
+        AND COALESCE(q.published_at, q.scheduled_at) >= unixepoch('now', '-24 hours')
+      ORDER BY COALESCE(q.published_at, q.scheduled_at) DESC
+      LIMIT 160
+    `).bind(channel.id).all<any>();
+
+    let count = 0;
+    for (const row of rows.results ?? []) {
+      const existingTheme = buildCryptoThemeKey(
+        row.topic_fingerprint,
+        `${row.item_text ?? ''} ${row.caption_short ?? ''} ${row.caption_full ?? ''}`,
+        row.source_account,
+      );
+      if (existingTheme === themeKey) count++;
+    }
+    return count;
+  } catch (err) {
+    console.warn('[BacklogDrain] theme cap check skipped:', err instanceof Error ? err.message : String(err));
+    return 0;
+  }
+}
+
+async function adjustScheduledAtForFairSourceSpacing(
+  env: Env,
+  channel: ChannelRow,
+  sourceAccount: string,
+  proposedScheduledAt: number,
+): Promise<number> {
+  const account = normalizeAccount(sourceAccount);
+  if (!account) return proposedScheduledAt;
+
+  const gapMinutesRaw = Number((env as any).PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES);
+  const gapMinutes = Number.isFinite(gapMinutesRaw) && gapMinutesRaw > 0
+    ? Math.min(Math.max(Math.floor(gapMinutesRaw), 15), 360)
+    : 90;
+  const gapSeconds = gapMinutes * 60;
+  const windowStart = proposedScheduledAt - gapSeconds;
+  const windowEnd = proposedScheduledAt + gapSeconds;
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT MAX(q.scheduled_at) AS latest
+      FROM publish_queue q
+      JOIN discovery_items d ON d.id = q.item_id
+      WHERE q.channel_id = ?
+        AND q.status IN ('scheduled','retry','publishing')
+        AND lower(d.source_account) = ?
+        AND q.scheduled_at BETWEEN ? AND ?
+    `).bind(channel.id, account, windowStart, windowEnd).first<{ latest: number | null }>();
+
+    const latest = Number(row?.latest ?? 0);
+    if (Number.isFinite(latest) && latest > 0) {
+      return Math.max(proposedScheduledAt, latest + gapSeconds);
+    }
+  } catch (err) {
+    console.warn('[BacklogDrain] source spacing skipped:', err instanceof Error ? err.message : String(err));
+  }
+
+  return proposedScheduledAt;
 }
 
 async function saveQueueItem(env: Env, data: {

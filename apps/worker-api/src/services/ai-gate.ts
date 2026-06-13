@@ -8,6 +8,7 @@
 import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from '../types';
 import { getPreAiContentRejectReason } from './content-policy';
 import { getCategoryPolicy } from '../categories/registry';
+import { applyPersianCaptionQualityGuard } from './story-quality-guard';
 
 // ── Provider configs ──────────────────────────────────────────
 
@@ -48,14 +49,14 @@ const PROMPT_PROFILES: Record<string, string> = {
     'Curate and rewrite for a general audience. Preserve facts, avoid speculation.',
 
   crypto_editorial:
-    'Curate for a crypto/blockchain audience. Explain market, protocol, token, and risk context cautiously. ' +
-    'NEVER provide financial advice. NEVER invent price predictions. ' +
+    'Curate for Persian-speaking Iranian crypto readers, not generic U.S. retail investors. Prioritize items with practical relevance to Iranian readers: security/exploits, sanctions/regulation, stablecoins, exchange risk, ETF/institutional flows, major protocol incidents, liquidity, and Asia/MENA-relevant market structure. ' +
+    'Explain market, protocol, token, and risk context cautiously. NEVER provide financial advice. NEVER invent price predictions. ' +
     'Reject generic macro/economic-calendar posts unless the source text explicitly connects the event to crypto, Bitcoin, Ethereum, stablecoins, ETFs, DeFi, on-chain activity, liquidity, or digital-asset regulation. ' +
-    'If a macro item is selected, the final rewrite must explain the crypto or digital-asset market relevance. ' +
+    'Reject official project/exchange marketing, trading competitions, voucher campaigns, generic integrations, and tokenized-stock hype unless there is a concrete regulatory, security, liquidity, or market-structure reason Iranian crypto readers need it. ' +
+    'If a macro or RWA/tokenized-equity item is selected, the final rewrite must explain why it matters to crypto users in Iran or Persian-speaking markets; otherwise reject it. ' +
     'Flag sponsored content, unverified claims, token promotions, and pump-and-dump signals. ' +
-    'Be especially strict: reject any post that could amplify scams or market manipulation. ' +
-    'Risk flags: pump_and_dump, financial_advice, unverified_claims, price_prediction, ' +
-    'sponsored_content, regulatory_sensitive, scam_amplification, macro_without_crypto_angle.',
+    'Be especially strict: reject any post that could amplify scams, thin liquidity, trading promotions, or market manipulation. ' +
+    'Risk flags: pump_and_dump, financial_advice, unverified_claims, price_prediction, sponsored_content, regulatory_sensitive, scam_amplification, macro_without_crypto_angle, iran_audience_low_value, official_source_marketing.',
 
   design_editorial:
     'Curate for designers and product teams. Emphasize UX implications, visual patterns, tools, practical takeaways. ' +
@@ -221,6 +222,7 @@ async function runScoring(
     'Make topic_fingerprint stable across sources, URLs, wording changes, translations, and minor numeric updates for the same underlying story within a 48-hour window.',
     'Use the same topic_fingerprint when multiple posts discuss the same event, regulation, exploit, launch, funding, market move, protocol upgrade, ETF flow, or institutional announcement.',
     'Only change topic_fingerprint when there is a materially new development, not just a different source repeating or slightly rephrasing the story.',
+    'For recurring themes like USDT/XMR laundering, Metaplanet Bitcoin products, ETF daily flows, SpaceX/SPCX tokenized equity, tokenized CLO/RWA on Solana, use stable story-level fingerprints so downstream dedupe can block repeats.',
     'Good examples: "humanity-protocol-exploit", "us-clarity-act-legislation", "sbi-shinsei-crypto-deposit-rewards", "zcash-ironwood-upgrade", "undp-blockchain-advisory-group".',
     'Bad examples: source names, post IDs, generic slugs like "crypto-news", or separate fingerprints for the same story from different accounts.',
     'Use source metadata strictly: replies, retweets/reposts, quotes, and text-only posts should be scored according to the category policy below.',
@@ -700,6 +702,9 @@ async function runTranslationChunk(
   let mappedByPostId = 0;
   let mappedByUrl = 0;
 
+  const originalByPostId = new Map(items.map(item => [item.postId, item] as const));
+  const originalByUrl = new Map(items.map(item => [item.sourceUrl, item] as const));
+
   for (const p of parsed.items) {
     const postId = typeof p.post_id === 'string' ? p.post_id.trim() : '';
     const url = typeof p.url === 'string' ? p.url.trim() : '';
@@ -711,6 +716,7 @@ async function runTranslationChunk(
 
     const translations: Record<string, any> = {};
     let missingCount = 0;
+    const originalItem = (postId ? originalByPostId.get(postId) : undefined) ?? (url ? originalByUrl.get(url) : undefined);
 
     for (const target of cfg.translationTargets) {
       const t = p.translations?.[target.key];
@@ -724,9 +730,13 @@ async function runTranslationChunk(
         };
 
         const repaired = await repairRtlTranslationLeadIfNeeded(env, cfg, target, translation, provider);
-        if (repaired) {
-          translations[target.key] = repaired;
+        const qualityDecision: { ok: boolean; translation?: TranslationValue; reason?: string } = repaired
+          ? applyPersianCaptionQualityGuard(target.language, repaired, originalItem?.text ?? '')
+          : { ok: false, reason: 'rtl_repair_failed' };
+        if (qualityDecision.ok && qualityDecision.translation) {
+          translations[target.key] = qualityDecision.translation;
         } else {
+          console.warn(`[Translation] Caption quality guard omitted target=${target.key} reason=${qualityDecision.reason ?? 'unknown'} post_id=${postId || 'n/a'} url=${url || 'n/a'}`);
           missingCount++;
         }
       } else {
@@ -990,7 +1000,9 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     'Strict rules:',
     '- caption_short: concise, engaging 1-2 sentence summary for media captions; respect each target max chars',
     '- caption_full: complete Telegram post with context; respect each target max chars',
-    '- Persian (fa) captions must be in natural, fluent Farsi — NOT a literal translation',
+    '- Persian (fa) captions must be in natural, fluent Farsi for an Iranian crypto audience — NOT a literal translation and NOT generic U.S. retail/investor copy',
+    '- Persian captions must clearly answer: why does this matter for Persian-speaking crypto users? If there is no clear relevance, keep the caption restrained and do not hype it.',
+    '- Avoid generic filler such as "نشان‌دهنده پذیرش نهادی", "گامی مهم", "می‌تواند تأثیرگذار باشد" unless the source gives a concrete reason.',
     '- Persian (fa) caption_full and caption_short must start cleanly for RTL. Optional leading emoji is allowed, but the first real word after any emoji/spacing MUST be Persian.',
     '- Persian (fa) captions must never start with an English word, Latin brand name, ticker such as $BTC, number, @handle, URL, or hashtag.',
     '- Do not use a fixed or static prefix in Persian captions. Let the opening words be natural to the story while obeying the Persian-first rule.',
@@ -1002,6 +1014,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Do NOT include source URLs or raw links. The publisher adds source attribution separately.',
     '- Do NOT include HTML tags — plain text only',
     '- Do NOT invent facts not present in the source text',
+    '- Preserve dates and years exactly. If the source says 2026, the Persian caption must not say ۲۰۲۴ or ۲۰۲۵.',
     '- Do NOT provide financial/investment advice',
     '- Remove source engagement bait and CTA questions such as "Which are you watching?", "What do you think?", "Which report matters most?", or equivalent phrasing in any language; replace with concise editorial context only when useful.',
     '- For crypto/blockchain items about macroeconomic data, explain the relevance to crypto or digital-asset markets; do not publish a generic economic calendar without that angle.',

@@ -1,0 +1,301 @@
+import type { AIGateResult, NormalizedItem, TranslationOutput } from '../types';
+
+export interface CaptionQualityDecision {
+  ok: boolean;
+  translation?: TranslationOutput;
+  reason?: string;
+}
+
+const PROMOTIONAL_SOURCE_ACCOUNTS = new Set([
+  'solana',
+  'chainlink',
+  'binance',
+  'base',
+  'ethereum',
+  'ondofinance',
+  'aave',
+  'uniswap',
+  'nansen_ai',
+]);
+
+const WATCH_SOURCE_ACCOUNTS = new Set([
+  'cointelegraph',
+  'watcherguru',
+  'utoday_en',
+  'beincrypto',
+]);
+
+export function getSourceAudienceRejectReason(
+  item: Pick<NormalizedItem, 'sourceAccount' | 'text'>,
+  ai?: Pick<AIGateResult, 'score' | 'topicFingerprint' | 'riskFlags' | 'publishPriority'>,
+): string | null {
+  const account = normalizeAccount(item.sourceAccount);
+  const body = normalizeText(item.text);
+  const fingerprint = normalizeText(ai?.topicFingerprint ?? '');
+  const combined = `${body} ${fingerprint}`;
+
+  if (!combined.trim()) return 'iran_audience_empty_context';
+
+  if (isExplicitScamOrPrizeCampaign(combined)) return 'iran_audience_promotional_campaign';
+
+  if (account === 'binance' && isExchangeMarketing(combined)) {
+    return 'iran_audience_exchange_marketing';
+  }
+
+  if (PROMOTIONAL_SOURCE_ACCOUNTS.has(account)) {
+    if (isProjectMarketing(combined)) return 'iran_audience_project_marketing';
+    if (!hasHighSignalCryptoNews(combined)) return 'iran_audience_official_source_low_signal';
+  }
+
+  if (WATCH_SOURCE_ACCOUNTS.has(account) && isLowValueForIranianAudience(combined)) {
+    return 'iran_audience_low_value_watch_source';
+  }
+
+  if (isPrivateEquityRetailAccessWithoutIranUtility(combined)) {
+    return 'iran_audience_private_asset_tokenization_low_utility';
+  }
+
+  return null;
+}
+
+export function buildCryptoStoryClusterKey(
+  topicFingerprint: unknown,
+  text: unknown,
+  sourceAccount?: unknown,
+): string | null {
+  const body = normalizeText(`${topicFingerprint ?? ''} ${text ?? ''} ${sourceAccount ?? ''}`);
+  if (!body) return null;
+
+  if (hasAll(body, ['usdt']) && (hasAny(body, ['xmr', 'monero']) || hasAny(body, ['zachxbt', 'zach xbt'])) && hasAny(body, ['tether', 'blacklist', 'freeze', 'froze', 'launder', 'money laundering', 'پولشویی'])) {
+    return 'story:usdt-xmr-tether-laundering';
+  }
+
+  if (body.includes('metaplanet') && hasAny(body, ['siiibo', 'securities', 'yield', 'btc-linked', 'bitcoin yield', 'اوراق بهادار', 'محصولات مالی'])) {
+    return 'story:metaplanet-bitcoin-products';
+  }
+
+  if (hasAny(body, ['bitcoin etf', 'btc etf', 'ethereum etf', 'eth etf', 'spot bitcoin etf', 'spot ethereum etf', 'etf']) && hasAny(body, ['inflow', 'outflow', 'netflow', 'net flow', 'ورودی', 'خروجی', 'جریان سرمایه'])) {
+    return 'story:spot-crypto-etf-flows';
+  }
+
+  if (hasAny(body, ['spacex', 'spcx', 'spcxb']) && hasAny(body, ['tokenized', 'tokenization', 'stocks', 'shares', 'bstocks', 'ipo', 'stock', 'سهام', 'توکنیزه'])) {
+    return 'story:spacex-tokenized-equity';
+  }
+
+  if (hasAny(body, ['securitize', 'stac', 'ethena', 'clo', 'jaaa', 'janus henderson']) && hasAny(body, ['solana', 'tokenized', 'tokenization', 'rwa', 'onchain', 'clo'])) {
+    return 'story:tokenized-clo-solana';
+  }
+
+  if (body.includes('hyperliquid') && hasAny(body, ['circle', 'coinbase', 'usdc']) && hasAny(body, ['4.4', '4.397', 'billion', 'treasury', 'transfer'])) {
+    return 'story:circle-coinbase-hyperliquid-usdc';
+  }
+
+  if (hasAny(body, ['clarity act', 'crypto clarity', 'قانون شفافیت']) && hasAny(body, ['july 4', '4 july', '۴ جولای', 'کاخ سفید', 'white house'])) {
+    return 'story:us-crypto-clarity-act-deadline';
+  }
+
+  if (body.includes('blockworks') && body.includes('messari')) return 'story:blockworks-messari-acquisition';
+
+  return null;
+}
+
+export function buildCryptoThemeKey(topicFingerprint: unknown, text: unknown, sourceAccount?: unknown): string | null {
+  const body = normalizeText(`${topicFingerprint ?? ''} ${text ?? ''} ${sourceAccount ?? ''}`);
+  if (!body) return null;
+
+  if (hasAny(body, ['tokenized', 'tokenization', 'rwa', 'real-world asset', 'real world asset', 'onchain']) && hasAny(body, ['stock', 'stocks', 'shares', 'equity', 'clo', 'fund', 'securities', 'private assets', 'سهام', 'دارایی واقعی'])) {
+    return 'theme:rwa-tokenized-assets';
+  }
+
+  if (hasAny(body, ['etf', 'bitcoin etf', 'ethereum etf', 'spot etf']) && hasAny(body, ['inflow', 'outflow', 'filing', '8-a', 's-1', '19b-4', 'launch', 'approval', 'ورودی', 'خروجی'])) {
+    return 'theme:crypto-etf';
+  }
+
+  if (hasAny(body, ['hack', 'exploit', 'phishing', 'stolen', 'launder', 'blacklist', 'freeze', 'froze', 'security incident', 'هک', 'پولشویی', 'مسدود'])) {
+    return 'theme:security-exploit';
+  }
+
+  return null;
+}
+
+export function getCryptoThemeDailyCap(themeKey: string | null): number | null {
+  switch (themeKey) {
+    case 'theme:rwa-tokenized-assets': return 2;
+    case 'theme:crypto-etf': return 2;
+    case 'theme:security-exploit': return 3;
+    default: return null;
+  }
+}
+
+export function applyPersianCaptionQualityGuard(
+  language: string,
+  translation: TranslationOutput,
+  sourceText: unknown,
+): CaptionQualityDecision {
+  if (language !== 'fa') return { ok: true, translation };
+
+  const cleaned: TranslationOutput = {
+    ...translation,
+    captionShort: repairPersianCaptionText(translation.captionShort),
+    captionFull: repairPersianCaptionText(translation.captionFull),
+    hashtags: translation.hashtags,
+  };
+
+  const combinedCaption = `${cleaned.captionShort}\n${cleaned.captionFull}`;
+  if (hasYearMismatch(sourceText, combinedCaption)) {
+    return { ok: false, reason: 'caption_year_mismatch' };
+  }
+
+  if (hasForbiddenPersianGenericAdvice(combinedCaption)) {
+    return { ok: false, reason: 'caption_generic_investment_advice' };
+  }
+
+  return { ok: true, translation: cleaned };
+}
+
+export function repairPersianCaptionText(value: string): string {
+  let out = String(value ?? '');
+
+  const replacements: Array<[RegExp, string]> = [
+    [/میلیوندلار/g, 'میلیون دلار'],
+    [/میلیارددلار/g, 'میلیارد دلار'],
+    [/پولشوییمرتبط/g, 'پولشویی مرتبط'],
+    [/حوزهدارایی/g, 'حوزه دارایی'],
+    [/اینفناوری/g, 'این فناوری'],
+    [/تاثیرگذاشته/g, 'تأثیر گذاشته'],
+    [/تاثیرگذار/g, 'تأثیرگذار'],
+    [/می‌تواندتوجه/g, 'می‌تواند توجه'],
+    [/اتفاقاتبر/g, 'اتفاقات بر'],
+    [/داردارائه/g, 'دارد ارائه'],
+    [/دارداوراق/g, 'دارد اوراق'],
+    [/می‌دهدکه/g, 'می‌دهد که'],
+  ];
+
+  for (const [pattern, replacement] of replacements) out = out.replace(pattern, replacement);
+
+  out = out
+    .replace(/([\p{Script=Arabic}])([A-Za-z0-9$@#])/gu, '$1 $2')
+    .replace(/([A-Za-z0-9])([\p{Script=Arabic}])/gu, '$1 $2')
+    .replace(/\s+([،؛:,.!?؟])/g, '$1')
+    .replace(/([،؛:,.!?؟])([^\s\n])/g, '$1 $2')
+    .replace(/([0-9۰-۹٠-٩])\.\s+([0-9۰-۹٠-٩])/g, '$1.$2')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return out;
+}
+
+function hasYearMismatch(sourceText: unknown, caption: string): boolean {
+  const src = normalizeDigits(String(sourceText ?? '')).toLowerCase();
+  const cap = normalizeDigits(caption).toLowerCase();
+
+  const sourceYears = new Set(Array.from(src.matchAll(/\b20[0-9]{2}\b/g)).map(m => m[0]));
+  if (sourceYears.size === 0) return false;
+
+  if (sourceYears.has('2026') && cap.includes('2024')) return true;
+  if (sourceYears.has('2026') && cap.includes('2025') && !src.includes('2025')) return true;
+  if (sourceYears.has('2025') && cap.includes('2024') && !src.includes('2024')) return true;
+
+  return false;
+}
+
+function hasForbiddenPersianGenericAdvice(text: string): boolean {
+  const body = normalizeText(text);
+  return body.includes('سرمایه گذاران نباید') || body.includes('سرمایه‌گذاران نباید') || body.includes('سیگنالی برای تحرکات آتی');
+}
+
+function isExplicitScamOrPrizeCampaign(body: string): boolean {
+  return hasAny(body, [
+    'competition', 'contest', 'voucher', 'vouchers', 'claim your share', "don't miss out", 'airdrop', 'rewards', 'reward campaign',
+    'مسابقه', 'جایزه', 'ایردراپ', 'سهمی از جوایز',
+  ]);
+}
+
+function isExchangeMarketing(body: string): boolean {
+  return hasAny(body, ['trading competition', 'token vouchers', 'claim your share', 'now live until', 'trade tokenized stocks', 'مسابقه معاملاتی']);
+}
+
+function isProjectMarketing(body: string): boolean {
+  return hasAny(body, [
+    'is live on', 'powered by', "here's where to get access", 'get access', 'ecosystem news', 'integration', 'integrations',
+    'now live', 'launch campaign', 'announcing', 'powered', 'markets for btc', 'chainlink =',
+    'بر بستر شبکه', 'امکان دسترسی', 'با استفاده از اوراکل', 'راه اندازی شد', 'راه‌اندازی شد',
+  ]) && !hasAny(body, ['exploit', 'hack', 'outage', 'security incident', 'governance vote', 'mainnet upgrade', 'regulatory', 'sec', 'cftc']);
+}
+
+function hasHighSignalCryptoNews(body: string): boolean {
+  return hasAny(body, [
+    'exploit', 'hack', 'stolen', 'blacklist', 'freeze', 'froze', 'sec', 'cftc', 'lawsuit', 'settlement',
+    'etf filing', 'approved', 'approval', 'mainnet upgrade', 'governance', 'outage', 'listing announcement',
+    'liquidation', 'net inflow', 'net outflow', 'treasury', 'reserve', 'reserves', 'billion', 'million',
+    'هک', 'پولشویی', 'مسدود', 'قانون', 'کمیسیون', 'etf', 'صندوق', 'میلیون', 'میلیارد',
+  ]);
+}
+
+function isLowValueForIranianAudience(body: string): boolean {
+  if (hasAny(body, ['private assets like openai and spacex', 'retail access to private assets', 'watch the full interview'])) return true;
+  if (hasAny(body, ['canary in the macro coal mine']) && !hasAny(body, ['bitcoin etf', 'liquidation', 'funding rate', 'inflow', 'outflow'])) return true;
+  return false;
+}
+
+function isPrivateEquityRetailAccessWithoutIranUtility(body: string): boolean {
+  // Do not override the existing crypto/RWA allow policy. These can still be
+  // rejected later by story/theme caps or source marketing checks, but the
+  // generic Iranian-audience gate must not swallow all tokenized-equity news.
+  if (hasAny(body, ['crypto platforms', 'rwa rails', 'rwa markets', 'tokenized equity'])) {
+    return false;
+  }
+
+  return hasAny(body, [
+    'private assets like openai and spacex',
+    'retail access to private assets',
+    'watch the full interview',
+  ]) && !hasAny(body, [
+    'sec',
+    'cftc',
+    'enforcement',
+    'approved',
+    'filing',
+    'listing',
+    'lawsuit',
+    'exploit',
+    'security',
+    'rwa',
+    'tokenized equity',
+    'crypto platforms',
+  ]);
+}
+
+function normalizeAccount(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/^@+/, '');
+}
+
+function normalizeText(value: unknown): string {
+  return normalizeDigits(String(value ?? ''))
+    .toLowerCase()
+    .replace(/[\u200c\u200d]/g, ' ')
+    .replace(/[_\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeDigits(value: string): string {
+  const fa = '۰۱۲۳۴۵۶۷۸۹';
+  const ar = '٠١٢٣٤٥٦٧٨٩';
+  return String(value ?? '').replace(/[۰-۹٠-٩]/g, ch => {
+    const faIndex = fa.indexOf(ch);
+    if (faIndex >= 0) return String(faIndex);
+    const arIndex = ar.indexOf(ch);
+    if (arIndex >= 0) return String(arIndex);
+    return ch;
+  });
+}
+
+function hasAny(body: string, needles: string[]): boolean {
+  return needles.some(needle => body.includes(needle.toLowerCase()));
+}
+
+function hasAll(body: string, needles: string[]): boolean {
+  return needles.every(needle => body.includes(needle.toLowerCase()));
+}

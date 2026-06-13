@@ -1,5 +1,6 @@
 import type { AIGateResult, CategoryRow, NormalizedItem } from '../types';
 import { getCategoryPolicy } from '../categories/registry';
+import { getSourceAudienceRejectReason } from './story-quality-guard';
 
 export function findSimilarTopicInRunRejections(
   items: Pick<NormalizedItem, 'sourceAccount'>[],
@@ -39,12 +40,18 @@ export function getPreAiContentRejectReason(item: NormalizedItem, category: Cate
   if (item.isReply === true && intSetting(category.allow_replies, 0) === 0) return 'reply_not_allowed';
   if (item.isRetweet === true && intSetting(category.allow_retweets, 1) === 0) return 'retweet_not_allowed';
   if (item.isQuote === true && intSetting(category.allow_quotes, 1) === 0) return 'quote_not_allowed';
+
   const textOnlyPolicy = sanitizeTextOnlyPolicy(category.text_only_policy);
   if (category.media_mode !== 'disabled' && item.media.length === 0 && textOnlyPolicy === 'reject') return 'text_only_rejected';
 
   const categoryPolicy = getCategoryPolicy(category.id);
   const categoryRejectReason = categoryPolicy.getPreAiRejectReason?.(item, category);
   if (categoryRejectReason) return categoryRejectReason;
+
+  if (String(category.id ?? '').trim().toLowerCase() === 'crypto') {
+    const audienceRejectReason = getSourceAudienceRejectReason(item);
+    if (audienceRejectReason) return audienceRejectReason;
+  }
 
   return null;
 }

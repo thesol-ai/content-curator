@@ -40,6 +40,7 @@ export interface Env {
   AI_CANDIDATE_MAX_AGE_HOURS?: string;      // default: "6"
   AI_FAIR_SOURCE_PICKER_ENABLED?: string;   // default: "false"
   AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER?: string; // default: "6"
+  AI_BACKLOG_INLINE_DRAIN_ENABLED?: string; // default: "false" in production
 
   // ── AI — Translation ───────────────────────────────────────
   TRANSLATION_PROVIDER: string;
@@ -83,6 +84,7 @@ export interface Env {
   PUBLISH_DELAY_LOW_MINUTES?: string;
   PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES?: string;
   PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES?: string;
+  PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES?: string;
 
   // Media — سه حالت:
   //   direct_url    → URL مستقیم به Telegram (پیش‌فرض، سریع، بدون ضمانت)
