@@ -86,6 +86,42 @@ export interface Env {
   PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES?: string;
   PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES?: string;
 
+  // ── Phase 6E/6F — queue-health controller + adaptive rotation + scheduler ──
+  QUEUE_HEALTH_CONTROLLER_ENABLED?: string;        // default: "false"
+  QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H?: string;     // default: "3"
+  QUEUE_HEALTH_STARVING_SCHEDULED_NEXT_6H?: string;// default: floor(min/2)
+  QUEUE_HEALTH_STARVING_MAX_BATCHES?: string;      // default: "3"
+  QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS?: string; // default: "50"
+  QUEUE_HEALTH_CHANNEL_ID?: string;                // controller target channel
+  APIFY_ROTATION_CONTINUOUS_ENABLED?: string;      // default: "false"
+  APIFY_ROTATION_SLOT_MINUTES?: string;            // default: "30"
+  PUBLISH_SCHEDULER_GAP_FILL_ENABLED?: string;     // default: "false"
+  AI_TRANSLATION_MAX_TEXT_CHARS?: string;          // default: falls back to AI_MAX_TEXT_CHARS_PER_ITEM
+  BACKLOG_TRANSLATE_AFTER_GATES_ENABLED?: string;  // default: "false"
+  PUBLISH_ENFORCE_SOURCE_DAILY_CAP_ENABLED?: string; // default: "false" — enforce channels.max_posts_per_source_per_day
+  AUDIENCE_PROFILE_SCORING_ENABLED?: string;        // default: "false" — locale-aware selection guidance (6J)
+  STORY_INTELLIGENCE_ENABLED?: string;              // default: "false" — ask model for structured story fields (6K, observe)
+  STORY_INTELLIGENCE_OBSERVE_ONLY?: string;         // default: "true"  — never reject on story_key yet
+  STORY_INTELLIGENCE_REJECT_ENABLED?: string;       // default: "false" — actively reject story_key repeats
+  STORY_INTELLIGENCE_WINDOW_HOURS?: string;         // default: "48"
+  STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED?: string; // default: "true" — let materially-new follow-ups through
+  STORY_INTELLIGENCE_RETENTION_DAYS?: string;       // default: "30" — retention for story_intelligence_events
+  AI_COST_ATTRIBUTION_ENABLED?: string;             // default: "false" — write ai_usage_attribution rows
+  AI_USAGE_ATTRIBUTION_RETENTION_DAYS?: string;     // default: "45"
+  SOURCE_REPUTATION_WEIGHTING_ENABLED?: string;     // default: "false" — weight rotation by source reputation
+  SOURCE_REPUTATION_EXPLORATION_PCT?: string;       // default: "20"
+  SOURCE_REPUTATION_MIN_SAMPLE?: string;            // default: "20"
+  SOURCE_REPUTATION_MAX_WEIGHT?: string;            // default: "2.0"
+  SOURCE_REPUTATION_MIN_WEIGHT?: string;            // default: "0.3"
+  SOURCE_REPUTATION_RECENT_RUN_COOLDOWN_SLOTS?: string; // default: "6" — cool down recently-run sources
+  QUEUE_QUALITY_CONTROLLER_ENABLED?: string;        // default: "false" — steer rotation toward diversity
+  QUEUE_QUALITY_MIN_UNIQUE_SOURCES_NEXT_6H?: string;  // default: "2"
+  QUEUE_QUALITY_MAX_SOURCE_SHARE_NEXT_24H?: string;   // default: "0.4"
+  QUEUE_QUALITY_MIN_UNIQUE_STORIES_NEXT_6H?: string;  // default: "2"
+  CAPTION_QUALITY_REPAIR_ENABLED?: string;          // default: "false" — repair-first caption quality
+  CAPTION_QUALITY_REJECT_ENABLED?: string;          // default: "false" — reject if still low after repair
+  CAPTION_QUALITY_MIN_SCORE?: string;               // default: "70"
+
   // Media — سه حالت:
   //   direct_url    → URL مستقیم به Telegram (پیش‌فرض، سریع، بدون ضمانت)
   //   binary_upload → دانلود + آپلود binary به Telegram (توصیه می‌شود)
@@ -204,6 +240,11 @@ export interface AIGateResult {
   topicFingerprint: string;
   publishPriority: PublishPriority;
   translations: Record<string, TranslationOutput>;
+  /** Phase 6K (observe-only): structured story key derived from the model's
+   *  primary_entities/event_type/canonical_date. Logged, never used to reject yet. */
+  storyKey?: string | null;
+  /** Phase 6K: the parsed structured fields behind storyKey (for queryable storage). */
+  storyFields?: { primaryEntities: string[]; eventType: string; canonicalDate: string } | null;
 }
 
 // ── DB Row types ──────────────────────────────────────────────

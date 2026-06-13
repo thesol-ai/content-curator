@@ -67,13 +67,30 @@ export async function runRuleGate(
     .first<{ last_at: number | null }>();
 
   const lastScheduledAt = lastScheduled?.last_at ?? null;
-  let scheduledAt = computeScheduledAt(
-    env,
-    aiResult.publishPriority,
-    channel,
-    mediaUrlExpiresSoon,
-    lastScheduledAt
-  );
+
+  let scheduledAt: number;
+  if (isGapFillEnabled(env)) {
+    // Phase 6F: fill the earliest free slot from "now" forward instead of
+    // always appending after MAX(scheduled_at). This keeps the near-term queue
+    // populated (fixes the "back-loaded queue" symptom) while still honoring
+    // min_gap, publish windows, and daily quota (checked in the loop below).
+    const occupied = await loadUpcomingScheduledAts(env, channel.id);
+    scheduledAt = computeScheduledAtGapFill(
+      env,
+      aiResult.publishPriority,
+      channel,
+      mediaUrlExpiresSoon,
+      occupied,
+    );
+  } else {
+    scheduledAt = computeScheduledAt(
+      env,
+      aiResult.publishPriority,
+      channel,
+      mediaUrlExpiresSoon,
+      lastScheduledAt
+    );
+  }
 
   for (let quotaAttempt = 0; quotaAttempt < 7; quotaAttempt++) {
     const dayBounds = getChannelDayBoundsForUnix(scheduledAt, channel.timezone);
@@ -108,6 +125,73 @@ export async function runRuleGate(
     approved: false,
     reason: `daily_quota_exceeded_next_7_days:${channel.max_per_day}`,
   };
+}
+
+function isGapFillEnabled(env: Env): boolean {
+  return String((env as any).PUBLISH_SCHEDULER_GAP_FILL_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+async function loadUpcomingScheduledAts(env: Env, channelId: string): Promise<number[]> {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = await env.DB.prepare(`
+      SELECT scheduled_at FROM publish_queue
+      WHERE channel_id = ?
+        AND status IN ('scheduled','retry','publishing')
+        AND scheduled_at >= ?
+      ORDER BY scheduled_at ASC
+      LIMIT 500
+    `).bind(channelId, now - 3600).all<{ scheduled_at: number }>();
+    return (rows.results ?? [])
+      .map(r => Number(r.scheduled_at))
+      .filter(n => Number.isFinite(n))
+      .sort((a, b) => a - b);
+  } catch (err) {
+    console.warn('[RuleGate] gap-fill occupied load skipped:', err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
+/**
+ * Find the earliest publishable slot from now+baseDelay that:
+ *  - is inside allowed windows / outside blocked windows,
+ *  - keeps at least min_gap_minutes from every already-occupied slot.
+ * Pure given (now via env baseDelay), occupied, and channel config.
+ */
+export function findEarliestGapSlot(
+  startUnix: number,
+  occupied: number[],
+  minGapMinutes: number,
+  normalizeToWindows: (unix: number) => number,
+): number {
+  const gap = Math.max(0, minGapMinutes) * 60;
+  const sorted = occupied.slice().sort((a, b) => a - b);
+
+  let candidate = normalizeToWindows(startUnix);
+  // Bounded search: each iteration jumps past a conflicting neighbor.
+  for (let i = 0; i < sorted.length + 2; i++) {
+    const conflict = sorted.find(t => Math.abs(t - candidate) < gap);
+    if (conflict === undefined) return candidate;
+    const next = normalizeToWindows(conflict + gap);
+    candidate = next > candidate ? next : normalizeToWindows(candidate + gap);
+  }
+  return candidate;
+}
+
+function computeScheduledAtGapFill(
+  env: Env,
+  priority: PublishPriority,
+  channel: ChannelRow,
+  mediaUrlExpiresSoon: boolean,
+  occupied: number[],
+): number {
+  const now = Math.floor(Date.now() / 1000);
+  const startUnix = now + baseDelaySeconds(env, priority, mediaUrlExpiresSoon);
+  const allowedWindows = safeParseWindows(channel.allowed_windows);
+  const blockedWindows = safeParseWindows(channel.blocked_windows);
+  const normalize = (unix: number) =>
+    normalizeToChannelWindows(unix, channel.timezone, allowedWindows, blockedWindows);
+  return findEarliestGapSlot(startUnix, occupied, channel.min_gap_minutes, normalize);
 }
 
 function computeScheduledAt(

@@ -134,6 +134,7 @@ export function applyPersianCaptionQualityGuard(
   language: string,
   translation: TranslationOutput,
   sourceText: unknown,
+  opts?: { repairEnabled?: boolean; rejectEnabled?: boolean; minScore?: number },
 ): CaptionQualityDecision {
   if (language !== 'fa') return { ok: true, translation };
 
@@ -144,7 +145,12 @@ export function applyPersianCaptionQualityGuard(
     hashtags: translation.hashtags,
   };
 
-  const combinedCaption = `${cleaned.captionShort}\n${cleaned.captionFull}`;
+  // Phase 6G fix: if the caption is informative (has a concrete signal) but ends
+  // with a pure-filler clause, strip ONLY that trailing clause instead of
+  // rejecting the whole post. Keeps volume while removing the cliché tail.
+  const repaired = stripTrailingFillerClauses(cleaned);
+
+  const combinedCaption = `${repaired.captionShort}\n${repaired.captionFull}`;
   if (hasYearMismatch(sourceText, combinedCaption)) {
     return { ok: false, reason: 'caption_year_mismatch' };
   }
@@ -153,7 +159,30 @@ export function applyPersianCaptionQualityGuard(
     return { ok: false, reason: 'caption_generic_investment_advice' };
   }
 
-  return { ok: true, translation: cleaned };
+  // Reject only when filler remains AND there is still no concrete signal (i.e.
+  // the caption was filler through-and-through, not merely filler-tailed).
+  if (hasBannedGenericFiller(combinedCaption) && !captionHasConcreteSignal(combinedCaption)) {
+    return { ok: false, reason: 'caption_generic_filler' };
+  }
+
+  // Phase 6G: factual grounding — if the caption introduces currency/percent
+  // figures and NOT ONE of them appears in the source, treat it as fabricated.
+  if (hasFullyUngroundedFigures(sourceText, combinedCaption)) {
+    return { ok: false, reason: 'caption_unsupported_figure' };
+  }
+
+  // Phase-next caption quality (repair-first). Repair already happened above
+  // (filler-tail stripped). When repair mode is on and the repaired caption is
+  // still below the bar AND reject is enabled, drop it as caption_quality_low.
+  if (opts?.repairEnabled) {
+    const combined = `${repaired.captionShort ?? ''}\n${repaired.captionFull ?? ''}`.trim();
+    const q = scoreCaptionQuality(combined, sourceText);
+    if (opts.rejectEnabled && q.score < (opts.minScore ?? 70)) {
+      return { ok: false, reason: 'caption_quality_low' };
+    }
+  }
+
+  return { ok: true, translation: repaired };
 }
 
 export function repairPersianCaptionText(value: string): string {
@@ -206,6 +235,140 @@ function hasYearMismatch(sourceText: unknown, caption: string): boolean {
 function hasForbiddenPersianGenericAdvice(text: string): boolean {
   const body = normalizeText(text);
   return body.includes('سرمایه گذاران نباید') || body.includes('سرمایه‌گذاران نباید') || body.includes('سیگنالی برای تحرکات آتی');
+}
+
+// Phase 6G/6I: banned generic filler STEMS (normalized, ZWNJ/space-insensitive).
+// Stems (not full phrases) so production variants are caught, e.g.
+// "نشان‌دهنده پذیرش دارایی‌های سنتی" and "نشان‌دهنده افزایش تمرکز نهادها"
+// (both observed in real published captions) match "نشان دهنده".
+const BANNED_GENERIC_FILLER_PHRASES = [
+  'نشان دهنده پذیرش',
+  'نشان دهنده افزایش',
+  'نشان دهنده تغییرات',
+  'نشان دهنده بلوغ',
+  'نشان دهنده اهمیت',
+  'گامی در جهت',
+  'گامی مهم در',
+  'می تواند تاثیرگذار باشد',
+  'می تواند تاثیر بگذارد',
+  'پتانسیل دموکراتیزه کردن',
+  'نشانه ای از رشد پذیرش',
+  'یکی از بزرگترین رویدادهای',
+  'محسوب می شود',
+];
+
+function hasBannedGenericFiller(text: string): boolean {
+  const body = normalizeText(text);
+  return BANNED_GENERIC_FILLER_PHRASES.some(p => body.includes(p));
+}
+
+// ── Phase-next (observe-only): deterministic caption-quality score ──
+// Pure, no AI call, never rejects on its own. Lets a report flag dull/risky
+// captions so the operator can audit real output before tightening anything.
+export interface CaptionQualityScore {
+  clarity: number;            // 0..100
+  sourceGrounding: number;    // 0..100 (share of caption figures present in source)
+  telegramNative: number;     // 0..100 (length/structure heuristic)
+  boringOrGeneric: boolean;
+  unsupportedClaim: boolean;
+  score: number;              // 0..100 overall
+}
+
+export function scoreCaptionQuality(caption: unknown, sourceText: unknown = ''): CaptionQualityScore {
+  const text = String(caption ?? '').trim();
+  const src = String(sourceText ?? '');
+  const len = text.length;
+
+  const boringOrGeneric = hasBannedGenericFiller(text);
+  const unsupportedClaim = hasFullyUngroundedFigures(src, text);
+
+  // grounding: fraction of caption currency/percent figures found in source.
+  const figs = extractGroundableFigureCores(text);
+  const srcDigits = normalizeDigits(src).replace(/[,،]/g, '');
+  let grounded = 0;
+  for (const f of figs) if (srcDigits.includes(f)) grounded++;
+  const sourceGrounding = figs.length === 0 ? 100 : Math.round((grounded / figs.length) * 100);
+
+  // telegram-native: reward 120..320 chars, penalise very short/very long.
+  const telegramNative = len < 60 ? 30 : len <= 320 ? 100 : len <= 500 ? 70 : 40;
+
+  // clarity: penalise filler and a missing concrete signal.
+  let clarity = 100;
+  if (boringOrGeneric) clarity -= 35;
+  if (!captionHasConcreteSignal(text)) clarity -= 30;
+  clarity = Math.max(0, clarity);
+
+  const score = Math.round(
+    0.35 * clarity + 0.30 * sourceGrounding + 0.20 * telegramNative + (unsupportedClaim ? 0 : 15),
+  );
+  return { clarity, sourceGrounding, telegramNative, boringOrGeneric, unsupportedClaim, score: Math.min(100, score) };
+}
+
+/**
+ * Phase 6G: remove a trailing sentence that is pure cliché filler (contains a
+ * banned stem AND carries no concrete signal of its own), keeping the factual
+ * sentences. Conservative: only strips a FINAL sentence, never the only
+ * sentence, and at most twice. Operates on both captionShort and captionFull.
+ */
+function stripTrailingFillerClauses(t: TranslationOutput): TranslationOutput {
+  return {
+    ...t,
+    captionShort: stripTrailingFillerFromText(t.captionShort),
+    captionFull: stripTrailingFillerFromText(t.captionFull),
+  };
+}
+
+function stripTrailingFillerFromText(text: unknown): string {
+  let body = String(text ?? '');
+  for (let pass = 0; pass < 2; pass++) {
+    const sentences = body.split(/(?<=[.!؟۔])\s+/).filter(s => s.trim().length > 0);
+    if (sentences.length <= 1) break;
+    const last = sentences[sentences.length - 1]!;
+    const isFiller = hasBannedGenericFiller(last) && !captionHasConcreteSignal(last);
+    if (!isFiller) break;
+    sentences.pop();
+    body = sentences.join(' ').trim();
+  }
+  return body;
+}
+
+/** Caption carries its own concrete signal: a figure, $, %, or material term. */
+function captionHasConcreteSignal(text: string): boolean {
+  const body = normalizeDigits(String(text ?? ''));
+  if (/[0-9]/.test(body) || body.includes('$') || body.includes('%') || body.includes('٪')) return true;
+  return hasMaterialCryptoImpact(text);
+}
+
+/**
+ * Extract currency/percent numeric cores from the caption. We only police
+ * these (not every bare number) to keep false positives low. A "core" is the
+ * leading integer run of the figure, e.g. "81.7" → "81", "$2" → "2".
+ */
+function extractGroundableFigureCores(text: string): string[] {
+  const body = normalizeDigits(String(text ?? ''));
+  const cores = new Set<string>();
+  const patterns = [
+    /\$\s*([0-9][0-9.,]*)/g,            // $2, $81.7
+    /([0-9][0-9.,]*)\s*(?:%|٪|درصد)/g,  // 12%, ۱۲ درصد
+    /([0-9][0-9.,]*)\s*(?:میلیون|میلیارد|تریلیون|million|billion|trillion)/gi,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(body)) !== null) {
+      const intPart = String(m[1] ?? '').replace(/[,،]/g, '').split('.')[0];
+      if (intPart && intPart.length >= 1) cores.add(intPart);
+    }
+  }
+  return Array.from(cores);
+}
+
+function hasFullyUngroundedFigures(sourceText: unknown, caption: string): boolean {
+  const cores = extractGroundableFigureCores(caption);
+  if (cores.length === 0) return false; // no policed figures → nothing to ground
+  const src = normalizeDigits(String(sourceText ?? '')).replace(/[,،]/g, '');
+  // grounded if ANY core appears in the source digits
+  const grounded = cores.some(core => src.includes(core));
+  return !grounded;
 }
 
 function isExplicitScamOrPrizeCampaign(body: string): boolean {

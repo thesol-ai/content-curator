@@ -121,6 +121,52 @@ AI_CANDIDATE_MAX_AGE_HOURS = "12"
 AI_BACKLOG_INLINE_DRAIN_ENABLED = "false"
 AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER = "6"
 
+# ── Phase 6F: Adaptive rotation + queue-health controller + scheduler ──
+# All default to current behavior. Roll out one flag at a time per channel.
+APIFY_ROTATION_CONTINUOUS_ENABLED   = "false"  # spread sources across the interval instead of bursting
+APIFY_ROTATION_SLOT_MINUTES         = "30"     # one designated source per 30-min slot (6 sources / 3h, evenly)
+QUEUE_HEALTH_CONTROLLER_ENABLED     = "false"  # adapt scoring rate / early rotation when near-term queue is starving
+QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H  = "3"      # healthy floor for scheduled posts in next 6h
+QUEUE_HEALTH_STARVING_MAX_BATCHES   = "3"      # scoring batches per tick while starving (normal stays AI_MAX_SCORING_BATCHES_PER_RUN)
+QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS = "50"
+QUEUE_HEALTH_CHANNEL_ID             = "crypto_fa_pilot"
+PUBLISH_SCHEDULER_GAP_FILL_ENABLED  = "false"  # fill earliest free slot from now instead of appending after MAX(scheduled_at)
+# ── Phase 6G: caption quality ──
+AI_TRANSLATION_MAX_TEXT_CHARS       = "400"    # INERT default (== AI_MAX_TEXT_CHARS_PER_ITEM). Raise to ~900 to give the caption model more context (6G).
+# ── Phase 6H: cost — run cheap dedupe/audience gates before paid translation ──
+BACKLOG_TRANSLATE_AFTER_GATES_ENABLED = "false"
+# ── Phase 6I: enforce per-source daily cap (channels.max_posts_per_source_per_day) ──
+PUBLISH_ENFORCE_SOURCE_DAILY_CAP_ENABLED = "false"  # enable AFTER 6F improves supply, to curb source dominance
+# ── Phase 6J: audience-aware scoring guidance (Iranian/Persian now; ar/en/ru later) ──
+AUDIENCE_PROFILE_SCORING_ENABLED = "false"  # adds locale relevance guidance to scoring (does NOT change threshold)
+# ── Phase 6K: story intelligence (OBSERVE-ONLY; structured story_key) ──
+STORY_INTELLIGENCE_ENABLED = "false"        # ask scoring model for primary_entities/event_type/canonical_date
+STORY_INTELLIGENCE_OBSERVE_ONLY = "true"    # SAFETY GATE: while true, story_key is only logged and NEVER used to reject, even if REJECT_ENABLED=true. Set to "false" to allow real rejection.
+# ── Phase 6K active reject (default OFF) + window/follow-up ──
+STORY_INTELLIGENCE_REJECT_ENABLED = "false"   # actively reject story_key repeats (needs migration 0019 AND OBSERVE_ONLY=false to take effect)
+STORY_INTELLIGENCE_WINDOW_HOURS = "48"
+STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED = "true"  # let materially-new follow-ups through
+STORY_INTELLIGENCE_RETENTION_DAYS = "30"     # retention for story_intelligence_events (daily-guarded cleanup)
+# ── AI cost attribution by source (default OFF; needs migration 0019) ──
+AI_COST_ATTRIBUTION_ENABLED = "false"
+AI_USAGE_ATTRIBUTION_RETENTION_DAYS = "45"
+# ── Active source-reputation weighting (default OFF; with exploration) ──
+SOURCE_REPUTATION_WEIGHTING_ENABLED = "false"
+SOURCE_REPUTATION_EXPLORATION_PCT = "20"
+SOURCE_REPUTATION_MIN_SAMPLE = "20"
+SOURCE_REPUTATION_MAX_WEIGHT = "2.0"
+SOURCE_REPUTATION_MIN_WEIGHT = "0.3"
+SOURCE_REPUTATION_RECENT_RUN_COOLDOWN_SLOTS = "6"  # cool down sources scraped in the last N slots
+# ── Queue-quality controller (steer toward diversity; default OFF) ──
+QUEUE_QUALITY_CONTROLLER_ENABLED = "false"
+QUEUE_QUALITY_MIN_UNIQUE_SOURCES_NEXT_6H = "2"
+QUEUE_QUALITY_MAX_SOURCE_SHARE_NEXT_24H = "0.4"
+QUEUE_QUALITY_MIN_UNIQUE_STORIES_NEXT_6H = "2"
+# ── Caption quality repair-first (default OFF) ──
+CAPTION_QUALITY_REPAIR_ENABLED = "false"
+CAPTION_QUALITY_REJECT_ENABLED = "false"
+CAPTION_QUALITY_MIN_SCORE = "70"
+
 TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 TRANSLATION_BATCH_SIZE = "3"

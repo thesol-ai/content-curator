@@ -9,6 +9,12 @@ import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from 
 import { getPreAiContentRejectReason } from './content-policy';
 import { getCategoryPolicy } from '../categories/registry';
 import { applyPersianCaptionQualityGuard } from './story-quality-guard';
+import {
+  getAudienceProfileGuidance,
+  isAudienceProfileScoringEnabled,
+  primaryAudienceKey,
+} from './audience-profile';
+import { buildStoryKey, isStoryIntelligenceEnabled, parseStoryFields } from './story-intelligence';
 
 // ── Provider configs ──────────────────────────────────────────
 
@@ -122,6 +128,26 @@ export async function runAIGate(
 ): Promise<AIGateResult[]> {
   if (items.length === 0) return [];
 
+  const scoreResults = await scoreItems(env, items, category, whitelistedAccounts, channels);
+  return attachTranslations(env, items, scoreResults, category, channels);
+}
+
+/**
+ * Phase 6H — Stage 1 only: score + risk + topic fingerprint. Translations are
+ * NOT produced here. Callers that want to run cheap deterministic gates
+ * (dedupe/theme/audience) before paying for translation use this, then call
+ * attachTranslations() for survivors only.
+ */
+export async function scoreItems(
+  env: Env,
+  items: NormalizedItem[],
+  category: CategoryRow,
+  whitelistedAccounts: string[],
+  channels: ChannelRow[] = [],
+  attributionItems?: AttributionItem[],
+): Promise<AIGateResult[]> {
+  if (items.length === 0) return [];
+
   const cfg = loadConfig(env);
   cfg.languageTargets = JSON.parse(category.language_targets || '["fa"]');
   cfg.translationTargets = buildTranslationTargets(cfg.languageTargets, channels);
@@ -130,23 +156,51 @@ export async function runAIGate(
     return items.map(item => mockResult(item, category, cfg.translationTargets));
   }
 
-  // ── مرحله ۱: Claude — Scoring + Risk ──────────────────────
-  const scoreResults = await runScoring(env, cfg, items, category, whitelistedAccounts);
+  return runScoring(env, cfg, items, category, whitelistedAccounts, attributionItems);
+}
 
-  const selectedForTranslation = items.filter((_, i) =>
-    (scoreResults[i]?.publish ?? false) && (scoreResults[i]?.score ?? 0) >= category.score_threshold
-  );
+/**
+ * Phase 6H — Stage 2: produce translations for the publish-eligible items that
+ * do not already have them, and merge into the score results. Safe to call on
+ * a partially-translated array; items that already carry translations (e.g.
+ * dry-run mocks) are left untouched.
+ */
+export async function attachTranslations(
+  env: Env,
+  items: NormalizedItem[],
+  scoreResults: AIGateResult[],
+  category: CategoryRow,
+  channels: ChannelRow[] = [],
+  attributionItems?: AttributionItem[],
+): Promise<AIGateResult[]> {
+  if (items.length === 0) return scoreResults;
+
+  const cfg = loadConfig(env);
+  cfg.languageTargets = JSON.parse(category.language_targets || '["fa"]');
+  cfg.translationTargets = buildTranslationTargets(cfg.languageTargets, channels);
+
+  const needsTranslation = (i: number): boolean => {
+    const r = scoreResults[i];
+    if (!r || !r.publish) return false;
+    if ((r.score ?? 0) < category.score_threshold) return false;
+    return Object.keys(r.translations ?? {}).length === 0;
+  };
+
+  const selectedForTranslation = items.filter((_, i) => needsTranslation(i));
 
   if (selectedForTranslation.length === 0 || cfg.translationTargets.length === 0) {
     return scoreResults;
   }
 
-  // ── مرحله ۲: Translation Provider ─────────────────────────
-  const translationsMap = await runTranslation(env, cfg, selectedForTranslation, category);
+  const attrByPostId = new Map<string, AttributionItem>(
+    items.map((it, i) => [it.postId, attributionItems?.[i] ?? { sourceAccount: it.sourceAccount }] as const),
+  );
+  const translationsMap = await runTranslation(env, cfg, selectedForTranslation, category, attrByPostId);
 
   return scoreResults.map((result, i) => {
     const item = items[i]!;
     if (!result.publish) return result;
+    if (!needsTranslation(i)) return result; // already had translations (e.g. mock)
     const t = getTranslationsForItem(translationsMap, item);
     if (!t || Object.keys(t).length === 0) {
       // ترجمه موجود نیست — این یک خطای مشخص است نه رد ساکت
@@ -172,7 +226,8 @@ async function runScoring(
   cfg: Config,
   items: NormalizedItem[],
   category: CategoryRow,
-  whitelist: string[]
+  whitelist: string[],
+  attributionItems?: AttributionItem[],
 ): Promise<AIGateResult[]> {
   // اگر custom_prompt در DB تنظیم شده، اولویت دارد (برای هر کتگوری دلخواه)
   const profile = category.custom_prompt?.trim() ||
@@ -206,15 +261,38 @@ async function runScoring(
   const scoringEditorialPolicy = buildScoringEditorialPolicy(category);
   const categoryScoringPolicy = getCategoryPolicy(category.id).buildScoringPolicy?.(category) ?? '';
 
+  // Next phase (6J): optional audience-aware selection guidance. Flag-gated and
+  // additive — it nudges relevance ranking for the channel's primary audience
+  // (e.g. Persian/Iranian) without altering the numeric threshold.
+  const audienceGuidance = isAudienceProfileScoringEnabled(env)
+    ? (getAudienceProfileGuidance(primaryAudienceKey(cfg.languageTargets)) ?? '')
+    : '';
+
+  // Phase 6K (observe-only): when enabled, also ask for structured story fields.
+  // Default off → JSON contract unchanged.
+  const storyIntelEnabled = isStoryIntelligenceEnabled(env);
+  const storyIntelInstr = storyIntelEnabled
+    ? [
+        'Additionally include structured story fields for clustering:',
+        '"primary_entities": up to 3 canonical names central to the story (people/orgs/tokens/protocols), e.g. ["Tether","Monero","ZachXBT"].',
+        '"event_type": a short slug for what happened, e.g. "security_laundering","etf_flows","listing","exploit","regulation","funding","protocol_upgrade".',
+        '"canonical_date": the UTC date the event happened, "YYYY-MM-DD".',
+      ].join('\n')
+    : '';
+
   const system = [
     `You are an expert content curator. ${profile}`,
     scoringEditorialPolicy,
     categoryScoringPolicy,
+    audienceGuidance,
+    storyIntelInstr,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
     '',
     'Return ONLY a JSON object with this exact structure (no markdown, no explanation):',
-    '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal"}]}',
+    storyIntelEnabled
+      ? '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","primary_entities":["Tether","Monero"],"event_type":"security_laundering","canonical_date":"2026-06-13"}]}'
+      : '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal"}]}',
     '',
     'publish_priority: "breaking"|"high"|"normal"|"low"',
     'risk_level: "low"|"medium"|"high" — set publish=false if high risk',
@@ -280,13 +358,19 @@ async function runScoring(
       if (!res.ok) { lastErr = `Claude HTTP ${res.status}`; continue; }
       const body = await res.json() as any;
       const usage = extractAnthropicUsage(body);
-      await recordAIUsage(env, {
+      const usageId = await recordAIUsage(env, {
         provider: 'anthropic',
         purpose: 'scoring',
         model: cfg.scoringModel,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         status: 'success',
+      });
+      await recordUsageAttribution(env, {
+        categoryId: category.id, purpose: 'scoring', provider: 'anthropic', model: cfg.scoringModel,
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+        items: attributionItems ?? items.map(it => ({ sourceAccount: it.sourceAccount })),
+        aiUsageId: usageId,
       });
       const text: string = body.content?.[0]?.text ?? '';
 
@@ -420,6 +504,8 @@ function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateRes
         : `fp-${item.postId}`,
       publishPriority: (validPriorities.includes(p.publish_priority) ? p.publish_priority : 'normal') as any,
       translations: {},
+      storyKey: buildStoryKey(parseStoryFields(p)),
+      storyFields: parseStoryFields(p),
     };
   });
 }
@@ -638,7 +724,8 @@ async function runTranslation(
   env: Env,
   cfg: Config,
   items: NormalizedItem[],
-  category: CategoryRow
+  category: CategoryRow,
+  attrByPostId?: Map<string, AttributionItem>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const result = new Map<string, any>();
   if (items.length === 0) return result;
@@ -647,7 +734,7 @@ async function runTranslation(
 
   for (let offset = 0; offset < items.length; offset += batchSize) {
     const chunk = items.slice(offset, offset + batchSize);
-    const chunkMap = await runTranslationChunk(env, cfg, chunk, category, offset);
+    const chunkMap = await runTranslationChunk(env, cfg, chunk, category, offset, attrByPostId);
     for (const [key, value] of chunkMap.entries()) result.set(key, value);
   }
 
@@ -660,13 +747,16 @@ async function runTranslationChunk(
   cfg: Config,
   items: NormalizedItem[],
   category: CategoryRow,
-  offset: number
+  offset: number,
+  attrByPostId?: Map<string, AttributionItem>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const provider = cfg.translationProvider;
   const result = new Map<string, any>();
+  let chunkUsage: { inputTokens: number; outputTokens: number; usageId: string | null } = { inputTokens: 0, outputTokens: 0, usageId: null };
+  const captureUsage = (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => { chunkUsage = u; };
 
   const system = buildTranslationSystem(cfg.translationTargets, category);
-  const user = buildTranslationUser(items, cfg.translationTargets, cfg.maxTextChars);
+  const user = buildTranslationUser(items, cfg.translationTargets, cfg.translationMaxTextChars);
 
   let responseText = '';
   let lastErr = '';
@@ -675,11 +765,11 @@ async function runTranslationChunk(
     if (attempt > 0) await sleep(2000 * attempt);
     try {
       if (provider === 'gemini') {
-        responseText = await callGemini(env, cfg.translationModel, system, user);
+        responseText = await callGemini(env, cfg.translationModel, system, user, captureUsage);
       } else if (provider === 'openai') {
-        responseText = await callOpenAI(env, cfg.translationModel, system, user);
+        responseText = await callOpenAI(env, cfg.translationModel, system, user, captureUsage);
       } else {
-        responseText = await callClaude(env, cfg.translationModel || cfg.scoringModel, system, user);
+        responseText = await callClaude(env, cfg.translationModel || cfg.scoringModel, system, user, captureUsage);
       }
       if (responseText) break;
     } catch (e) {
@@ -697,6 +787,15 @@ async function runTranslationChunk(
     console.error(`[Translation] Could not parse JSON from chunk offset=${offset}. preview=${debugPreview(responseText)}`);
     return result;
   }
+
+  // Phase-next: attribute this chunk's translation tokens across its items
+  // (flag-gated; no-op when AI_COST_ATTRIBUTION_ENABLED is off).
+  await recordUsageAttribution(env, {
+    categoryId: category.id, purpose: 'translation', provider: cfg.translationProvider,
+    model: cfg.translationModel, inputTokens: chunkUsage.inputTokens, outputTokens: chunkUsage.outputTokens,
+    items: items.map(it => attrByPostId?.get(it.postId) ?? { sourceAccount: it.sourceAccount }),
+    aiUsageId: chunkUsage.usageId,
+  });
 
   let usable = 0;
   let mappedByPostId = 0;
@@ -731,7 +830,11 @@ async function runTranslationChunk(
 
         const repaired = await repairRtlTranslationLeadIfNeeded(env, cfg, target, translation, provider);
         const qualityDecision: { ok: boolean; translation?: TranslationValue; reason?: string } = repaired
-          ? applyPersianCaptionQualityGuard(target.language, repaired, originalItem?.text ?? '')
+          ? applyPersianCaptionQualityGuard(target.language, repaired, originalItem?.text ?? '', {
+              repairEnabled: String((env as any).CAPTION_QUALITY_REPAIR_ENABLED ?? '').toLowerCase() === 'true',
+              rejectEnabled: String((env as any).CAPTION_QUALITY_REJECT_ENABLED ?? '').toLowerCase() === 'true',
+              minScore: parseInt(String((env as any).CAPTION_QUALITY_MIN_SCORE ?? '70'), 10) || 70,
+            })
           : { ok: false, reason: 'rtl_repair_failed' };
         if (qualityDecision.ok && qualityDecision.translation) {
           translations[target.key] = qualityDecision.translation;
@@ -1003,6 +1106,11 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Persian (fa) captions must be in natural, fluent Farsi for an Iranian crypto audience — NOT a literal translation and NOT generic U.S. retail/investor copy',
     '- Persian captions must clearly answer: why does this matter for Persian-speaking crypto users? If there is no clear relevance, keep the caption restrained and do not hype it.',
     '- Avoid generic filler such as "نشان‌دهنده پذیرش نهادی", "گامی مهم", "می‌تواند تأثیرگذار باشد" unless the source gives a concrete reason.',
+    '- BANNED generic filler in Persian — do NOT use these or close variants: "نشان‌دهنده پذیرش", "نشان‌دهنده افزایش", "نشان‌دهنده تغییرات", "نشان‌دهنده بلوغ", "گامی در جهت", "می‌تواند تأثیرگذار باشد", "پتانسیل دموکراتیزه کردن", "یکی از بزرگترین رویدادهای تاریخ", "محسوب می‌شود". If you cannot give a concrete source-backed reason, omit the "why it matters" line entirely.',
+    '- Every number, percentage, ticker, $ amount, date, and named entity in the caption MUST appear in the source text. Do NOT invent figures, valuations, IPO implications, or predictions absent from the source.',
+    '- Bad (filler): "این خبر نشان‌دهنده پذیرش نهادی است و می‌تواند تأثیرگذار باشد." Good (concrete): "نوبیتکس در پی هک ۸۱.۷ میلیون دلار از دست داد؛ وجوه به آدرس‌های سوخت‌شده منتقل شد."',
+    '- Prefer short, sharp, Telegram-native Persian: lead with the concrete fact, then at most one context line the source supports.',
+    '- NO speculation: do NOT add hedging guesses such as "می‌تواند نشان‌دهنده ... باشد" / "ممکن است ... باشد" about why a transfer or move happened. For whale/transfer/on-chain-movement items, state ONLY the confirmed facts (amount, asset, from/to) and stop; do not guess motive or market impact unless the source states it.',
     '- Persian (fa) caption_full and caption_short must start cleanly for RTL. Optional leading emoji is allowed, but the first real word after any emoji/spacing MUST be Persian.',
     '- Persian (fa) captions must never start with an English word, Latin brand name, ticker such as $BTC, number, @handle, URL, or hashtag.',
     '- Do not use a fixed or static prefix in Persian captions. Let the opening words be natural to the story while obeying the Persian-first rule.',
@@ -1049,7 +1157,7 @@ function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarge
 
 // ── Provider callers ──────────────────────────────────────────
 
-async function callGemini(env: Env, model: string, system: string, user: string): Promise<string> {
+async function callGemini(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
   const apiKey = env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
@@ -1072,14 +1180,15 @@ async function callGemini(env: Env, model: string, system: string, user: string)
 
   const body = await res.json() as any;
   const usage = extractGeminiUsage(body);
-  await recordAIUsage(env, {
+  const usageId = await recordAIUsage(env, {
     provider: 'gemini', purpose: 'translation', model,
     inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
   });
+  onUsage?.({ ...usage, usageId });
   return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 }
 
-async function callOpenAI(env: Env, model: string, system: string, user: string): Promise<string> {
+async function callOpenAI(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
   const apiKey = env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
 
@@ -1108,14 +1217,15 @@ async function callOpenAI(env: Env, model: string, system: string, user: string)
 
   const body = await res.json() as any;
   const usage = extractOpenAIUsage(body);
-  await recordAIUsage(env, {
+  const usageId = await recordAIUsage(env, {
     provider: 'openai', purpose: 'translation', model,
     inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
   });
+  onUsage?.({ ...usage, usageId });
   return body.choices?.[0]?.message?.content ?? '';
 }
 
-async function callClaude(env: Env, model: string, system: string, user: string): Promise<string> {
+async function callClaude(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
   const apiKey = env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
 
@@ -1138,10 +1248,11 @@ async function callClaude(env: Env, model: string, system: string, user: string)
   if (!res.ok) throw new Error(`Claude HTTP ${res.status}`);
   const body = await res.json() as any;
   const usage = extractAnthropicUsage(body);
-  await recordAIUsage(env, {
+  const usageId = await recordAIUsage(env, {
     provider: 'claude', purpose: 'translation', model,
     inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
   });
+  onUsage?.({ ...usage, usageId });
   return body.content?.[0]?.text ?? '';
 }
 
@@ -1172,6 +1283,7 @@ interface Config {
   translationProvider: 'gemini' | 'openai' | 'claude';
   translationModel: string;
   maxTextChars: number;
+  translationMaxTextChars: number;
   maxRetries: number;
   maxOutputTokens: number;
   languageTargets: string[];
@@ -1185,12 +1297,20 @@ function loadConfig(env: Env): Config {
   if (provider === 'openai') defaultModel = 'gpt-4o-mini';
   if (provider === 'claude') defaultModel = env.AI_SCORING_MODEL || 'claude-haiku-4-5-20251001';
 
+  const scoringMaxTextChars = parseInt(env.AI_MAX_TEXT_CHARS_PER_ITEM || '400', 10);
+  const translationMaxTextChars = clampInt(
+    parseInt((env as any).AI_TRANSLATION_MAX_TEXT_CHARS || '', 10) || scoringMaxTextChars,
+    scoringMaxTextChars,
+    4000,
+  );
+
   return {
     dryRun: env.APIFY_CURATION_DRY_RUN === 'true',
     scoringModel: env.AI_SCORING_MODEL || 'claude-haiku-4-5-20251001',
     translationProvider: provider,
     translationModel: env.TRANSLATION_MODEL || defaultModel,
-    maxTextChars: parseInt(env.AI_MAX_TEXT_CHARS_PER_ITEM || '400', 10),
+    maxTextChars: scoringMaxTextChars,
+    translationMaxTextChars,
     maxRetries: parseInt(env.AI_MAX_RETRIES || '1', 10),
     maxOutputTokens: parseInt(env.AI_MAX_OUTPUT_TOKENS || '4096', 10),
     languageTargets: [],
@@ -1232,14 +1352,15 @@ async function checkScoringBudget(env: Env, cfg: Config): Promise<AIBudgetCheck>
   }
 }
 
-async function recordAIUsage(env: Env, usage: AIUsageRecord): Promise<void> {
-  if (!env.DB) return;
+async function recordAIUsage(env: Env, usage: AIUsageRecord): Promise<string | null> {
+  if (!env.DB) return null;
+  const usageId = `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   try {
     await env.DB.prepare(`
       INSERT INTO ai_usage (id, provider, purpose, model, input_tokens, output_tokens, status, error_message)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      usageId,
       usage.provider,
       usage.purpose,
       usage.model,
@@ -1248,8 +1369,66 @@ async function recordAIUsage(env: Env, usage: AIUsageRecord): Promise<void> {
       usage.status,
       usage.errorMessage ? usage.errorMessage.slice(0, 400) : null,
     ).run();
+    return usageId;
   } catch (e) {
     console.warn('[AIGate] Failed to record AI usage:', e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
+
+function isCostAttributionEnabled(env: Env): boolean {
+  return String((env as any).AI_COST_ATTRIBUTION_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+export interface AttributionItem {
+  sourceAccount: string;
+  sourceId?: string | null;
+  candidateId?: string | null;
+  discoveryItemId?: string | null;
+  channelId?: string | null;
+}
+
+/**
+ * Phase-next cost attribution (flag-gated, default off, needs migration 0019).
+ * Apportions a call's tokens equally across the items it covered and writes one
+ * ai_usage_attribution row per item with FULL keys (source_id, candidate_id,
+ * discovery_item_id, channel_id) when available. Best-effort; never throws.
+ */
+async function recordUsageAttribution(
+  env: Env,
+  args: {
+    categoryId: string; purpose: AIPurpose; provider: string; model: string;
+    inputTokens: number; outputTokens: number; items: AttributionItem[];
+    aiUsageId?: string | null;
+  },
+): Promise<void> {
+  if (!env.DB || !isCostAttributionEnabled(env)) return;
+  const n = args.items.length;
+  if (n === 0) return;
+  const inEach = Math.floor((args.inputTokens || 0) / n);
+  const outEach = Math.floor((args.outputTokens || 0) / n);
+  try {
+    for (const it of args.items) {
+      await env.DB.prepare(`
+        INSERT INTO ai_usage_attribution
+          (id, ai_usage_id, category_id, channel_id, source_id, source_account,
+           discovery_item_id, candidate_id, purpose, provider, model,
+           input_tokens, output_tokens)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).bind(
+        `attr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        args.aiUsageId ?? null,
+        args.categoryId,
+        it.channelId ?? null,
+        it.sourceId ?? null,
+        String(it.sourceAccount ?? ''),
+        it.discoveryItemId ?? null,
+        it.candidateId ?? null,
+        args.purpose, args.provider, args.model, inEach, outEach,
+      ).run();
+    }
+  } catch (e) {
+    console.warn('[AIGate] usage attribution skipped:', e instanceof Error ? e.message : String(e));
   }
 }
 
