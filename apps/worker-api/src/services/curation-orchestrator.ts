@@ -169,6 +169,10 @@ function datasetSyncReason(primaryDatasetId: string, effectiveDatasetId: string)
     : 'stale_primary_resolved_from_last_dataset_id';
 }
 
+function shouldDrainBacklogInline(env: Env): boolean {
+  return (env as any).AI_BACKLOG_INLINE_DRAIN_ENABLED === 'true';
+}
+
 function getApifyRawFetchLimit(env: Env, finalLimit: number): number {
   const explicit = Number((env as any).APIFY_RAW_FETCH_LIMIT_PER_SOURCE);
   if (Number.isFinite(explicit) && explicit > 0) {
@@ -586,33 +590,51 @@ async function processSingleSource(
           metadata: { errors: enqueueErrors.map(e => e.reason).slice(0, 10) },
         });
       } else {
-        await markPhase('drain_ai_candidate_backlog');
-        const drain = await drainAICandidateQueue(env, { categoryId: category.id });
-        itemsAiSelected += drain.candidatesSelected;
-        itemsAiRejected += drain.candidatesRejected + drain.candidatesFailed + drain.candidatesSkipped;
-        itemsQueued += drain.candidatesQueued;
+        if (shouldDrainBacklogInline(env)) {
+          await markPhase('drain_ai_candidate_backlog');
+          const drain = await drainAICandidateQueue(env, { categoryId: category.id });
+          itemsAiSelected += drain.candidatesSelected;
+          itemsAiRejected += drain.candidatesRejected + drain.candidatesFailed + drain.candidatesSkipped;
+          itemsQueued += drain.candidatesQueued;
 
-        await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
-          dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
+          await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
+            dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
+          await recordRunEvent(env, {
+            runId,
+            eventType: dryRun ? 'run.dry_run_completed' : 'run.completed',
+            phase: 'finalize',
+            categoryId: category.id,
+            platform: source.platform,
+            sourceId: source.id,
+            datasetId: effectiveDatasetId,
+            durationMs: Date.now() - t0,
+            metadata: {
+              itemsFetched,
+              itemsNew,
+              itemsDuplicate,
+              itemsAiSelected,
+              itemsAiRejected,
+              itemsQueued,
+              backlogDrain: drain,
+            },
+          });
+          return mkResult(runId, category.id, source.platform, true, dryRun,
+            { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
+        }
+
         await recordRunEvent(env, {
           runId,
-          eventType: dryRun ? 'run.dry_run_completed' : 'run.completed',
-          phase: 'finalize',
+          eventType: 'candidate.enqueue.deferred_drain',
+          phase: 'enqueue_ai_candidates',
           categoryId: category.id,
           platform: source.platform,
           sourceId: source.id,
           datasetId: effectiveDatasetId,
           durationMs: Date.now() - t0,
-          metadata: {
-            itemsFetched,
-            itemsNew,
-            itemsDuplicate,
-            itemsAiSelected,
-            itemsAiRejected,
-            itemsQueued,
-            backlogDrain: drain,
-          },
+          metadata: { inserted: insertedIds.length, reason: 'inline_backlog_drain_disabled' },
         });
+        await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
+          dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
         return mkResult(runId, category.id, source.platform, true, dryRun,
           { itemsFetched, itemsNew, itemsDuplicate, itemsAiSelected, itemsAiRejected, itemsQueued, durationMs: Date.now() - t0 });
       }
