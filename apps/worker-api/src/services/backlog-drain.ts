@@ -9,6 +9,7 @@ import {
   failMaxAttemptPendingCandidates,
   fetchPendingCandidates,
   getCandidateBacklogDrainLimit,
+  getFairSourcePickerPoolMultiplier,
   getMaxScoringBatchesPerRun,
   getScoringBatchSize,
   isCandidateBacklogEnabled,
@@ -96,7 +97,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     const remaining = drainLimit - result.candidatesPulled;
     const fairPickerEnabled = isFairSourcePickerEnabled(env);
     const poolLimit = fairPickerEnabled
-      ? Math.min(remaining, Math.max(batchSize * 4, batchSize))
+      ? Math.min(Math.max(batchSize * getFairSourcePickerPoolMultiplier(env), batchSize), 200)
       : Math.min(batchSize, remaining);
     const pendingPool = await fetchPendingCandidates(env, poolLimit, options.categoryId);
     if (pendingPool.length === 0) break;

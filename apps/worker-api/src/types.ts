@@ -39,6 +39,7 @@ export interface Env {
   AI_CANDIDATE_MAX_ATTEMPTS?: string;       // default: "2"
   AI_CANDIDATE_MAX_AGE_HOURS?: string;      // default: "6"
   AI_FAIR_SOURCE_PICKER_ENABLED?: string;   // default: "false"
+  AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER?: string; // default: "6"
 
   // ── AI — Translation ───────────────────────────────────────
   TRANSLATION_PROVIDER: string;

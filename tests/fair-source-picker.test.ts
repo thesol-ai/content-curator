@@ -2,101 +2,172 @@ import { describe, expect, it } from 'vitest';
 import {
   accountKey,
   selectCandidateBatchForScoring,
-  selectRoundRobinBySourceAccount,
+  selectFairFillBySourceAndAccount,
+  sourceAccountBucketKey,
+  sourceIdKey,
 } from '../apps/worker-api/src/services/fair-source-picker';
-import type { AICandidateRow } from '../apps/worker-api/src/types';
+import { getFairSourcePickerPoolMultiplier } from '../apps/worker-api/src/services/candidate-queue';
+import type { AICandidateRow, Env } from '../apps/worker-api/src/types';
 
-function row(id: string, sourceAccount: string | null): AICandidateRow {
+function candidate(
+  id: string,
+  sourceId: string | null,
+  sourceAccount: string | null,
+  priorityScore = 100,
+): AICandidateRow {
   return {
     id,
-    source_id: 'src',
-    run_id: 'run',
+    source_id: sourceId,
+    run_id: `run_${id}`,
     category_id: 'crypto',
     platform: 'x',
     source_account: sourceAccount,
     source_url: `https://x.com/${sourceAccount ?? 'unknown'}/status/${id}`,
     post_id: id,
-    published_at: 1780000000,
+    published_at: Math.floor(Date.now() / 1000),
     normalized_item_json: '{}',
     dedupe_keys_json: '[]',
-    priority_score: 0,
+    priority_score: priorityScore,
     status: 'pending',
     attempt_count: 0,
     last_error: null,
-    created_at: '2026-06-08T00:00:00Z',
+    created_at: '2026-06-13 00:00:00',
     claimed_at: null,
     scored_at: null,
   };
 }
 
-describe('fair-source-picker', () => {
-  it('keeps FIFO order when fair picker is disabled', () => {
-    const candidates = [row('1', 'cointelegraph'), row('2', 'cointelegraph'), row('3', 'coindesk')];
-    const result = selectCandidateBatchForScoring(candidates, 2, false);
-
-    expect(result.selected.map(x => x.id)).toEqual(['1', '2']);
-    expect(result.stats.enabled).toBe(false);
-  });
-
-  it('round-robins candidates across source accounts when enabled', () => {
-    const candidates = [
-      row('ct1', 'cointelegraph'),
-      row('ct2', 'cointelegraph'),
-      row('ct3', 'cointelegraph'),
-      row('cd1', 'coindesk'),
-      row('bc1', 'beincrypto'),
-      row('cd2', 'coindesk'),
+describe('fair source picker', () => {
+  it('keeps existing priority/FIFO order when fair picker is disabled', () => {
+    const rows = [
+      candidate('wu1', 'src_news_text', 'WuBlockchain'),
+      candidate('wu2', 'src_news_text', 'WuBlockchain'),
+      candidate('sol1', 'src_market_media', 'solana'),
+      candidate('desk1', 'src_market_text', 'CoinDesk'),
     ];
 
-    const selected = selectRoundRobinBySourceAccount(candidates, 5);
+    const selection = selectCandidateBatchForScoring(rows, 3, false);
 
-    expect(selected.map(x => x.id)).toEqual(['ct1', 'cd1', 'bc1', 'ct2', 'cd2']);
+    expect(selection.selected.map(row => row.id)).toEqual(['wu1', 'wu2', 'sol1']);
+    expect(selection.stats.enabled).toBe(false);
+    expect(selection.stats.outputCount).toBe(3);
   });
 
-  it('falls back to original order when all candidates have the same account', () => {
-    const candidates = [row('1', 'cointelegraph'), row('2', 'cointelegraph'), row('3', 'cointelegraph')];
+  it('fair-fills across source/query buckets before allowing one source to dominate', () => {
+    const rows = [
+      candidate('news-wu-1', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('news-wu-2', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('news-wu-3', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('market-sol-1', 'src_market_trending_x_media', 'solana'),
+      candidate('market-sol-2', 'src_market_trending_x_media', 'solana'),
+      candidate('desk-1', 'src_market_trending_x_text', 'CoinDesk'),
+      candidate('desk-2', 'src_market_trending_x_text', 'CoinDesk'),
+    ];
 
-    expect(selectRoundRobinBySourceAccount(candidates, 2).map(x => x.id)).toEqual(['1', '2']);
+    const selected = selectFairFillBySourceAndAccount(rows, 6);
+
+    expect(selected.map(row => row.id)).toEqual([
+      'news-wu-1',
+      'market-sol-1',
+      'desk-1',
+      'news-wu-2',
+      'market-sol-2',
+      'desk-2',
+    ]);
   });
 
-  it('handles missing source accounts as an unknown group without dropping candidates', () => {
-    const candidates = [row('u1', null), row('ct1', 'cointelegraph'), row('u2', ''), row('cd1', 'coindesk')];
-    const result = selectCandidateBatchForScoring(candidates, 4, true);
+  it('round-robins source accounts inside the same source bucket', () => {
+    const rows = [
+      candidate('wu-1', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('wu-2', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('desk-1', 'src_crypto_x_news_text', 'CoinDesk'),
+      candidate('watcher-1', 'src_crypto_x_news_text', 'WatcherGuru'),
+      candidate('wu-3', 'src_crypto_x_news_text', 'WuBlockchain'),
+    ];
 
-    expect(result.selected.map(x => x.id)).toEqual(['u1', 'ct1', 'u2', 'cd1']);
-    expect(result.stats.unknownAccountCount).toBe(2);
-    expect(result.stats.selectedByAccount.__unknown__).toBe(2);
+    const selected = selectFairFillBySourceAndAccount(rows, 5);
+
+    expect(selected.map(row => row.id)).toEqual(['wu-1', 'desk-1', 'watcher-1', 'wu-2', 'wu-3']);
   });
 
-  it('normalizes source account keys case-insensitively', () => {
-    expect(accountKey(row('1', 'CoinTelegraph'))).toBe('cointelegraph');
-    expect(accountKey(row('2', '  CoinDesk  '))).toBe('coindesk');
+  it('preserves batch volume when only one source and one account has candidates', () => {
+    const rows = Array.from({ length: 8 }, (_, i) => candidate(`wu-${i + 1}`, 'src_crypto_x_news_text', 'WuBlockchain'));
+
+    const selected = selectFairFillBySourceAndAccount(rows, 6);
+
+    expect(selected).toHaveLength(6);
+    expect(selected.every(row => row.source_account === 'WuBlockchain')).toBe(true);
   });
 
-  it('does not exceed the requested limit', () => {
-    const candidates = [row('1', 'a'), row('2', 'b'), row('3', 'c'), row('4', 'd')];
+  it('backfills from the dominant source after minority buckets are exhausted', () => {
+    const rows = [
+      candidate('wu-1', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('wu-2', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('wu-3', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('wu-4', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('sol-1', 'src_market_trending_x_media', 'solana'),
+      candidate('desk-1', 'src_market_trending_x_text', 'CoinDesk'),
+    ];
 
-    expect(selectCandidateBatchForScoring(candidates, 3, true).selected).toHaveLength(3);
+    const selected = selectFairFillBySourceAndAccount(rows, 5);
+
+    expect(selected.map(row => row.id)).toEqual(['wu-1', 'sol-1', 'desk-1', 'wu-2', 'wu-3']);
+    expect(selected).toHaveLength(5);
   });
 
-  it('returns empty selection for zero or negative limits', () => {
-    const candidates = [row('1', 'a')];
+  it('reports source/account/bucket distribution stats for operational debugging', () => {
+    const rows = [
+      candidate('wu-1', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('wu-2', 'src_crypto_x_news_text', 'WuBlockchain'),
+      candidate('sol-1', 'src_market_trending_x_media', 'solana'),
+      candidate('unknown-1', null, null),
+    ];
 
-    expect(selectCandidateBatchForScoring(candidates, 0, true).selected).toEqual([]);
-    expect(selectCandidateBatchForScoring(candidates, -5, true).selected).toEqual([]);
+    const selection = selectCandidateBatchForScoring(rows, 4, true);
+
+    expect(selection.stats.sourceIdCount).toBe(3);
+    expect(selection.stats.accountCount).toBe(3);
+    expect(selection.stats.unknownSourceIdCount).toBe(1);
+    expect(selection.stats.unknownAccountCount).toBe(1);
+    expect(selection.stats.selectedBySourceId.src_crypto_x_news_text).toBe(2);
+    expect(selection.stats.selectedByAccount.wublockchain).toBe(2);
+    expect(selection.stats.selectedByBucket['src_crypto_x_news_text::wublockchain']).toBe(2);
   });
 
-  it('preserves all candidates when input count is below limit', () => {
-    const candidates = [row('1', 'a'), row('2', 'a'), row('3', 'b')];
+  it('normalizes source, account, and bucket keys safely', () => {
+    const known = candidate('known', 'src_crypto_x_news_text', '@WuBlockchain');
+    const unknown = candidate('unknown', null, null);
 
-    expect(selectCandidateBatchForScoring(candidates, 10, true).selected.map(x => x.id)).toEqual(['1', '2', '3']);
+    expect(sourceIdKey(known)).toBe('src_crypto_x_news_text');
+    expect(accountKey(known)).toBe('@wublockchain');
+    expect(sourceAccountBucketKey(known)).toBe('src_crypto_x_news_text::@wublockchain');
+
+    expect(sourceIdKey(unknown)).toBe('__unknown_source__');
+    expect(accountKey(unknown)).toBe('__unknown_account__');
+    expect(sourceAccountBucketKey(unknown)).toBe('__unknown_source__::__unknown_account__');
+  });
+});
+
+describe('fair source picker pool multiplier config', () => {
+  function env(value?: string): Env {
+    return { AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER: value } as unknown as Env;
+  }
+
+  it('defaults to a wider inspect pool without changing batch size', () => {
+    expect(getFairSourcePickerPoolMultiplier(env())).toBe(6);
   });
 
-  it('reports selected counts by account', () => {
-    const candidates = [row('1', 'a'), row('2', 'a'), row('3', 'b')];
-    const result = selectCandidateBatchForScoring(candidates, 3, true);
+  it('parses valid values', () => {
+    expect(getFairSourcePickerPoolMultiplier(env('8'))).toBe(8);
+  });
 
-    expect(result.stats.selectedByAccount).toEqual({ a: 2, b: 1 });
-    expect(result.stats.accountCount).toBe(2);
+  it('falls back on invalid or non-positive values', () => {
+    expect(getFairSourcePickerPoolMultiplier(env('0'))).toBe(6);
+    expect(getFairSourcePickerPoolMultiplier(env('-1'))).toBe(6);
+    expect(getFairSourcePickerPoolMultiplier(env('abc'))).toBe(6);
+  });
+
+  it('clamps very large values to protect D1 reads', () => {
+    expect(getFairSourcePickerPoolMultiplier(env('200'))).toBe(20);
   });
 });
