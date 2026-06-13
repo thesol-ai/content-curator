@@ -19,6 +19,12 @@ export function isFairSourcePickerEnabled(env: Env): boolean {
   return env.AI_FAIR_SOURCE_PICKER_ENABLED === 'true';
 }
 
+export function getFairSourcePickerPoolMultiplier(env: Env): number {
+  const v = parseInt(env.AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER ?? '6', 10);
+  if (!Number.isFinite(v) || v <= 0) return 6;
+  return Math.max(1, Math.min(Math.floor(v), 20));
+}
+
 export function getScoringBatchSize(env: Env): number {
   const v = parseInt(env.AI_SCORING_BATCH_SIZE ?? '10', 10);
   return isNaN(v) || v <= 0 ? 10 : v;
