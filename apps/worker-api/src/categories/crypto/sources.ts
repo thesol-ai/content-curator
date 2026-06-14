@@ -91,20 +91,27 @@ export function isCryptoRotationSource(source: ApifyRotationSourceRow): boolean 
 export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: number): ApifyRotationPlan | null {
   const id = source.id;
 
+  // PATCH: topic gates removed from primary cohort plans.
+  // Trusted crypto accounts (CoinDesk, TheBlock__, lookonchain etc) post crypto
+  // content by definition — adding a 200-character keyword gate on top of a
+  // short time window meant Twitter found 0 matching tweets and the actor
+  // returned mock data. Primary now uses clean profile queries.
   if (id === 'src_crypto_x_news_media') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 18, buildCoreNewsTopicGate());
+    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 18);
   }
 
   if (id === 'src_crypto_x_news_text') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 18, buildCoreNewsTopicGate());
+    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 18);
   }
 
   if (id === 'src_crypto_x_voices_media') {
+    // Security alerts keep their topic gate — these accounts post non-crypto
+    // security content too and the gate is actually useful here.
     return buildSecurityAlertPlan(source, bucket + 4, 8);
   }
 
   if (id === 'src_crypto_x_voices_text') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 16, buildExpertSignalsTopicGate());
+    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 16);
   }
 
   if (id === 'src_market_trending_x_media') {
@@ -118,6 +125,12 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
   return null;
 }
 
+// PATCH summary for buildCryptoRotationAttempts:
+// 1. Fallback renamed same_accounts_profile_24h (was 7d) — window cut from 168h to 24h.
+// 2. Rescue fallback also cut to 24h.
+// These two changes alone should stop the duplicate storm: a 7-day profile dump
+// against accounts that post 5-20 times/day was guaranteeing 100-200 known
+// tweets per slot, all already in the dedupe table.
 export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotationAttemptPlan[] {
   const baseMaxItems = positiveNumber(plan.inputOverride.maxItems, 18);
   const attempts: ApifyRotationAttemptPlan[] = [
@@ -129,12 +142,12 @@ export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotat
 
   const sameAccountsQuery = buildProfileTopicContent(plan.accounts, 'default');
   attempts.push({
-    attempt: 'same_accounts_profile_7d',
-    reason: 'Primary query returned no real tweet rows; retry same accounts without strict topic/media gates.',
+    attempt: 'same_accounts_profile_24h',
+    reason: 'Primary query returned no real tweet rows; retry same accounts for last 24h without topic/media gates.',
     inputOverride: buildSearchInputOverride(
       sameAccountsQuery,
       Math.max(baseMaxItems, 30),
-      168,
+      24, // was 168
     ),
   });
 
@@ -142,12 +155,12 @@ export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotat
   if (rescueAccounts.join('|').toLowerCase() !== plan.accounts.join('|').toLowerCase()) {
     const rescueQuery = buildProfileTopicContent(rescueAccounts, 'default', buildRescueTopicGate());
     attempts.push({
-      attempt: 'source_rescue_pool_7d',
+      attempt: 'source_rescue_pool_24h',
       reason: 'Same-account fallback returned no real tweet rows; retry trusted high-yield source pool.',
       inputOverride: buildSearchInputOverride(
         rescueQuery,
         Math.max(baseMaxItems, 40),
-        168,
+        24, // was 168
       ),
     });
   }
@@ -167,9 +180,11 @@ function buildCohortPlan(
 ): ApifyRotationPlan {
   const index = positiveModulo(bucket, cohorts.length);
   const accounts = cohorts[index] ?? cohorts[0]!;
+
+  // When topicGate is not provided, use clean profile query (no keyword filter).
   const query = topicGate
     ? buildProfileTopicContent(accounts, mode, topicGate, minFaves)
-    : buildTwitterContent(accounts, mode);
+    : buildCleanProfileContent(accounts, mode);
 
   return {
     source,
@@ -182,6 +197,21 @@ function buildCohortPlan(
 
 function buildTwitterContent(accounts: string[], mode: ApifyRotationMode): string {
   return buildProfileTopicContent(accounts, mode);
+}
+
+// PATCH: Clean profile query — account filter + media mode + minimal spam
+// exclusions only. No topic keywords. Used for primary queries on trusted
+// crypto-native accounts where the account itself is the content signal.
+function buildCleanProfileContent(
+  accounts: string[],
+  mode: ApifyRotationMode,
+): string {
+  const accountQuery = accounts.map(account => `from:${account}`).join(' OR ');
+  const parts = [`(${accountQuery})`];
+  if (mode === 'media') parts.push('filter:media');
+  if (mode === 'text') parts.push('-filter:media');
+  parts.push('-filter:replies', 'lang:en', '-giveaway', '-presale', '-airdrop', '-referral');
+  return parts.join(' ');
 }
 
 function buildProfileTopicContent(
@@ -229,7 +259,9 @@ function buildExpertSignalsTopicGate(): string {
 function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, mode: ApifyRotationMode, maxItems: number): ApifyRotationPlan {
   const index = positiveModulo(bucket, MARKET_IMPACT_COHORTS.length);
   const accounts = MARKET_IMPACT_COHORTS[index] ?? MARKET_IMPACT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, mode, buildMarketImpactTopicGate());
+
+  // PATCH: Market impact accounts post market data — no topic gate needed for primary.
+  const query = buildCleanProfileContent(accounts, mode);
 
   return {
     source,
@@ -267,7 +299,9 @@ function buildMarketImpactTopicGate(): string {
 function buildTokenProjectWatchPlan(source: ApifyRotationSourceRow, bucket: number, maxItems: number): ApifyRotationPlan {
   const index = positiveModulo(bucket, TOKEN_PROJECT_COHORTS.length);
   const accounts = TOKEN_PROJECT_COHORTS[index] ?? TOKEN_PROJECT_COHORTS[0]!;
-  const query = buildProfileTopicContent(accounts, 'text', buildTokenProjectWatchTopicGate());
+
+  // PATCH: Clean profile query for primary — topic gate removed.
+  const query = buildCleanProfileContent(accounts, 'text');
 
   return {
     source,
@@ -306,6 +340,8 @@ function buildTokenProjectWatchTopicGate(): string {
 function buildSecurityAlertPlan(source: ApifyRotationSourceRow, bucket: number, maxItems: number): ApifyRotationPlan {
   const index = positiveModulo(bucket, SECURITY_ALERT_COHORTS.length);
   const accounts = SECURITY_ALERT_COHORTS[index] ?? SECURITY_ALERT_COHORTS[0]!;
+
+  // Security alert accounts post non-crypto security too — keep the topic gate.
   const query = buildProfileTopicContent(accounts, 'text', buildSecurityAlertTopicGate());
 
   return {
@@ -354,7 +390,11 @@ function buildSecurityAlertTopicGate(): string {
   ]).join(' ');
 }
 
-function buildSearchInputOverride(query: string, maxItems: number, hoursBack = 72): Record<string, unknown> {
+// PATCH: Default primary window cut from 72h to 12h.
+// 72h was too wide — combined with topic gates it caused consistent 0-result
+// primaries. 12h gives a realistic window for trusted accounts that post
+// several times per day. Fallbacks use their own explicit window values.
+function buildSearchInputOverride(query: string, maxItems: number, hoursBack = 12): Record<string, unknown> {
   return {
     query,
     twitterContent: query,
