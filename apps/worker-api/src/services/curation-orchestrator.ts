@@ -312,6 +312,78 @@ async function processSingleSource(
   let effectiveDatasetId = resolveInitialDatasetId(source);
   const primaryDatasetId = String(source.apify_dataset_id ?? '').trim();
 
+  // ── PATCH B (v4): Dataset reprocessing guard ───────────────────────────────
+  // Data showed single datasets processed 30-64 times in 6h. Guard stops it.
+  // v4 fixes the v3 leak: lock is now released in a real finally that covers
+  // EVERY return path (early returns, success, and failure), and acquisition
+  // happens inside the same try so a throw before processing cannot strand it.
+  let dsLockOwned = false;
+  const dsLockKey = effectiveDatasetId ? `dataset_processing:${effectiveDatasetId}` : '';
+  const dsLockVal = JSON.stringify({ runId, sourceId: source.id, startedAt: new Date().toISOString() });
+
+  const releaseDatasetLock = async (): Promise<void> => {
+    if (!dsLockOwned || !dsLockKey) return;
+    try {
+      // Only delete the lock if it is still OURS (value match) — never another run's.
+      await env.DB.prepare(`DELETE FROM settings WHERE key=? AND value=?`).bind(dsLockKey, dsLockVal).run();
+    } catch { /* best-effort */ } finally {
+      dsLockOwned = false;
+    }
+  };
+
+  // Heartbeat: refresh the lock's updated_at so a long-but-healthy run is not
+  // mistaken for stale (30-min TTL) by a concurrent run. Called from markPhase.
+  const heartbeatDatasetLock = async (): Promise<void> => {
+    if (!dsLockOwned || !dsLockKey) return;
+    try {
+      await env.DB.prepare(`UPDATE settings SET updated_at=CURRENT_TIMESTAMP WHERE key=? AND value=?`)
+        .bind(dsLockKey, dsLockVal).run();
+    } catch { /* best-effort */ }
+  };
+
+  try {
+    if (!dryRun && effectiveDatasetId) {
+      // Layer 1 — atomic claim.
+      const claim = await env.DB
+        .prepare(`INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`)
+        .bind(dsLockKey, dsLockVal).run();
+
+      if ((claim.meta.changes ?? 0) > 0) {
+        dsLockOwned = true;
+      } else {
+        // Lock exists — attempt ATOMIC stale reclaim (only if >30 min old).
+        const reclaim = await env.DB
+          .prepare(`UPDATE settings SET value=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE key=? AND updated_at <= datetime('now','-30 minutes')`)
+          .bind(dsLockVal, dsLockKey).run();
+        if ((reclaim.meta.changes ?? 0) > 0) {
+          dsLockOwned = true;
+          console.log(`[Curation][${category.id}/${source.platform}] dataset=${effectiveDatasetId} stale lock reclaimed`);
+        } else {
+          console.log(`[Curation][${category.id}/${source.platform}] dataset=${effectiveDatasetId} locked by concurrent run — skipping`);
+          await recordRunEvent(env, { runId, eventType: 'dataset.already_processing', phase: 'init',
+            categoryId: category.id, platform: source.platform, sourceId: source.id,
+            datasetId: effectiveDatasetId, durationMs: Date.now() - t0,
+            metadata: { reason: 'concurrent_lock' } });
+          return mkResult(runId, category.id, source.platform, true, dryRun);
+        }
+      }
+
+      // Layer 2 — skip if already completed (dry_run NOT blocked).
+      const alreadyDone = await env.DB
+        .prepare(`SELECT 1 AS x FROM discovery_runs WHERE apify_dataset_id=? AND status='completed' LIMIT 1`)
+        .bind(effectiveDatasetId).first<{ x: number }>();
+      if (alreadyDone) {
+        await releaseDatasetLock();
+        console.log(`[Curation][${category.id}/${source.platform}] dataset=${effectiveDatasetId} already completed — skipping`);
+        await recordRunEvent(env, { runId, eventType: 'dataset.already_processed', phase: 'init',
+          categoryId: category.id, platform: source.platform, sourceId: source.id,
+          datasetId: effectiveDatasetId, durationMs: Date.now() - t0,
+          metadata: { reason: 'already_completed' } });
+        return mkResult(runId, category.id, source.platform, true, dryRun);
+      }
+    }
+
   const syncReason = datasetSyncReason(primaryDatasetId, effectiveDatasetId);
 
   if (syncReason) {
@@ -335,6 +407,7 @@ async function processSingleSource(
 
   const markPhase = async (nextPhase: string): Promise<void> => {
     phase = nextPhase;
+    await heartbeatDatasetLock(); // PATCH B (v4): keep our lock fresh during long runs
     console.log(`[Curation][${category.id}/${source.platform}] run=${runId} dataset=${effectiveDatasetId} phase=${phase}`);
     try {
       await finishRun(env, runId, category.id, source.platform, effectiveDatasetId, 'processing', {
@@ -954,6 +1027,12 @@ async function processSingleSource(
       },
     });
     return mkResult(runId, category.id, source.platform, false, dryRun, { itemsFetched, errors, durationMs: Date.now() - t0 });
+  }
+  } finally {
+    // PATCH B (v4): single release point covering ALL return paths above
+    // (early skips, fresh==0, backlog returns, success, failure). The value-
+    // matched DELETE guarantees we only ever remove our own lock.
+    await releaseDatasetLock();
   }
 }
 

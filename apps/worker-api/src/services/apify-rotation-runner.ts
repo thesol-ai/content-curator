@@ -500,26 +500,76 @@ export function decideAttemptBudget(args: {
   return { maxAttempts: 1, usesSecondAttemptBudget: false };
 }
 
-/** Healthy-yield history per attempt for one source, from run_events. */
+/** IMPROVEMENT #1: downstream-aware attempt yield metric (flag-gated).
+ *
+ *  The legacy signal counted an attempt "healthy" if realRawCount > 0 — but an
+ *  attempt that returns 30 duplicate tweets is useless. When
+ *  APIFY_ATTEMPT_YIELD_DOWNSTREAM_ENABLED=true, an attempt's run is counted
+ *  "healthy" only if its dataset later produced real downstream value
+ *  (items_new > 0 OR items_queued > 0) in discovery_runs. Falls back to the
+ *  legacy realRawCount>0 signal when the flag is off or when no discovery_runs
+ *  row exists yet for that dataset (e.g. curation hasn't run).
+ *
+ *  No new table required — it joins run_events (attempt+dataset) to
+ *  discovery_runs (outcome) by apify_dataset_id.
+ */
+function isDownstreamYieldEnabled(env: Env): boolean {
+  return String((env as any).APIFY_ATTEMPT_YIELD_DOWNSTREAM_ENABLED ?? '').toLowerCase() === 'true';
+}
+
 async function loadAttemptYieldStats(env: Env, sourceId: string, days: number): Promise<Map<string, AttemptYieldStat>> {
   const map = new Map<string, AttemptYieldStat>();
   if (!env.DB) return map;
+
+  const downstream = isDownstreamYieldEnabled(env);
+
   try {
     const res = await env.DB.prepare(`
-      SELECT metadata_json FROM run_events
+      SELECT metadata_json, dataset_id FROM run_events
       WHERE event_type = 'apify.rotation.task_started'
         AND source_id = ?
         AND created_at > datetime('now','-' || ? || ' days')
-    `).bind(sourceId, String(days)).all<{ metadata_json: string }>();
+    `).bind(sourceId, String(days)).all<{ metadata_json: string; dataset_id: string | null }>();
+
+    // Optional: load downstream outcome per dataset_id (only when flag on).
+    let outcomeByDataset: Map<string, { newItems: number; queued: number }> | null = null;
+    if (downstream) {
+      outcomeByDataset = new Map();
+      try {
+        const dr = await env.DB.prepare(`
+          SELECT apify_dataset_id AS ds,
+                 SUM(items_new) AS new_items,
+                 SUM(items_queued) AS queued
+          FROM discovery_runs
+          WHERE created_at > datetime('now','-' || ? || ' days')
+          GROUP BY apify_dataset_id
+        `).bind(String(days)).all<{ ds: string; new_items: number; queued: number }>();
+        for (const r of dr.results ?? []) {
+          if (r.ds) outcomeByDataset.set(String(r.ds), { newItems: Number(r.new_items) || 0, queued: Number(r.queued) || 0 });
+        }
+      } catch { outcomeByDataset = null; /* fall back to legacy below */ }
+    }
+
     for (const row of res.results ?? []) {
       let meta: any;
       try { meta = JSON.parse(String(row.metadata_json ?? '{}')); } catch { continue; }
       const name = String(meta?.attempt ?? '').trim();
       if (!name) continue;
+
       const real = Number(meta?.datasetHealth?.realRawCount ?? 0) || 0;
+      const datasetId = String(row.dataset_id ?? '').trim();
+
+      let healthy: boolean;
+      if (downstream && outcomeByDataset && datasetId && outcomeByDataset.has(datasetId)) {
+        const o = outcomeByDataset.get(datasetId)!;
+        healthy = o.newItems > 0 || o.queued > 0; // downstream-aware
+      } else {
+        healthy = real > 0; // legacy fallback
+      }
+
       const cur = map.get(name) ?? { healthy: 0, total: 0 };
       cur.total += 1;
-      if (real > 0) cur.healthy += 1;
+      if (healthy) cur.healthy += 1;
       map.set(name, cur);
     }
   } catch (err) {
@@ -588,6 +638,27 @@ function getRotationDatasetProbeLimit(env: Env): number {
   return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 100) : 30;
 }
 
+/** IMPROVEMENT #3: retries for transient Apify failures.
+ *  Retries only on network errors and 5xx/429 (transient). 4xx (bad input,
+ *  auth) fail fast — retrying them just burns time. Exponential backoff with
+ *  jitter. Default 2 retries (3 attempts total), env-tunable. This does NOT
+ *  increase paid actor events for the success case; it only re-issues a run
+ *  when the previous HTTP call genuinely failed to start/complete. */
+function getApifyMaxRetries(env: Env): number {
+  // High-risk fix: default 0 (was 2). POST /actor-tasks/.../runs is NOT
+  // idempotent — if the request times out AFTER Apify already started the run,
+  // a retry creates a SECOND paid actor run. Given this project's cost history,
+  // retries are OFF by default and must be opted into explicitly via
+  // APIFY_TASK_MAX_RETRIES. Even then, only 429/5xx and pre-start network
+  // errors are retried; see isTransientApifyStatus.
+  const n = parseInt(String((env as any).APIFY_TASK_MAX_RETRIES ?? '0'), 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 5) : 0;
+}
+
+function isTransientApifyStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
 async function runApifyTask(
   env: Env,
   taskId: string,
@@ -599,26 +670,57 @@ async function runApifyTask(
     `?token=${encodeURIComponent(env.APIFY_TOKEN)}` +
     `&waitForFinish=${waitForFinish}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(inputOverride),
-    signal: AbortSignal.timeout((waitForFinish + 10) * 1000),
-  });
+  const maxRetries = getApifyMaxRetries(env);
+  let lastError: Error | null = null;
 
-  const text = await response.text();
-  let json: any = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(inputOverride),
+        signal: AbortSignal.timeout((waitForFinish + 10) * 1000),
+      });
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        // Fail fast on non-transient (4xx) — retrying won't help.
+        if (!isTransientApifyStatus(response.status)) {
+          throw new Error(`Apify task run failed ${response.status}: ${text.slice(0, 500)}`);
+        }
+        // Transient — record and retry (if attempts remain).
+        lastError = new Error(`Apify task transient ${response.status}: ${text.slice(0, 200)}`);
+        if (attempt < maxRetries) {
+          await sleepWithBackoff(attempt);
+          continue;
+        }
+        throw lastError;
+      }
+
+      let json: any = null;
+      try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+      return json?.data ?? json ?? {};
+    } catch (err) {
+      // Network error / timeout / abort → transient, retry if attempts remain.
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // If it was a fail-fast 4xx thrown above, do not retry.
+      if (/Apify task run failed 4\d\d/.test(lastError.message)) throw lastError;
+      if (attempt < maxRetries) {
+        await sleepWithBackoff(attempt);
+        continue;
+      }
+      throw lastError;
+    }
   }
+  throw lastError ?? new Error('Apify task run failed: unknown');
+}
 
-  if (!response.ok) {
-    throw new Error(`Apify task run failed ${response.status}: ${text.slice(0, 500)}`);
-  }
-
-  return json?.data ?? json ?? {};
+/** Exponential backoff with jitter: ~0.5s, ~1s, ~2s ... capped at 8s. */
+async function sleepWithBackoff(attempt: number): Promise<void> {
+  const base = Math.min(500 * Math.pow(2, attempt), 8000);
+  const jitter = Math.floor(Math.random() * 250);
+  await new Promise(resolve => setTimeout(resolve, base + jitter));
 }
 
 async function loadRotationSources(env: Env, onlySourceId?: string): Promise<SourceRow[]> {
@@ -784,7 +886,27 @@ export async function cleanupOldRotationClaims(env: Env): Promise<{ deleted: num
       await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind(key).run();
       deleted++;
     }
-    if (deleted > 0) console.log('[ApifyRotation] claim cleanup deleted', deleted, 'stale rotation keys');
+
+    // IMPROVEMENT #6: sweep orphaned dataset_processing:* locks older than 2h.
+    // Normal locks are released by Patch B on completion/failure; this only
+    // catches locks left by a worker killed mid-run. Safe: a 2h-old lock is far
+    // past Patch B's 30-min stale-reclaim window, so no active run depends on it.
+    try {
+      const orphanLocks = await env.DB.prepare(
+        `DELETE FROM settings
+         WHERE key LIKE 'dataset_processing:%'
+           AND updated_at <= datetime('now','-2 hours')`,
+      ).run();
+      const lockDeleted = orphanLocks.meta.changes ?? 0;
+      if (lockDeleted > 0) {
+        console.log('[ApifyRotation] cleanup deleted', lockDeleted, 'orphaned dataset locks');
+        deleted += lockDeleted;
+      }
+    } catch (err) {
+      console.warn('[ApifyRotation] dataset lock cleanup skipped:', err instanceof Error ? err.message : String(err));
+    }
+
+    if (deleted > 0) console.log('[ApifyRotation] claim cleanup deleted', deleted, 'total stale keys');
     return { deleted };
   } catch (err) {
     console.warn('[ApifyRotation] claim cleanup skipped:', err instanceof Error ? err.message : String(err));

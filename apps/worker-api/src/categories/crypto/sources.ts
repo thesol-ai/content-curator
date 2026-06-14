@@ -13,6 +13,9 @@ export const CRYPTO_ROTATION_SOURCE_IDS = new Set([
   'src_crypto_x_voices_text',
   'src_market_trending_x_media',
   'src_market_trending_x_text',
+  // IMPROVEMENT #2: discovery lanes (need matching apify_sources rows to fire).
+  'src_crypto_x_discovery_latest',
+  'src_crypto_x_discovery_top',
 ]);
 
 const NEWS_COHORTS = [
@@ -122,7 +125,82 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
     return buildMarketImpactPlan(source, bucket + 6, 'text', 10);
   }
 
+  // IMPROVEMENT #2: discovery lanes — top/trending across the whole timeline.
+  if (id === 'src_crypto_x_discovery_latest') {
+    return buildDiscoveryPlan(source, bucket, 'Latest', 4, 20);
+  }
+  if (id === 'src_crypto_x_discovery_top') {
+    return buildDiscoveryPlan(source, bucket, 'Top', 8, 20);
+  }
+
   return null;
+}
+
+// ── IMPROVEMENT #2: Discovery lane (v4) ─────────────────────────────────────
+// Reads high-signal crypto posts from the ENTIRE timeline (no from:), unlike the
+// profile cohorts. Rotates topic queries by bucket. Safety properties:
+//   - NO fallback attempt (see buildCryptoRotationAttempts: empty accounts → no fallback).
+//   - small maxItems (20) to cap per-slot cost.
+//   - TOPIC-SPECIFIC exclusions: v4 fixes the v3 self-sabotage where a query said
+//     "find phishing" while the global exclusion said "-phishing". Each topic now
+//     carries only exclusions that don't contradict its own positive terms.
+//   - min_faves/min_retweets engagement floor — NOTE: the kaito actor may ignore
+//     these; verify against the live actor schema before relying on them.
+//
+// Each entry pairs a positive topic with exclusions that never negate its terms.
+interface DiscoveryTopic { topic: string; exclude: string }
+
+// Common junk exclusions safe for EVERY topic (none of these are positive terms).
+const DISCOVERY_COMMON_EXCLUDES = '-giveaway -presale -"claim now" -referral -"mint now" -lottery -casino -100x -filter:replies';
+
+const DISCOVERY_TOPICS: DiscoveryTopic[] = [
+  {
+    topic: 'bitcoin OR ethereum OR "spot ETF" OR stablecoin OR USDT OR SEC OR CFTC',
+    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake`,
+  },
+  {
+    // security lane: do NOT exclude -phishing here (it IS a positive term).
+    topic: 'crypto hack OR exploit OR drained OR "stolen funds" OR phishing OR "private key"',
+    exclude: DISCOVERY_COMMON_EXCLUDES,
+  },
+  {
+    // memecoin lane: do NOT exclude -airdrop here (airdrop is a positive term);
+    // keep -scam/-fake since those never overlap the positives.
+    topic: 'XRP OR TON OR DOGE OR SHIB OR memecoin OR "exchange listing" OR airdrop',
+    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake`,
+  },
+  {
+    topic: 'onchain OR "exchange outflow" OR "exchange inflow" OR liquidation OR "open interest"',
+    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake`,
+  },
+];
+
+function buildDiscoveryPlan(
+  source: ApifyRotationSourceRow,
+  bucket: number,
+  queryType: 'Latest' | 'Top',
+  hoursBack: number,
+  maxItems: number,
+): ApifyRotationPlan {
+  const idx = positiveModulo(bucket, DISCOVERY_TOPICS.length);
+  const { topic, exclude } = DISCOVERY_TOPICS[idx]!;
+  const query = `(${topic}) lang:en ${exclude}`.trim();
+  return {
+    source,
+    cohortName: `discovery_${queryType.toLowerCase()}_${idx}`,
+    cohortIndex: idx,
+    accounts: [],
+    inputOverride: {
+      query,
+      twitterContent: query,
+      maxItems,
+      queryType,
+      lang: 'en',
+      since_time: currentSinceTimeSeconds(hoursBack),
+      min_faves: 50,
+      min_retweets: 5,
+    },
+  };
 }
 
 // PATCH summary for buildCryptoRotationAttempts:
@@ -139,6 +217,13 @@ export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotat
       inputOverride: plan.inputOverride,
     },
   ];
+
+  // IMPROVEMENT #2: discovery lanes have NO accounts → NO fallback. A dry
+  // discovery slot just yields 0; we never escalate to an account-profile
+  // fallback (there are none) and never burn extra paid actor events.
+  if (!plan.accounts || plan.accounts.length === 0) {
+    return attempts;
+  }
 
   const sameAccountsQuery = buildProfileTopicContent(plan.accounts, 'default');
   attempts.push({

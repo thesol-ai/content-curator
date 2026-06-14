@@ -121,12 +121,28 @@ export function buildCryptoThemeKey(topicFingerprint: unknown, text: unknown, so
   return null;
 }
 
-export function getCryptoThemeDailyCap(themeKey: string | null): number | null {
+/**
+ * IMPROVEMENT #4: theme caps env-overridable (no redeploy to tune).
+ * env is typed `unknown` to avoid coupling story-quality-guard to the Env type
+ * (which has no index signature) — callers pass `env` directly and it works.
+ * Env vars (optional, integer): CRYPTO_THEME_CAP_RWA / _ETF / _SECURITY_EXPLOIT.
+ */
+function themeCapFromEnv(env: unknown, key: string, fallback: number): number {
+  const raw = (env as Record<string, unknown> | undefined)?.[key];
+  const n = parseInt(String(raw ?? ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+export function getCryptoThemeDailyCap(themeKey: string | null, env?: unknown): number | null {
   switch (themeKey) {
-    case 'theme:rwa-tokenized-assets': return 2;
-    case 'theme:crypto-etf': return 2;
-    case 'theme:security-exploit': return 3;
-    default: return null;
+    case 'theme:rwa-tokenized-assets':
+      return themeCapFromEnv(env, 'CRYPTO_THEME_CAP_RWA', 2);
+    case 'theme:crypto-etf':
+      return themeCapFromEnv(env, 'CRYPTO_THEME_CAP_ETF', 3);
+    case 'theme:security-exploit':
+      return themeCapFromEnv(env, 'CRYPTO_THEME_CAP_SECURITY_EXPLOIT', 5);
+    default:
+      return null;
   }
 }
 

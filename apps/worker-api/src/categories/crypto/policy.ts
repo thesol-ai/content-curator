@@ -54,17 +54,23 @@ function hasCryptoRelevance(body: string, account: string): boolean {
 }
 
 function isTrustedCryptoNativeSource(account: string): boolean {
+  // PATCH C: expanded with accounts already used in rotation cohorts that were
+  // wrongly hitting pre_ai_non_crypto (42 rejects/24h). Conservative: news,
+  // onchain/data, ETF/reg analysts, security. Pure-promo exchange/protocol
+  // accounts (binance, solana, ethereum, base, chainlink) are deliberately
+  // EXCLUDED to avoid letting marketing through — hasCryptoRelevance still
+  // requires a crypto-native context term alongside the trusted account anyway.
   return hasAny(account, [
-    'defiantnews',
-    'thedefiantnews',
-    'defillama',
-    'peckshieldalert',
-    'slowmist_team',
-    'cyversalerts',
-    'wublockchain',
-    'zachxbt',
-    'theblock__',
-    'dlnewsinfo',
+    // News media
+    'defiantnews', 'thedefiantnews', 'dlnewsinfo', 'wublockchain', 'theblock__',
+    'coindesk', 'cointelegraph', 'decryptmedia', 'bitcoinmagazine',
+    'watcherguru', 'news_of_alpha', 'tree_of_alpha',
+    // Onchain / data
+    'defillama', 'lookonchain', 'glassnode', 'cryptoquant_com', 'nansen_ai', 'spotonchain',
+    // ETF / regulation analysts
+    'ericbalchunas', 'jseyff', 'nategeraci', 'eleanorterrett',
+    // Security / investigators
+    'peckshieldalert', 'slowmist_team', 'cyversalerts', 'zachxbt', 'certikalert',
   ]);
 }
 
@@ -206,14 +212,15 @@ const DIRECT_CRYPTO_ANCHORS = [
 
 
 const CRYPTO_NATIVE_CONTEXT_TERMS = [
+  // v4.1: removed standalone broad legal/regulatory terms
+  // ('lawsuit','regulation','approval','filing') — once news outlets became
+  // trusted sources (Patch C), these matched generic non-crypto stories like a
+  // celebrity lawsuit. Real crypto regulation still passes via DIRECT anchors
+  // (bitcoin/crypto/...) or via the dedicated ETF_REGULATORY_TERMS path which
+  // requires an ETF/spot context alongside sec/cftc/filing.
   'etf',
   'sec',
   'cftc',
-  'filing',
-  'approval',
-  'lawsuit',
-  'regulation',
-  'treasury',
   'liquidity',
   'liquidation',
   'liquidations',

@@ -70,7 +70,8 @@ describe('candidate-queue phase 2 safety', () => {
     expect(claimed).toHaveLength(1);
     expect(claimed[0]!.status).toBe('scoring');
     expect(claimed[0]!.attempt_count).toBe(2);
-    expect(capturedSql).toContain("status='pending'");
+    // v4.1: claim now also reclaims needs_translation candidates for translation retry
+    expect(capturedSql).toContain("status IN ('pending', 'needs_translation')");
     expect(capturedSql).toContain('attempt_count <');
   });
 

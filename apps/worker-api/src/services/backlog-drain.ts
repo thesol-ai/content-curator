@@ -1,4 +1,4 @@
-import type { Env, AICandidateRow, AIGateResult, CategoryRow, ChannelRow, NormalizedItem } from '../types';
+import type { Env, AICandidateRow, AICandidateStatus, AIGateResult, CategoryRow, ChannelRow, NormalizedItem } from '../types';
 import { attachTranslations, runAIGate, scoreItems } from './ai-gate';
 import { recordDedupeKeys } from './dedupe';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
@@ -336,7 +336,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       ev.storyKeyRejectReason = 'similar_story_key_recent_channel';
     }
     if (!ev.themeCapRejectReason && ev.themeKey) {
-      const cap = getCryptoThemeDailyCap(ev.themeKey);
+      const cap = getCryptoThemeDailyCap(ev.themeKey, env); // IMPROVEMENT #4: env-overridable
       if (cap != null && (themeBatchCounts.get(ev.themeKey) ?? 0) >= cap) {
         ev.themeCapRejectReason = `theme_daily_cap:${ev.themeKey}`;
       }
@@ -551,12 +551,17 @@ async function persistCandidateDecision(
   const mediaRes = resolveMedia(candidate.item.media, category.media_mode as any);
   const mediaTypes = extractMediaTypes(candidate.item.media, category.media_mode as any);
   let candidateQueued = 0;
+  let translationMissingCount = 0; // PATCH D: track translation_missing across channels
+  // v4.1: define enabledChannels/Count up front so the needs_translation lastError
+  // (translationMissingCount/enabledChannelCount) has a defined denominator.
+  const enabledChannels = channels.filter(channel => channel.enabled);
+  const enabledChannelCount = enabledChannels.length;
 
-  for (const channel of channels) {
-    if (!channel.enabled) continue;
+  for (const channel of enabledChannels) {
     const translationKey = channelTranslationKey(channel.id);
     const translation = ai.translations[translationKey] ?? ai.translations[channel.language];
     if (!translation) {
+      translationMissingCount++; // PATCH D
       await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'translation_missing', 'translation_missing', ai, { channelId: channel.id, language: channel.language });
       continue;
     }
@@ -627,7 +632,24 @@ async function persistCandidateDecision(
     }
   }
 
-  await updateCandidateStatus(env, candidate.row.id, candidateQueued > 0 ? 'queued' : 'ai_selected');
+  // PATCH D: if nothing reached the queue but at least one channel was blocked
+  // purely by a missing translation, mark needs_translation so the next backlog
+  // drain retries translation (instead of stranding it as ai_selected forever).
+  // candidate-queue's fetch/claim/fail/stale all recognise needs_translation.
+  const finalCandidateStatus: AICandidateStatus = candidateQueued > 0
+    ? 'queued'
+    : (translationMissingCount > 0 ? 'needs_translation' : 'ai_selected');
+  // v4: record WHY on needs_translation so diagnosis doesn't require digging
+  // through run_item_events. enabledChannelCount-translationMissingCount tells
+  // us how many channels were blocked by OTHER reasons (rule gate, caps).
+  await updateCandidateStatus(
+    env,
+    candidate.row.id,
+    finalCandidateStatus,
+    finalCandidateStatus === 'needs_translation'
+      ? { lastError: `translation_missing:${translationMissingCount}/${enabledChannelCount}` }
+      : {},
+  );
   return { selected: 1, rejected: 0, queued: candidateQueued };
 }
 
@@ -820,7 +842,7 @@ async function hasRecentStoryClusterMatch(env: Env, channel: ChannelRow, storyCl
 }
 
 async function getThemeCapRejectReason(env: Env, channels: ChannelRow[], themeKey: string | null): Promise<string | null> {
-  const cap = getCryptoThemeDailyCap(themeKey);
+  const cap = getCryptoThemeDailyCap(themeKey, env); // IMPROVEMENT #4: env-overridable
   if (!themeKey || cap == null) return null;
 
   const semanticChannels = channels.filter(channel => channel.enabled && channel.semantic_dedupe_enabled !== 0);

@@ -11,6 +11,7 @@ import { cleanupOldDedupeKeys } from './services/dedupe';
 import { getRuntimeConfig } from './services/runtime-config';
 import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
 import { drainAICandidateQueue } from './services/backlog-drain';
+import { buildPipelineHealthReport } from './services/pipeline-health-report'; // IMPROVEMENT #10
 import { cleanupOldRotationClaims, getDiversityRotationSourceId, getRotationSlotMinutes, getStarvationRotationSourceId, runApifyRotation } from './services/apify-rotation-runner';
 import { handleTelegramAdminBot } from './routes/telegram-admin-bot';
 import {
@@ -43,26 +44,30 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    const allowOrigin = resolveAllowedOrigin(request, env); // IMPROVEMENT #8
+
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': allowOrigin,
           'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, x-internal-api-secret, x-webhook-secret',
           'Access-Control-Max-Age': '86400',
+          'Vary': 'Origin',
         },
       });
     }
 
     try {
       const response = await routeRequest(request, env, url, ctx);
-      response.headers.set('Access-Control-Allow-Origin', '*');
+      response.headers.set('Access-Control-Allow-Origin', allowOrigin);
+      response.headers.append('Vary', 'Origin');
       return response;
     } catch (err) {
       console.error('[Worker] Unhandled error:', err);
       return Response.json(
         { ok: false, error: 'internal_server_error' },
-        { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } }
+        { status: 500, headers: { 'Access-Control-Allow-Origin': allowOrigin } }
       );
     }
   },
@@ -321,6 +326,13 @@ async function routeRequest(
     if (!verifySecret(secret, env)) {
       return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
     }
+    // IMPROVEMENT #10: read-only pipeline health report (behind internal auth).
+    if (path === '/internal/pipeline-health') {
+      const hours = Number(url.searchParams.get('hours') ?? '6');
+      const category = url.searchParams.get('category') ?? undefined; // v4: optional scoping
+      const report = await buildPipelineHealthReport(env, Number.isFinite(hours) && hours > 0 ? hours : 6, category);
+      return Response.json(report);
+    }
     return handleAdmin(request, env, ctx);
   }
 
@@ -333,4 +345,17 @@ function verifySecret(provided: string | null, env: Env): boolean {
   const expected = env.INTERNAL_API_SECRET?.trim();
   if (!expected) return env.ENVIRONMENT === 'local';
   return provided === expected;
+}
+
+// IMPROVEMENT #8: CORS origin allowlist.
+// CORS_ALLOWED_ORIGINS is a comma-separated list (e.g. "https://admin.example.com").
+// When unset, we keep the previous permissive '*' behaviour for backward
+// compatibility (admin/webhook routes are already secret-protected, so this is
+// not a security hole — it just tightens browser-side access when configured).
+function resolveAllowedOrigin(request: Request, env: Env): string {
+  const raw = String((env as any).CORS_ALLOWED_ORIGINS ?? '').trim();
+  if (!raw) return '*';
+  const allow = raw.split(',').map(s => s.trim()).filter(Boolean);
+  const origin = request.headers.get('Origin') ?? '';
+  return allow.includes(origin) ? origin : (allow[0] ?? '*');
 }
