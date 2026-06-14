@@ -463,7 +463,7 @@ async function listItems(env: Env, url: URL): Promise<Response> {
 }
 
 async function listQueue(env: Env, url: URL): Promise<Response> {
-  const VALID_STATUSES = ['scheduled','publishing','published','failed','retry','cancelled'];
+  const VALID_STATUSES = ['scheduled','publishing','published','failed','retry','cancelled','manual_hold'];
   const rawStatus = url.searchParams.get('status') ?? 'scheduled';
   const status = VALID_STATUSES.includes(rawStatus) ? rawStatus : 'scheduled';
   const channelId = url.searchParams.get('channel');
