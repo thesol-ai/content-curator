@@ -84,24 +84,27 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     }
   });
 
-  it('requires crypto relevance gates instead of profile-only scraping', async () => {
+  it('uses clean trusted-profile primaries while preserving strict security gates', async () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
 
     const newsText = bySource(result, 'src_crypto_x_news_text');
     expect(newsText.cohortName).toContain('core_news_text');
     expect(String(newsText.inputOverride.query)).toContain('from:');
     expect(String(newsText.inputOverride.query)).toContain('-filter:media');
-    expect(String(newsText.inputOverride.query)).toContain('crypto OR bitcoin');
-    expect(String(newsText.inputOverride.query)).toContain('stablecoin');
+    expect(String(newsText.inputOverride.query)).not.toContain('crypto OR bitcoin');
+    expect(String(newsText.inputOverride.query)).not.toContain('stablecoin');
+    expect(String(newsText.inputOverride.query)).toContain('-giveaway');
+    expect(String(newsText.inputOverride.query)).toContain('-campaign');
 
     const newsMedia = bySource(result, 'src_crypto_x_news_media');
     expect(String(newsMedia.inputOverride.query)).toContain('filter:media');
-    expect(String(newsMedia.inputOverride.query)).toContain('digital asset');
+    expect(String(newsMedia.inputOverride.query)).not.toContain('digital asset');
+    expect(String(newsMedia.inputOverride.query)).toContain('-voucher');
 
     const voicesText = bySource(result, 'src_crypto_x_voices_text');
     expect(voicesText.cohortName).toContain('expert_signals_text');
     expect(String(voicesText.inputOverride.query)).toContain('from:');
-    expect(String(voicesText.inputOverride.query)).toContain('USDT');
+    expect(String(voicesText.inputOverride.query)).not.toContain('USDT');
     expect(String(voicesText.inputOverride.query)).not.toContain('from:whale_alert');
 
     const security = bySource(result, 'src_crypto_x_voices_media');
@@ -120,12 +123,14 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
 
     const market = bySource(result, 'src_market_trending_x_text');
     expect(market.cohortName).toContain('market_impact_text');
-    expect(String(market.inputOverride.query)).toContain('ETF OR "spot ETF"');
+    expect(String(market.inputOverride.query)).toContain('from:');
+    expect(String(market.inputOverride.query)).not.toContain('ETF OR "spot ETF"');
     expect(String(market.inputOverride.query)).toContain('-giveaway');
 
     const tokenProject = bySource(result, 'src_market_trending_x_media');
     expect(tokenProject.cohortName).toContain('token_project_watch_text');
-    expect(String(tokenProject.inputOverride.query)).toContain('"mainnet" OR "testnet"');
-    expect(String(tokenProject.inputOverride.query)).toContain('-"airdrop claim"');
+    expect(String(tokenProject.inputOverride.query)).toContain('from:');
+    expect(String(tokenProject.inputOverride.query)).not.toContain('"mainnet" OR "testnet"');
+    expect(String(tokenProject.inputOverride.query)).toContain('-"get access"');
   });
 });
