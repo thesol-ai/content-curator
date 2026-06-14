@@ -45,10 +45,26 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
 
 function hasCryptoRelevance(body: string, account: string): boolean {
   // Strict channel rule:
-  // Source account reputation is NOT enough. The text itself must contain a high-confidence
-  // crypto/digital-asset anchor. Default is reject.
-  void account;
-  return hasAny(body, DIRECT_CRYPTO_ANCHORS);
+  // Source account reputation alone is NOT enough. But crypto-native sources plus
+  // concrete crypto/security/protocol context should not be falsely dropped as non-crypto.
+  if (hasAny(body, DIRECT_CRYPTO_ANCHORS)) return true;
+  if (isTrustedCryptoNativeSource(account) && hasAny(body, CRYPTO_NATIVE_CONTEXT_TERMS)) return true;
+  return false;
+}
+
+function isTrustedCryptoNativeSource(account: string): boolean {
+  return hasAny(account, [
+    'defiantnews',
+    'thedefiantnews',
+    'defillama',
+    'peckshieldalert',
+    'slowmist_team',
+    'cyversalerts',
+    'wublockchain',
+    'zachxbt',
+    'theblock__',
+    'dlnewsinfo',
+  ]);
 }
 
 
@@ -84,6 +100,17 @@ const DIRECT_CRYPTO_ANCHORS = [
   'on-chain',
   'web3',
   'smart contract',
+  'raydium',
+  'starknet',
+  'erc-20',
+  'erc20',
+  'bnbchain',
+  'bnb chain',
+  'kucoin',
+  'tornado cash',
+  'cross-chain bridge',
+  'cross chain bridge',
+  'shielded erc-20',
 
   // Safer wallet/security terms. Generic "wallet", "hack", "exploit" are intentionally NOT enough.
   'crypto wallet',
@@ -184,6 +211,25 @@ const CRYPTO_NATIVE_CONTEXT_TERMS = [
   'open interest',
   'funding rate',
   'mint',
+  'minted',
+  'token mint',
+  'lp mint',
+  'burned',
+  'drained',
+  'exploit',
+  'exploited',
+  'protocol exploit',
+  'compromised private key',
+  'admin privileges',
+  'tornado cash',
+  'kucoin',
+  'cross-chain',
+  'cross chain',
+  'erc-20',
+  'erc20',
+  'raydium',
+  'starknet',
+  'bnbchain',
   'burn',
   'reserve',
   'reserves',
@@ -286,6 +332,17 @@ function hasExplicitCryptoSecurityRelevance(body: string): boolean {
     'web3',
     'wallet',
     'smart contract',
+  'raydium',
+  'starknet',
+  'erc-20',
+  'erc20',
+  'bnbchain',
+  'bnb chain',
+  'kucoin',
+  'tornado cash',
+  'cross-chain bridge',
+  'cross chain bridge',
+  'shielded erc-20',
     'bridge',
     'protocol',
     'exchange',

@@ -756,7 +756,7 @@ async function runTranslationChunk(
   const captureUsage = (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => { chunkUsage = u; };
 
   const system = buildTranslationSystem(cfg.translationTargets, category);
-  const user = buildTranslationUser(items, cfg.translationTargets, cfg.translationMaxTextChars);
+  const user = buildTranslationUser(items, cfg.translationTargets, translationTextMaxChars(cfg, category));
 
   let responseText = '';
   let lastErr = '';
@@ -834,6 +834,7 @@ async function runTranslationChunk(
               repairEnabled: String((env as any).CAPTION_QUALITY_REPAIR_ENABLED ?? '').toLowerCase() === 'true',
               rejectEnabled: String((env as any).CAPTION_QUALITY_REJECT_ENABLED ?? '').toLowerCase() === 'true',
               minScore: parseInt(String((env as any).CAPTION_QUALITY_MIN_SCORE ?? '70'), 10) || 70,
+              categoryId: category.id,
             })
           : { ok: false, reason: 'rtl_repair_failed' };
         if (qualityDecision.ok && qualityDecision.translation) {
@@ -1086,10 +1087,24 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     sanitizeInstruction(category.required_context, 2000) ? `Required context to add when useful: ${sanitizeInstruction(category.required_context, 2000)}` : '',
   ].filter(Boolean).join('\n');
 
+  const cryptoCaptionGuidance = isCryptoCategory(category) ? [
+    'Crypto Persian caption writing mode:',
+    '- Write for Persian-speaking crypto readers with mixed skill levels: beginners must understand it, professionals must not feel talked down to.',
+    '- Use clear crypto language, not corporate/legal/research prose. The reader should understand the post on the first read.',
+    '- Structure every Persian crypto caption around: what happened, why it matters for the crypto market/user, and what risk/context the reader should notice. If the source does not support a clear why-it-matters line, keep it factual and restrained.',
+    '- Explain crypto terms briefly when needed inside the sentence, not as a textbook aside. Examples: TVL = پولی که داخل پروتکل‌های دیفای قفل شده؛ ETF = صندوق قابل معامله در بورس؛ RWA = دارایی واقعی مثل طلا/سهام/اوراق که روی بلاکچین آمده؛ smart contract = قرارداد خودکار روی بلاکچین؛ liquidity = نقدینگی بازار؛ liquidation = بسته‌شدن اجباری معامله اهرمی.',
+    '- Prefer short Telegram-native Persian: one concrete lead sentence, then one plain context sentence. caption_short should usually be 1-2 sentences; caption_full should usually be 2-4 short lines/paragraphs.',
+    '- Lead with the concrete event, number, asset, protocol, institution, or risk. Do not begin with abstract framing or vague importance language.',
+    '- Do not dress weakly crypto-adjacent stories as major crypto news. If the connection is weak, state the concrete connection briefly or keep the caption restrained.',
+    '- Banned vague/formal Persian for crypto captions: "نشان‌دهنده", "اهمیت ویژه‌ای دارد", "چارچوب‌های قانونی", "تغییر رویکرد مدیریت فعال", "حاکی از آن است", "در راستای", "با هدف شفاف‌سازی", "نقطه عطف", "فضای قانون‌گذاری", "محسوب می‌شود", and similar bureaucratic wording.',
+    '- Good style examples: "پولی که داخل پروتکل‌های دیفای قفل شده، به زیر ۷۰ میلیارد دلار رسیده است. این یعنی سرمایه از دیفای خارج شده و بازار محتاط‌تر شده." / "مورفو ۱۷۵ میلیون دلار سرمایه جذب کرده و ارزشش به حدود ۲ میلیارد دلار رسیده است. حضور سرمایه‌گذارهای بزرگ یعنی دیفای هنوز برای پول نهادی جذاب است."',
+  ] : [];
+
   return [
     `You are an expert content curator and Telegram channel editor for category "${category.id}" (${category.label}).`,
     'For each item, write Telegram-ready posts for every translation target below.',
     'Rewrite for the target audience. Do not produce literal tweet translations.',
+    ...cryptoCaptionGuidance,
     'Make the post feel like a real channel post: news, educational, or analytical based on the target settings.',
     'When a person/entity is central and may not be obvious to a general audience, add concise context on first mention (e.g. role or why they matter).',
     categoryNotes,
@@ -1131,6 +1146,13 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Every translation target key listed above must be included for every item',
     'Return only the JSON object, nothing else.',
   ].filter(Boolean).join('\n');
+}
+
+function translationTextMaxChars(cfg: Config, category: CategoryRow): number {
+  // Crypto captions often need more than the cheap scoring slice. If the source
+  // text is cut at 400 chars, the caption model tends to produce vague context.
+  // Keep this crypto-only so other category-specific prompts stay untouched.
+  return isCryptoCategory(category) ? Math.max(cfg.translationMaxTextChars, 1200) : cfg.translationMaxTextChars;
 }
 
 function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarget[], maxChars: number): string {
