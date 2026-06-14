@@ -28,6 +28,9 @@ export interface ApifyRotationOptions {
   onlySourceId?: string;
   /** Hard cap on number of sources fired this invocation (applies even with force). Phase 6F. */
   maxSources?: number;
+  /** When true, the queue is starving → a single extra (second) paid attempt may
+   *  fire if the daily second-attempt budget allows. Default false (cost-safe). */
+  queueStarving?: boolean;
 }
 
 export interface ApifyRotationResult {
@@ -199,11 +202,37 @@ export async function runApifyRotation(
     }
 
     const attempts = buildRotationAttempts(plan);
+    // Apify cost control: pick the single best attempt by history (default) and
+    // cap how many PAID actor events may fire this slot (default 1).
+    const orderedAttempts = isAdaptiveAttemptSelectionEnabled(env)
+      ? orderAttemptsByYield(
+          attempts,
+          await loadAttemptYieldStats(env, plan.source.id, getAttemptYieldHistoryDays(env)),
+          getAttemptYieldMinSample(env),
+        )
+      : attempts;
+    const budget = decideAttemptBudget({
+      baseMaxAttempts: getMaxAttemptsPerSlot(env),
+      totalAttempts: orderedAttempts.length,
+      queueStarving: options.queueStarving === true,
+      secondAttemptDailyBudget: getSecondAttemptDailyBudget(env),
+      secondAttemptDailyUsed: await readSecondAttemptBudgetUsed(env),
+    });
+    const attemptsToRun = orderedAttempts.slice(0, budget.maxAttempts);
     const attemptResults: NonNullable<ApifyRotationResult['plans'][number]['attempts']> = [];
     let selected: { attempt: RotationAttemptPlan; run: any } | null = null;
     let lastFailure: string | null = null;
+    let secondAttemptCharged = false;
 
-    for (const attempt of attempts) {
+    for (let attemptIndex = 0; attemptIndex < attemptsToRun.length; attemptIndex++) {
+      const attempt = attemptsToRun[attemptIndex];
+      if (!attempt) continue;
+      // Consuming the daily second-attempt budget the first time we actually fire
+      // a fallback attempt (index >= 1) in a starving slot.
+      if (attemptIndex >= 1 && budget.usesSecondAttemptBudget && !secondAttemptCharged) {
+        await incrementSecondAttemptBudgetUsed(env);
+        secondAttemptCharged = true;
+      }
       try {
         const run = await runApifyTask(env, taskId, attempt.inputOverride);
         const datasetId = safeString(run.defaultDatasetId);
@@ -268,7 +297,7 @@ export async function runApifyRotation(
           metadata: {
             bucket,
             attempt: attempt.attempt,
-            nextAttemptAvailable: attempts.indexOf(attempt) < attempts.length - 1,
+            nextAttemptAvailable: attemptIndex < attemptsToRun.length - 1,
             cohortName: plan.cohortName,
             cohortIndex: plan.cohortIndex,
             accounts: plan.accounts,
@@ -364,6 +393,150 @@ function buildRotationAttempts(plan: RotationPlan): RotationAttemptPlan[] {
     attempt: 'primary',
     inputOverride: plan.inputOverride,
   }];
+}
+
+// ── Apify cost control: single paid actor event per source/slot by default ──
+//
+// Each attempt is a PAID actor event. The legacy loop fired every attempt
+// (primary → fallback → rescue) until one returned real rows, so a dry primary
+// silently doubled/tripled the per-slot cost. These helpers cap attempts to a
+// budget (default 1) and, when only one event is allowed, pick the attempt with
+// the best historical healthy-yield instead of blindly trying primary first.
+
+/** Base attempts allowed per source per slot. Default 1 (one paid event). Set
+ *  to >=3 to restore the legacy blind primary→fallback→rescue chain. */
+export function getMaxAttemptsPerSlot(env: Env): number {
+  const n = parseInt(String((env as any).APIFY_MAX_ATTEMPTS_PER_SLOT ?? '1'), 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+/** When true (default), choose the single attempt by historical yield. When
+ *  false, keep the strategy's default order (primary first). */
+export function isAdaptiveAttemptSelectionEnabled(env: Env): boolean {
+  return String((env as any).APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED ?? 'true').toLowerCase() !== 'false';
+}
+
+/** Max number of EXTRA (second) paid attempts allowed per day, consumed only
+ *  while the queue is starving. Default 0 → second attempts never fire. */
+export function getSecondAttemptDailyBudget(env: Env): number {
+  const n = parseInt(String((env as any).APIFY_SECOND_ATTEMPT_DAILY_BUDGET ?? '0'), 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+export function getAttemptYieldHistoryDays(env: Env): number {
+  const n = parseInt(String((env as any).APIFY_ATTEMPT_YIELD_HISTORY_DAYS ?? '7'), 10);
+  return Number.isFinite(n) && n > 0 ? n : 7;
+}
+
+export function getAttemptYieldMinSample(env: Env): number {
+  const n = parseInt(String((env as any).APIFY_ATTEMPT_YIELD_MIN_SAMPLE ?? '3'), 10);
+  return Number.isFinite(n) && n >= 1 ? n : 3;
+}
+
+export interface AttemptYieldStat { healthy: number; total: number }
+
+/**
+ * PURE. Reorder attempts so the one with the best historical healthy-yield rate
+ * (realRawCount > 0) goes first. Attempts with at least `minSample` runs of
+ * history are ranked above those without; ties and insufficient-history attempts
+ * keep their original (strategy default) order — a safe fallback default. When no
+ * attempt has enough history, the original order is returned unchanged.
+ */
+export function orderAttemptsByYield<T extends { attempt: string }>(
+  attempts: T[],
+  stats: Map<string, AttemptYieldStat>,
+  minSample: number,
+): T[] {
+  const score = (name: string) => {
+    const s = stats.get(name);
+    if (!s || s.total < minSample) return { hasHistory: 0, rate: -1 };
+    return { hasHistory: 1, rate: s.total > 0 ? s.healthy / s.total : 0 };
+  };
+  return attempts
+    .map((a, i) => ({ a, i, ...score(a.attempt) }))
+    .sort((x, y) =>
+      (y.hasHistory - x.hasHistory) ||  // attempts with history first
+      (y.rate - x.rate) ||              // higher healthy-yield first
+      (x.i - y.i))                      // stable: preserve default order
+    .map(e => e.a);
+}
+
+/**
+ * PURE. Decide how many paid attempts to run this slot.
+ * - If base >= 2: explicit multi-attempt mode (legacy) → run that many, no budget.
+ * - If base == 1 (default): run exactly ONE, unless the queue is starving AND a
+ *   daily second-attempt budget remains AND a real fallback attempt exists.
+ */
+export function decideAttemptBudget(args: {
+  baseMaxAttempts: number;
+  totalAttempts: number;
+  queueStarving: boolean;
+  secondAttemptDailyBudget: number;
+  secondAttemptDailyUsed: number;
+}): { maxAttempts: number; usesSecondAttemptBudget: boolean } {
+  const total = Math.max(1, args.totalAttempts);
+  const base = Math.max(1, Math.min(args.baseMaxAttempts, total));
+  if (base >= 2) return { maxAttempts: base, usesSecondAttemptBudget: false };
+  const budgetLeft = args.secondAttemptDailyBudget - args.secondAttemptDailyUsed;
+  if (args.queueStarving && budgetLeft > 0 && total >= 2) {
+    return { maxAttempts: 2, usesSecondAttemptBudget: true };
+  }
+  return { maxAttempts: 1, usesSecondAttemptBudget: false };
+}
+
+/** Healthy-yield history per attempt for one source, from run_events. */
+async function loadAttemptYieldStats(env: Env, sourceId: string, days: number): Promise<Map<string, AttemptYieldStat>> {
+  const map = new Map<string, AttemptYieldStat>();
+  if (!env.DB) return map;
+  try {
+    const res = await env.DB.prepare(`
+      SELECT metadata_json FROM run_events
+      WHERE event_type = 'apify.rotation.task_started'
+        AND source_id = ?
+        AND created_at > datetime('now','-' || ? || ' days')
+    `).bind(sourceId, String(days)).all<{ metadata_json: string }>();
+    for (const row of res.results ?? []) {
+      let meta: any;
+      try { meta = JSON.parse(String(row.metadata_json ?? '{}')); } catch { continue; }
+      const name = String(meta?.attempt ?? '').trim();
+      if (!name) continue;
+      const real = Number(meta?.datasetHealth?.realRawCount ?? 0) || 0;
+      const cur = map.get(name) ?? { healthy: 0, total: 0 };
+      cur.total += 1;
+      if (real > 0) cur.healthy += 1;
+      map.set(name, cur);
+    }
+  } catch (err) {
+    console.warn('[ApifyRotation] loadAttemptYieldStats skipped:', err instanceof Error ? err.message : String(err));
+  }
+  return map;
+}
+
+function secondAttemptBudgetKey(): string {
+  return `apify_second_attempt_budget_used:${new Date().toISOString().slice(0, 10)}`;
+}
+
+async function readSecondAttemptBudgetUsed(env: Env): Promise<number> {
+  if (!env.DB) return 0;
+  try {
+    const row = await env.DB.prepare(`SELECT value FROM settings WHERE key=?`).bind(secondAttemptBudgetKey()).first<{ value: string }>();
+    const n = parseInt(String(row?.value ?? '0'), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch { return 0; }
+}
+
+async function incrementSecondAttemptBudgetUsed(env: Env): Promise<void> {
+  if (!env.DB) return;
+  const key = secondAttemptBudgetKey();
+  try {
+    const used = await readSecondAttemptBudgetUsed(env);
+    await env.DB.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    ).bind(key, String(used + 1)).run();
+  } catch (err) {
+    console.warn('[ApifyRotation] second-attempt budget increment skipped:', err instanceof Error ? err.message : String(err));
+  }
 }
 
 function rotationEventCategoryId(plans: RotationPlan[]): string {

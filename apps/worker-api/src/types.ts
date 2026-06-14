@@ -95,6 +95,12 @@ export interface Env {
   QUEUE_HEALTH_CHANNEL_ID?: string;                // controller target channel
   APIFY_ROTATION_CONTINUOUS_ENABLED?: string;      // default: "false"
   APIFY_ROTATION_SLOT_MINUTES?: string;            // default: "30"
+  // ── Apify cost control (single paid actor event per source/slot) ──
+  APIFY_MAX_ATTEMPTS_PER_SLOT?: string;            // default: "1" (one paid event; set >=3 to restore legacy chain)
+  APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED?: string; // default: "true" (pick best attempt by historical yield)
+  APIFY_SECOND_ATTEMPT_DAILY_BUDGET?: string;      // default: "0" (extra attempts/day, only while starving)
+  APIFY_ATTEMPT_YIELD_HISTORY_DAYS?: string;       // default: "7"
+  APIFY_ATTEMPT_YIELD_MIN_SAMPLE?: string;         // default: "3"
   PUBLISH_SCHEDULER_GAP_FILL_ENABLED?: string;     // default: "false"
   AI_TRANSLATION_MAX_TEXT_CHARS?: string;          // default: falls back to AI_MAX_TEXT_CHARS_PER_ITEM
   BACKLOG_TRANSLATE_AFTER_GATES_ENABLED?: string;  // default: "false"

@@ -134,7 +134,7 @@ export function applyPersianCaptionQualityGuard(
   language: string,
   translation: TranslationOutput,
   sourceText: unknown,
-  opts?: { repairEnabled?: boolean; rejectEnabled?: boolean; minScore?: number },
+  opts?: { repairEnabled?: boolean; rejectEnabled?: boolean; minScore?: number; categoryId?: string },
 ): CaptionQualityDecision {
   if (language !== 'fa') return { ok: true, translation };
 
@@ -151,6 +151,10 @@ export function applyPersianCaptionQualityGuard(
   const repaired = stripTrailingFillerClauses(cleaned);
 
   const combinedCaption = `${repaired.captionShort}\n${repaired.captionFull}`;
+  if (!hasPersianFirstRealWord(repaired.captionShort) || !hasPersianFirstRealWord(repaired.captionFull)) {
+    return { ok: false, reason: 'caption_non_persian_lead' };
+  }
+
   if (hasYearMismatch(sourceText, combinedCaption)) {
     return { ok: false, reason: 'caption_year_mismatch' };
   }
@@ -163,6 +167,10 @@ export function applyPersianCaptionQualityGuard(
   // the caption was filler through-and-through, not merely filler-tailed).
   if (hasBannedGenericFiller(combinedCaption) && !captionHasConcreteSignal(combinedCaption)) {
     return { ok: false, reason: 'caption_generic_filler' };
+  }
+
+  if (opts?.rejectEnabled && isCryptoCaptionQualityMode(opts) && hasVaguePersianEditorialLanguage(combinedCaption)) {
+    return { ok: false, reason: 'caption_vague_or_formal' };
   }
 
   // Phase 6G: factual grounding — if the caption introduces currency/percent
@@ -262,6 +270,40 @@ function hasBannedGenericFiller(text: string): boolean {
   return BANNED_GENERIC_FILLER_PHRASES.some(p => body.includes(p));
 }
 
+function isCryptoCaptionQualityMode(opts?: { categoryId?: string }): boolean {
+  return String(opts?.categoryId ?? '').trim().toLowerCase() === 'crypto';
+}
+
+function hasVaguePersianEditorialLanguage(text: string): boolean {
+  const body = normalizeText(text);
+  return hasAny(body, [
+    'نشان دهنده',
+    'اهمیت ویژه ای دارد',
+    'اهمیت زیادی دارد',
+    'چارچوب های قانونی',
+    'شفاف سازی چارچوب',
+    'چارچوب نظارتی',
+    'چارچوب حقوقی',
+    'تغییر رویکرد مدیریت فعال',
+    'مدیریت فعال',
+    'حاکی از آن است',
+    'در راستای',
+    'با هدف شفاف سازی',
+    'نقطه عطف',
+    'فضای قانون گذاری',
+    'تاثیر قابل توجهی',
+    'نقش مهمی ایفا',
+  ]);
+}
+
+function hasPersianFirstRealWord(text: unknown): boolean {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return true;
+  const withoutEmojiAndPunct = trimmed.replace(/^[\s\p{Extended_Pictographic}\uFE0F\u200C\u200D"'“”‘’«»()[\]{}<>.,:;،؛.!?؟\-–—_+*=|\\/@#$]+/u, '');
+  const first = withoutEmojiAndPunct.match(/^[^\s]+/u)?.[0] ?? '';
+  return Boolean(first && /\p{Script=Arabic}/u.test(first[0] ?? ''));
+}
+
 // ── Phase-next (observe-only): deterministic caption-quality score ──
 // Pure, no AI call, never rejects on its own. Lets a report flag dull/risky
 // captions so the operator can audit real output before tightening anything.
@@ -271,6 +313,8 @@ export interface CaptionQualityScore {
   telegramNative: number;     // 0..100 (length/structure heuristic)
   boringOrGeneric: boolean;
   unsupportedClaim: boolean;
+  vagueOrFormal: boolean;
+  nonPersianLead: boolean;
   score: number;              // 0..100 overall
 }
 
@@ -281,6 +325,8 @@ export function scoreCaptionQuality(caption: unknown, sourceText: unknown = ''):
 
   const boringOrGeneric = hasBannedGenericFiller(text);
   const unsupportedClaim = hasFullyUngroundedFigures(src, text);
+  const vagueOrFormal = hasVaguePersianEditorialLanguage(text);
+  const nonPersianLead = !hasPersianFirstRealWord(text);
 
   // grounding: fraction of caption currency/percent figures found in source.
   const figs = extractGroundableFigureCores(text);
@@ -295,13 +341,15 @@ export function scoreCaptionQuality(caption: unknown, sourceText: unknown = ''):
   // clarity: penalise filler and a missing concrete signal.
   let clarity = 100;
   if (boringOrGeneric) clarity -= 35;
+  if (vagueOrFormal) clarity -= 25;
+  if (nonPersianLead) clarity -= 40;
   if (!captionHasConcreteSignal(text)) clarity -= 30;
   clarity = Math.max(0, clarity);
 
   const score = Math.round(
     0.35 * clarity + 0.30 * sourceGrounding + 0.20 * telegramNative + (unsupportedClaim ? 0 : 15),
   );
-  return { clarity, sourceGrounding, telegramNative, boringOrGeneric, unsupportedClaim, score: Math.min(100, score) };
+  return { clarity, sourceGrounding, telegramNative, boringOrGeneric, unsupportedClaim, vagueOrFormal, nonPersianLead, score: Math.min(100, score) };
 }
 
 /**

@@ -196,6 +196,7 @@ export default {
                     const r = await runApifyRotation(env, {
                       force: true,
                       maxSources: 1,
+                      queueStarving: health.state === 'starving',
                       ...(sourceId ? { onlySourceId: sourceId } : {}),
                     });
                     console.log('[Scheduled] Adaptive rotation:', { ok: r.ok, skipped: r.skipped, fired: r.plans.length, sourceId, reason: qualitySteer ? 'quality_steer' : 'starvation' });
