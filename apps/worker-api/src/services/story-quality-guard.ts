@@ -435,7 +435,12 @@ function isProjectMarketing(body: string): boolean {
     'is live on', 'powered by', "here's where to get access", 'get access', 'ecosystem news', 'integration', 'integrations',
     'now live', 'launch campaign', 'announcing', 'powered', 'markets for btc', 'chainlink =',
     'بر بستر شبکه', 'امکان دسترسی', 'با استفاده از اوراکل', 'راه اندازی شد', 'راه‌اندازی شد',
-  ]) && !hasAny(body, ['exploit', 'hack', 'outage', 'security incident', 'governance vote', 'mainnet upgrade', 'regulatory', 'sec', 'cftc']);
+  ]) && !hasAny(body, [
+    'exploit', 'hack', 'outage', 'security incident', 'governance vote', 'mainnet upgrade',
+    'regulatory', 'sec', 'cftc', 'vda', 'crypto tax', 'digital asset tax',
+    'usdc', 'stablecoin', 'cross-border payouts', 'settled in usdc',
+    'prediction market', 'prediction markets', 'trading volume', 'billion', 'million',
+  ]);
 }
 
 function hasHighSignalCryptoNews(body: string): boolean {
@@ -535,6 +540,9 @@ function hasMaterialCryptoImpact(body: string): boolean {
     'hack', 'hacked', 'exploit', 'exploited', 'stolen', 'drained', 'blacklist', 'freeze', 'froze',
     'security incident', 'vulnerability', 'phishing', 'private key', 'seed phrase', 'wallet drained',
     'sec', 'cftc', 'regulator', 'regulatory', 'lawsuit', 'settlement', 'charged', 'indicted',
+    'vda', 'crypto tax', 'digital asset tax', 'tax notice', 'tax notices', 'tds',
+    'prediction market', 'prediction markets', 'trading volume',
+    'usdc', 'stablecoin', 'cross-border payouts', 'settled in usdc',
     'approved', 'approval', 'filing', 's-1', '19b-4', 'listing announcement', 'delisting',
     'mainnet upgrade', 'outage', 'governance vote', 'hard fork', 'exploit fix',
     'net inflow', 'net outflow', 'inflow', 'outflow', 'liquidation', 'liquidations',

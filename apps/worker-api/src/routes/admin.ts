@@ -602,11 +602,25 @@ async function triggerCuration(req: Request, env: Env): Promise<Response> {
   let body: any = {};
   try { body = await req.json(); } catch { /* no body */ }
 
-  const results = await runCuration(env, undefined, {
+  const rawSourceId = body.source_id ?? body.sourceId;
+  const rawDatasetId = body.dataset_id ?? body.datasetId;
+  const rawCategoryId = body.category_id ?? body.categoryId;
+
+  const sourceId = typeof rawSourceId === 'string' && isValidId(rawSourceId) ? rawSourceId : undefined;
+  const datasetId = typeof rawDatasetId === 'string' ? sanitizeApifyDatasetId(rawDatasetId) ?? undefined : undefined;
+  const categoryId = typeof rawCategoryId === 'string' && isValidId(rawCategoryId) ? rawCategoryId : undefined;
+
+  const scope = {
+    ...(sourceId ? { sourceId } : {}),
+    ...(datasetId ? { datasetId } : {}),
+    ...(categoryId ? { categoryId } : {}),
+  };
+
+  const results = await runCuration(env, Object.keys(scope).length > 0 ? scope : undefined, {
     forceCurationEnabled: body.force === true,
     curationDryRun: typeof body.dryRun === 'boolean' ? body.dryRun : undefined,
   });
-  return ok({ triggered: true, runs: results });
+  return ok({ triggered: true, scope, runs: results });
 }
 
 async function triggerPublishDue(req: Request, env: Env): Promise<Response> {
