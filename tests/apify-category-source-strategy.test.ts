@@ -104,8 +104,8 @@ describe('category source strategy registry', () => {
     const attempts = buildCryptoRotationAttempts(plan!);
     expect(attempts.map(a => a.attempt)).toEqual([
       'primary',
-      'same_accounts_profile_7d',
-      'source_rescue_pool_7d',
+      'same_accounts_profile_24h',
+      'source_rescue_pool_24h',
     ]);
 
     for (const attempt of attempts) {

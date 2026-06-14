@@ -210,8 +210,13 @@ function buildCleanProfileContent(
   const parts = [`(${accountQuery})`];
   if (mode === 'media') parts.push('filter:media');
   if (mode === 'text') parts.push('-filter:media');
-  parts.push('-filter:replies', 'lang:en', '-giveaway', '-presale', '-airdrop', '-referral');
-  return parts.join(' ');
+  return withGenericLowQualityExclusions([
+    ...parts,
+    '-filter:replies',
+    'lang:en',
+    '-presale',
+    '-airdrop',
+  ]).join(' ');
 }
 
 function buildProfileTopicContent(
