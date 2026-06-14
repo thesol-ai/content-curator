@@ -107,6 +107,28 @@ export default {
                   cohort: plan.cohortName,
                 })),
               });
+
+              for (const plan of rotationResult.plans) {
+                if (!plan.sourceId || !plan.defaultDatasetId || plan.error) continue;
+                try {
+                  const scopedCuration = await runCuration(env, {
+                    sourceId: plan.sourceId,
+                    datasetId: plan.defaultDatasetId,
+                  }, { forceCurationEnabled: true });
+                  console.log('[Scheduled] Post-rotation curation:', {
+                    sourceId: plan.sourceId,
+                    datasetId: plan.defaultDatasetId,
+                    runs: scopedCuration.map(r => ({
+                      runId: r.runId,
+                      new: r.itemsNew,
+                      selected: r.itemsAiSelected,
+                      queued: r.itemsQueued,
+                    })),
+                  });
+                } catch (err) {
+                  console.error('[Scheduled] Post-rotation curation failed:', err instanceof Error ? err.message : String(err));
+                }
+              }
             }
           } catch (err) {
             console.error('[Scheduled] Apify rotation failed:', err instanceof Error ? err.message : String(err));

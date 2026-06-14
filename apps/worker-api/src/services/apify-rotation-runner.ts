@@ -338,6 +338,11 @@ export async function runApifyRotation(
     }
 
     if (selected) {
+      const selectedDatasetId = safeString(selected.run.defaultDatasetId);
+      if (selectedDatasetId) {
+        await syncApifySourceDataset(env, plan.source.id, selectedDatasetId);
+      }
+
       results.push({
         ...resultBase,
         inputOverride: selected.attempt.inputOverride,
@@ -345,7 +350,7 @@ export async function runApifyRotation(
         attempts: attemptResults,
         actorRunId: safeString(selected.run.id),
         status: safeString(selected.run.status),
-        defaultDatasetId: safeString(selected.run.defaultDatasetId),
+        defaultDatasetId: selectedDatasetId,
       });
     } else {
       results.push({
@@ -393,6 +398,17 @@ function buildRotationAttempts(plan: RotationPlan): RotationAttemptPlan[] {
     attempt: 'primary',
     inputOverride: plan.inputOverride,
   }];
+}
+
+async function syncApifySourceDataset(env: Env, sourceId: string, datasetId: string): Promise<void> {
+  try {
+    await env.DB
+      .prepare('UPDATE apify_sources SET apify_dataset_id=?, last_dataset_id=? WHERE id=?')
+      .bind(datasetId, datasetId, sourceId)
+      .run();
+  } catch (err) {
+    console.warn('[ApifyRotation] Failed to sync source dataset:', err instanceof Error ? err.message : String(err));
+  }
 }
 
 // ── Apify cost control: single paid actor event per source/slot by default ──

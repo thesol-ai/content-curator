@@ -14,6 +14,7 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
 
   if (!body) return 'pre_ai_empty_text';
   if (isEngagementBait(body)) return 'pre_ai_engagement_bait';
+  if (isWeakCryptoAdjacentPrivateAssetStory(body)) return 'pre_ai_weak_crypto_adjacent_private_asset';
 
   if (account === 'whale_alert') {
     return getWhaleAlertRejectReason(body);
@@ -91,6 +92,14 @@ const DIRECT_CRYPTO_ANCHORS = [
   'blockchain',
   'digital asset',
   'digital-asset',
+  'virtual digital asset',
+  'virtual digital assets',
+  'vda',
+  'schedule vda',
+  'crypto tax',
+  'digital asset tax',
+  'tax deducted at source',
+  'tds',
   'stablecoin',
   'usdt',
   'tether',
@@ -253,7 +262,57 @@ const ETF_REGULATORY_TERMS = [
   'issuer',
 ];
 
+function isWeakCryptoAdjacentPrivateAssetStory(body: string): boolean {
+  const hasPrivateAssetAngle =
+    hasAny(body, ['spcx', 'spacex', 'private asset', 'private assets', 'pre ipo', 'pre-ipo'])
+    && hasAny(body, ['stock', 'stocks', 'shares', 'equity', 'ipo', 'private market', 'blackrock', 'fund', 'funds', 'etf']);
+
+  if (!hasPrivateAssetAngle) return false;
+
+  // Explicit crypto rails make this a real crypto/RWA story. It can still be
+  // rejected later for marketing/low utility, but not as generic private equity.
+  if (hasAny(body, [
+    'crypto platforms',
+    'tokenized equity',
+    'tokenized shares',
+    'tokenized stock',
+    'rwa rails',
+    'rwa markets',
+    'rwa',
+    'tokenized',
+    'tokenization',
+    'onchain',
+    'on-chain',
+    'solana',
+    'ethereum',
+    'base',
+    'blockchain',
+  ])) {
+    return false;
+  }
+
+  return !hasAny(body, ['bitcoin etf', 'ethereum etf', 'spot bitcoin etf', 'spot ethereum etf', 'crypto etf']);
+}
+
+function hasCryptoTaxOrVdaSignal(body: string): boolean {
+  return hasAny(body, [
+    'virtual digital asset',
+    'virtual digital assets',
+    'schedule vda',
+    ' vda ',
+    'crypto tax',
+    'digital asset tax',
+    'tax deducted at source',
+    'tds',
+    'undisclosed vda income',
+    'vda-related notices',
+    'wallet providers',
+    'custodians',
+  ]);
+}
+
 function mentionsGenericSoftwareSecurity(body: string): boolean {
+  if (hasCryptoTaxOrVdaSignal(body)) return false;
   return hasAny(body, [
     'pypi',
     'npm',
