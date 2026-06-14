@@ -625,6 +625,66 @@ function buildRtlLeadRepairUser(translation: TranslationValue): string {
   });
 }
 
+function shouldRetryPersianCaptionQuality(reason: string | undefined): boolean {
+  return reason === 'caption_crypto_meta_or_audience_addressing'
+    || reason === 'caption_vague_or_formal'
+    || reason === 'caption_quality_low'
+    || reason === 'caption_generic_filler';
+}
+
+function buildPersianCaptionStyleRepairSystem(): string {
+  return [
+    'You repair Persian Telegram crypto captions.',
+    'Return ONLY JSON: {"caption_short":"...","caption_full":"..."}',
+    'Keep the same facts, numbers, entities, and source-backed meaning.',
+    'Do not add facts, advice, predictions, hype, or links.',
+    'Rewrite as a normal crypto channel news post.',
+    'Do NOT address the reader or audience.',
+    'Banned Persian phrases and close variants: برای کاربران کریپتو، برای کاربران، نکته مهم این است، معنی ساده‌اش، به زبان ساده، این خبر از جنس، این خبر بیشتر درباره، اگر این مدل‌ها، نه فقط معامله، یکی از کاربردهای واقعی، یکی از کاربردهای جدی، فقط یک ایده حاشیه‌ای، نشان‌دهنده.',
+    'Use concise, natural Iranian Persian. Start with a Persian word.',
+  ].join('\n');
+}
+
+function buildPersianCaptionStyleRepairUser(translation: TranslationValue, sourceText: string): string {
+  return JSON.stringify({
+    source_text: sourceText,
+    caption_short: translation.captionShort,
+    caption_full: translation.captionFull,
+  });
+}
+
+async function repairPersianCaptionStyleIfNeeded(
+  env: Env,
+  cfg: Config,
+  translation: TranslationValue,
+  sourceText: string,
+  reason: string | undefined,
+  provider: Config['translationProvider'],
+): Promise<TranslationValue | null> {
+  if (!shouldRetryPersianCaptionQuality(reason)) return null;
+
+  try {
+    const responseText = await callTranslationProviderForRepair(
+      env,
+      cfg,
+      provider,
+      buildPersianCaptionStyleRepairSystem(),
+      buildPersianCaptionStyleRepairUser(translation, sourceText),
+    );
+    const parsed = extractLooseJsonObject(responseText);
+    if (!parsed) return null;
+
+    return {
+      captionShort: typeof parsed.caption_short === 'string' ? parsed.caption_short : translation.captionShort,
+      captionFull: typeof parsed.caption_full === 'string' ? parsed.caption_full : translation.captionFull,
+      hashtags: translation.hashtags,
+    };
+  } catch (e) {
+    console.warn(`[Translation] Persian caption style repair failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
 async function callTranslationProviderForRepair(
   env: Env,
   cfg: Config,
@@ -829,7 +889,7 @@ async function runTranslationChunk(
         };
 
         const repaired = await repairRtlTranslationLeadIfNeeded(env, cfg, target, translation, provider);
-        const qualityDecision: { ok: boolean; translation?: TranslationValue; reason?: string } = repaired
+        let qualityDecision: { ok: boolean; translation?: TranslationValue; reason?: string } = repaired
           ? applyPersianCaptionQualityGuard(target.language, repaired, originalItem?.text ?? '', {
               repairEnabled: String((env as any).CAPTION_QUALITY_REPAIR_ENABLED ?? '').toLowerCase() === 'true',
               rejectEnabled: String((env as any).CAPTION_QUALITY_REJECT_ENABLED ?? '').toLowerCase() === 'true',
@@ -837,6 +897,29 @@ async function runTranslationChunk(
               categoryId: category.id,
             })
           : { ok: false, reason: 'rtl_repair_failed' };
+
+        if (!qualityDecision.ok && target.language === 'fa' && repaired) {
+          const styleRepaired = await repairPersianCaptionStyleIfNeeded(
+            env,
+            cfg,
+            repaired,
+            originalItem?.text ?? '',
+            qualityDecision.reason,
+            provider,
+          );
+          if (styleRepaired) {
+            const rtlSafe = await repairRtlTranslationLeadIfNeeded(env, cfg, target, styleRepaired, provider);
+            qualityDecision = rtlSafe
+              ? applyPersianCaptionQualityGuard(target.language, rtlSafe, originalItem?.text ?? '', {
+                  repairEnabled: String((env as any).CAPTION_QUALITY_REPAIR_ENABLED ?? '').toLowerCase() === 'true',
+                  rejectEnabled: String((env as any).CAPTION_QUALITY_REJECT_ENABLED ?? '').toLowerCase() === 'true',
+                  minScore: parseInt(String((env as any).CAPTION_QUALITY_MIN_SCORE ?? '70'), 10) || 70,
+                  categoryId: category.id,
+                })
+              : { ok: false, reason: 'style_repair_rtl_failed' };
+          }
+        }
+
         if (qualityDecision.ok && qualityDecision.translation) {
           translations[target.key] = qualityDecision.translation;
         } else {
