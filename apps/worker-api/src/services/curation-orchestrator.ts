@@ -39,6 +39,7 @@ export interface CurationRunResult {
 export interface CurationSourceScope {
   datasetId?: string;
   sourceId?: string;
+  categoryId?: string;
 }
 
 export async function runCuration(
@@ -83,6 +84,7 @@ function normalizeCurationScope(input?: string | CurationSourceScope): CurationS
   return {
     datasetId: sanitizeApifyDatasetId(input.datasetId) ?? undefined,
     sourceId: sanitizeSourceId(input.sourceId) ?? undefined,
+    categoryId: sanitizeSourceId(input.categoryId) ?? undefined,
   };
 }
 
@@ -93,9 +95,19 @@ async function scopeApifySources(
 ): Promise<ApifySourceRow[]> {
   const datasetId = sanitizeApifyDatasetId(scope.datasetId);
   const sourceId = sanitizeSourceId(scope.sourceId);
+  const categoryId = sanitizeSourceId(scope.categoryId);
+
+  let scopedSources = sources;
+  if (categoryId) {
+    scopedSources = scopedSources.filter(s => s.category_id === categoryId);
+    if (scopedSources.length === 0) {
+      console.warn(`[Curation] category_id=${categoryId} did not match any enabled Apify source — skipped`);
+      return [];
+    }
+  }
 
   if (sourceId) {
-    const scoped = sources.filter(s => s.id === sourceId);
+    const scoped = scopedSources.filter(s => s.id === sourceId);
     if (scoped.length === 0) {
       console.warn(`[Curation] Webhook source_id=${sourceId} did not match any enabled Apify source — skipped`);
       return [];
@@ -112,7 +124,7 @@ async function scopeApifySources(
   }
 
   if (datasetId) {
-    const scoped = sources
+    const scoped = scopedSources
       .filter(s => s.apify_dataset_id === datasetId || s.last_dataset_id === datasetId)
       .map(s => ({ ...s, apify_dataset_id: datasetId, last_dataset_id: datasetId }));
 
@@ -126,7 +138,7 @@ async function scopeApifySources(
     return scoped;
   }
 
-  return sources;
+  return scopedSources;
 }
 
 function sanitizeApifyDatasetId(value: unknown): string | null {
