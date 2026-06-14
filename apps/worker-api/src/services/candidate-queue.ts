@@ -204,7 +204,7 @@ export async function fetchPendingCandidates(
     if (categoryId) {
       const rows = await env.DB.prepare(`
         SELECT * FROM ai_candidate_queue
-        WHERE status = 'pending'
+        WHERE status IN ('pending', 'needs_translation')
           AND category_id = ?
           AND created_at > ?
           AND attempt_count < ?
@@ -216,7 +216,7 @@ export async function fetchPendingCandidates(
 
     const rows = await env.DB.prepare(`
       SELECT * FROM ai_candidate_queue
-      WHERE status = 'pending'
+      WHERE status IN ('pending', 'needs_translation')
         AND created_at > ?
         AND attempt_count < ?
       ORDER BY priority_score DESC, created_at ASC
@@ -245,7 +245,7 @@ export async function claimCandidateBatch(
             claimed_at=CURRENT_TIMESTAMP,
             last_error=NULL
         WHERE id=?
-          AND status='pending'
+          AND status IN ('pending', 'needs_translation')
           AND attempt_count < ?
       `).bind(row.id, maxAttempts).run();
 
@@ -265,12 +265,12 @@ export async function countPendingCandidates(env: Env, categoryId?: string): Pro
     if (categoryId) {
       const row = await env.DB.prepare(`
         SELECT COUNT(*) as cnt FROM ai_candidate_queue
-        WHERE status = 'pending' AND category_id = ?
+        WHERE status IN ('pending', 'needs_translation') AND category_id = ?
       `).bind(categoryId).first<{ cnt: number }>();
       return row?.cnt ?? 0;
     }
     const row = await env.DB.prepare(`
-      SELECT COUNT(*) as cnt FROM ai_candidate_queue WHERE status = 'pending'
+      SELECT COUNT(*) as cnt FROM ai_candidate_queue WHERE status IN ('pending', 'needs_translation')
     `).first<{ cnt: number }>();
     return row?.cnt ?? 0;
   } catch {
@@ -323,7 +323,7 @@ export async function failMaxAttemptPendingCandidates(env: Env): Promise<number>
     const result = await env.DB.prepare(`
       UPDATE ai_candidate_queue
       SET status='failed', last_error='max_attempts_exceeded'
-      WHERE status='pending'
+      WHERE status IN ('pending', 'needs_translation')
         AND attempt_count >= ?
     `).bind(maxAttempts).run();
     return result.meta.changes ?? 0;
@@ -341,7 +341,7 @@ export async function skipStaleCandidates(env: Env): Promise<number> {
     const result = await env.DB.prepare(`
       UPDATE ai_candidate_queue
       SET status = 'skipped', last_error = 'stale: exceeded max age'
-      WHERE status = 'pending'
+      WHERE status IN ('pending', 'needs_translation')
         AND created_at <= ?
     `).bind(cutoff).run();
 
@@ -362,12 +362,14 @@ export interface CandidateQueueStats {
   queued: number;
   failed: number;
   skipped: number;
+  needs_translation: number; // PATCH E: surfaced in queue health reports
 }
 
 export async function getCandidateQueueStats(env: Env): Promise<CandidateQueueStats> {
   const zero: CandidateQueueStats = {
     pending: 0, scoring: 0, ai_selected: 0,
     ai_rejected: 0, queued: 0, failed: 0, skipped: 0,
+    needs_translation: 0,
   };
   try {
     const rows = await env.DB.prepare(`

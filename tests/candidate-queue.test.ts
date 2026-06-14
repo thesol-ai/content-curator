@@ -540,6 +540,7 @@ describe('getCandidateQueueStats', () => {
     expect(stats).toEqual({
       pending: 0, scoring: 0, ai_selected: 0,
       ai_rejected: 0, queued: 0, failed: 0, skipped: 0,
+      needs_translation: 0, // v4.1: new status
     });
   });
 

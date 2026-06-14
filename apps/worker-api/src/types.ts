@@ -415,7 +415,8 @@ export type AICandidateStatus =
   | 'ai_rejected'
   | 'queued'
   | 'failed'
-  | 'skipped';
+  | 'skipped'
+  | 'needs_translation'; // PATCH E: all channels lacked a translation; retried by backlog drain
 
 /** Row خوانده‌شده از جدول ai_candidate_queue */
 export interface AICandidateRow {

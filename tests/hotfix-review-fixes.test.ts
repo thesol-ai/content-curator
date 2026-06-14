@@ -52,7 +52,7 @@ function buildDb(rows: AICandidateRow[]) {
     return {
       run: vi.fn(async () => ({ meta: { changes: 1 } })),
       all: vi.fn(async () => {
-        if (n.includes('FROM ai_candidate_queue') && n.includes("status = 'pending'")) return { results: rows };
+        if (n.includes('FROM ai_candidate_queue') && (n.includes("status = 'pending'") || n.includes("status IN ('pending', 'needs_translation')"))) return { results: rows };
         if (n.includes('FROM channels')) return { results: [] };
         if (n.includes('account_handle')) return { results: [] };
         return { results: [] };

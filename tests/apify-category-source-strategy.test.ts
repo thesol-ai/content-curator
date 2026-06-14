@@ -17,6 +17,19 @@ const CURRENT_ROTATION_SOURCE_IDS = [
   'src_market_trending_x_text',
 ];
 
+// v4.1: discovery lanes were added to CRYPTO_ROTATION_SOURCE_IDS as opt-in sources.
+// They only produce rotation plans when present as ENABLED apify_sources rows
+// (seeded enabled=0 by default), so they are NOT in the planned-set assertions
+// below — only in the registry membership check.
+const DISCOVERY_ROTATION_SOURCE_IDS = [
+  'src_crypto_x_discovery_latest',
+  'src_crypto_x_discovery_top',
+];
+const ALL_REGISTERED_ROTATION_SOURCE_IDS = [
+  ...CURRENT_ROTATION_SOURCE_IDS,
+  ...DISCOVERY_ROTATION_SOURCE_IDS,
+];
+
 function source(id: string, overrides: Partial<any> = {}) {
   return {
     id,
@@ -58,7 +71,7 @@ function makeEnv(extraSources: any[] = []) {
 
 describe('category source strategy registry', () => {
   it('registers current crypto rotation source ids and gives unknown categories a no-op strategy', () => {
-    expect([...CRYPTO_ROTATION_SOURCE_IDS].sort()).toEqual([...CURRENT_ROTATION_SOURCE_IDS].sort());
+    expect([...CRYPTO_ROTATION_SOURCE_IDS].sort()).toEqual([...ALL_REGISTERED_ROTATION_SOURCE_IDS].sort());
 
     const cryptoStrategy = getCategorySourceStrategy('crypto');
     expect(cryptoStrategy.id).toBe('crypto');
