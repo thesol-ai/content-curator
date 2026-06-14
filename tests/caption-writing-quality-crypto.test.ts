@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTranslationSystem, type TranslationTarget } from '../apps/worker-api/src/services/ai-gate';
-import { applyPersianCaptionQualityGuard, scoreCaptionQuality } from '../apps/worker-api/src/services/story-quality-guard';
+import { applyPersianCaptionQualityGuard, repairPersianCaptionText, scoreCaptionQuality } from '../apps/worker-api/src/services/story-quality-guard';
 import type { CategoryRow, TranslationOutput } from '../apps/worker-api/src/types';
 
 function category(id: string, overrides: Partial<CategoryRow> = {}): CategoryRow {
@@ -124,4 +124,28 @@ describe('crypto Persian caption writing quality', () => {
     expect(clearScore.vagueOrFormal).toBe(false);
     expect(clearScore.score).toBeGreaterThan(vagueScore.score);
   });
+  it('normalizes general Persian crypto caption spacing without broad word splitting', () => {
+    const repaired = repairPersianCaptionText(
+      'یک نهنگ ۲۳۴۱BTC معادل ۱۴۴.۶۸میلیوندلار برداشت کرد.همچنین ۷۳۷.۷USDT ثبت شد. این داده مرتبط،حاکیاز افزایش فعالیت است،اما بیت‌کوین و لایه‌دو نباید خراب شوند. اتریومETF هم نباید چسبیده بماند.'
+    );
+
+    expect(repaired).toContain('۲۳۴۱ BTC');
+    expect(repaired).toContain('۱۴۴.۶۸ میلیون دلار');
+    expect(repaired).toContain('۷۳۷.۷ USDT');
+    expect(repaired).toContain('کرد. همچنین');
+    expect(repaired).toContain('مرتبط، حاکی از');
+    expect(repaired).toContain('است، اما');
+    expect(repaired).toContain('اتریوم ETF');
+
+    expect(repaired).toContain('بیت‌کوین');
+    expect(repaired).toContain('لایه‌دو');
+
+    expect(repaired).not.toContain('۲۳۴۱BTC');
+    expect(repaired).not.toContain('میلیوندلار');
+    expect(repaired).not.toContain('۷۳۷.۷USDT');
+    expect(repaired).not.toContain('کرد.همچنین');
+    expect(repaired).not.toContain('حاکیاز');
+    expect(repaired).not.toContain('اتریومETF');
+  });
+
 });

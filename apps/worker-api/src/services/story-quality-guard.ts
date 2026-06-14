@@ -197,6 +197,118 @@ export function applyPersianCaptionQualityGuard(
   return { ok: true, translation: repaired };
 }
 
+
+function normalizePersianCaptionSpacing(text: string): string {
+  let out = String(text ?? '');
+
+  const digit = '[۰-۹٠-٩0-9]';
+  const number = `${digit}[۰-۹٠-٩0-9.,٫٬]*`;
+
+  // Persian letters only. Do not use \p{Script=Arabic} here because Persian digits
+  // are also Arabic-script and broad splitting can damage numeric expressions.
+  const persianLetter = '[اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهیئءأإؤۀة]';
+
+  const cryptoTickers = [
+    'BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'SOL', 'XRP', 'ADA', 'DOGE', 'TON',
+    'TRX', 'AVAX', 'LINK', 'DOT', 'MATIC', 'POL', 'ARB', 'OP', 'LTC', 'BCH',
+    'UNI', 'AAVE', 'SUI', 'APT', 'SEI', 'INJ', 'NEAR', 'ATOM', 'FIL',
+  ].join('|');
+
+  const financeLatin = [
+    'ETF', 'ETFs', 'USD', 'EUR', 'GBP', 'APY', 'APR', 'TVL', 'DeFi', 'NFT',
+    'CEX', 'DEX', 'L2', 'Layer2',
+  ].join('|');
+
+  const persianUnits = [
+    'دلار', 'تومان', 'ریال', 'یورو', 'درهم', 'لیر', 'پوند',
+    'درصد', 'واحد', 'توکن', 'کوین', 'بیت‌کوین', 'اتریوم',
+  ].join('|');
+
+  const magnitudes = [
+    'هزار', 'میلیون', 'میلیارد', 'تریلیون',
+  ].join('|');
+
+  // Space after Persian/Latin punctuation, but do not split decimal numbers.
+  out = out.replace(/([،؛:؛!?؟])(?=[^\s\n])/g, '$1 ');
+  out = out.replace(/([.])(?=[^\s\n0-9۰-۹٠-٩])/g, '$1 ');
+  out = out.replace(/([,])(?=[^\s\n0-9۰-۹٠-٩])/g, '$1 ');
+
+  // Persian letter glued to a number.
+  // Example: رشد۲۰درصدی -> رشد ۲۰ درصدی
+  out = out.replace(new RegExp(`(${persianLetter})(${digit})`, 'g'), '$1 $2');
+
+  // Number glued to Persian magnitude/unit/currency.
+  // Examples: ۱۴۴.۶۸میلیون -> ۱۴۴.۶۸ میلیون
+  // ۴۵.۶درصد -> ۴۵.۶ درصد
+  out = out.replace(
+    new RegExp(`(${number})(?=(${magnitudes}|${persianUnits}))`, 'g'),
+    '$1 ',
+  );
+
+  // Number glued to crypto ticker / Latin finance term.
+  // Examples: ۲۳۴۱BTC -> ۲۳۴۱ BTC
+  // ۷۳۷.۷USDT -> ۷۳۷.۷ USDT
+  out = out.replace(
+    new RegExp(`(${number})(?=(${cryptoTickers}|${financeLatin})(?![A-Za-z0-9]))`, 'g'),
+    '$1 ',
+  );
+
+  // Persian magnitude glued to currency/token.
+  // Examples: میلیوندلار -> میلیون دلار
+  // میلیاردتومان -> میلیارد تومان
+  // هزارBTC -> هزار BTC
+  out = out.replace(
+    new RegExp(`(${magnitudes})(?=(${persianUnits}))`, 'g'),
+    '$1 ',
+  );
+
+  out = out.replace(
+    new RegExp(`(${magnitudes})(?=(${cryptoTickers}|${financeLatin})(?![A-Za-z0-9]))`, 'g'),
+    '$1 ',
+  );
+
+  // Persian unit/currency glued to crypto ticker / finance Latin term.
+  // Examples: دلارUSDT -> دلار USDT
+  // بیت‌کوینETF -> بیت‌کوین ETF
+  // اتریومETF -> اتریوم ETF
+  out = out.replace(
+    new RegExp(`(${persianUnits})(?=(${cryptoTickers}|${financeLatin})(?![A-Za-z0-9]))`, 'g'),
+    '$1 ',
+  );
+
+  // Conservative Persian connector repairs.
+  // These are common LLM spacing defects, not broad word splitting.
+  out = out.replace(/حاکیاز/g, 'حاکی از');
+  out = out.replace(/ناشیاز/g, 'ناشی از');
+  out = out.replace(/مبتنیبر/g, 'مبتنی بر');
+  out = out.replace(/مرتبطبا/g, 'مرتبط با');
+  out = out.replace(/وابستهبه/g, 'وابسته به');
+  out = out.replace(/منجربه/g, 'منجر به');
+  out = out.replace(/اشارهبه/g, 'اشاره به');
+  out = out.replace(/نسبتبه/g, 'نسبت به');
+  out = out.replace(/درمقایسهبا/g, 'در مقایسه با');
+
+  // Common verb + conjunction glue in generated Persian.
+  out = out.replace(
+    /(است|بود|شد|شده|رسید|رسیده|می‌دهد|می‌کند|کرده|دارد)(?=(که|اما|ولی|و)(?:\s|$))/g,
+    '$1 ',
+  );
+
+  // Safety net: undo accidental spacing inside decimal numbers.
+  out = out.replace(/([0-9۰-۹٠-٩])\.\s+([0-9۰-۹٠-٩])/g, '$1.$2');
+  out = out.replace(/([0-9۰-۹٠-٩])٫\s+([0-9۰-۹٠-٩])/g, '$1٫$2');
+
+  // Normalize spaces without flattening paragraphs.
+  out = out
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return out;
+}
+
 export function repairPersianCaptionText(value: string): string {
   let out = String(value ?? '');
 
@@ -227,7 +339,7 @@ export function repairPersianCaptionText(value: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  return out;
+  return normalizePersianCaptionSpacing(out);
 }
 
 function hasYearMismatch(sourceText: unknown, caption: string): boolean {

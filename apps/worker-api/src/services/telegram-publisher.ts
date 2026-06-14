@@ -36,6 +36,7 @@ import {
 import { getStreamTranscodeState } from './stream-config';
 import { getRuntimeConfig } from './runtime-config';
 import { formatTelegramMessage } from './telegram-message-formatter';
+import { repairPersianCaptionText } from './story-quality-guard';
 
 export interface PublishInput {
   chatId: string;
@@ -613,6 +614,10 @@ async function parseTgResponse(res: Response): Promise<PublishResult> {
 
 export function prepareTelegramCaptions(input: PublishInput): PreparedCaptions {
   const language = input.language ?? input.channel?.language ?? 'en';
+  const normalizeCaptionInput = (value: string): string =>
+    language === 'fa' ? repairPersianCaptionText(value) : String(value ?? '').trim();
+  const captionFullText = normalizeCaptionInput(input.captionFull ?? '');
+  const captionShortText = normalizeCaptionInput(input.captionShort || input.captionFull || '');
 
   let fullHtml: string;
   let shortHtml: string;
@@ -627,7 +632,7 @@ export function prepareTelegramCaptions(input: PublishInput): PreparedCaptions {
     fullHtml = input.captionFullHtml;
   } else if (input.channel) {
     const full = formatTelegramMessage({
-      body: input.captionFull ?? '',
+      body: captionFullText,
       sourceUrl: input.sourceUrl,
       language,
       channel: input.channel,
@@ -638,10 +643,10 @@ export function prepareTelegramCaptions(input: PublishInput): PreparedCaptions {
     fullFooterIncluded = full.footerIncluded;
     fullFooterOmitted = full.footerOmitted;
   } else {
-    fullHtml = safeTruncate(sanitizeCaptionText(input.captionFull ?? ''), 4096);
+    fullHtml = safeTruncate(sanitizeCaptionText(captionFullText), 4096);
   }
 
-  const shortSource = input.captionShort || input.captionFull || '';
+  const shortSource = captionShortText;
   if (input.captionShortHtml) {
     shortHtml = input.captionShortHtml;
   } else if (input.channel) {
