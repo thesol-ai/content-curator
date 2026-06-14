@@ -54,7 +54,8 @@ export async function runRuleGate(
     return { approved: false, reason: 'high_risk' };
   }
 
-  if (!aiResult.translations[channel.language]) {
+  const channelTranslationKey = `channel:${channel.id}`;
+  if (!aiResult.translations[channel.language] && !aiResult.translations[channelTranslationKey]) {
     return { approved: false, reason: `no_translation_for_${channel.language}` };
   }
 

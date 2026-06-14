@@ -1091,12 +1091,12 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     'Crypto Persian caption writing mode:',
     '- Write for Persian-speaking crypto readers with mixed skill levels: beginners must understand it, professionals must not feel talked down to.',
     '- Use clear crypto language, not corporate/legal/research prose. The reader should understand the post on the first read.',
-    '- Structure every Persian crypto caption around: what happened, why it matters for the crypto market/user, and what risk/context the reader should notice. If the source does not support a clear why-it-matters line, keep it factual and restrained.',
+    '- Structure every Persian crypto caption as a normal Telegram news post: concrete fact first, then only source-backed context. Do NOT address the audience or explain that something is important “for users/readers”.',
     '- Explain crypto terms briefly when needed inside the sentence, not as a textbook aside. Examples: TVL = پولی که داخل پروتکل‌های دیفای قفل شده؛ ETF = صندوق قابل معامله در بورس؛ RWA = دارایی واقعی مثل طلا/سهام/اوراق که روی بلاکچین آمده؛ smart contract = قرارداد خودکار روی بلاکچین؛ liquidity = نقدینگی بازار؛ liquidation = بسته‌شدن اجباری معامله اهرمی.',
     '- Prefer short Telegram-native Persian: one concrete lead sentence, then one plain context sentence. caption_short should usually be 1-2 sentences; caption_full should usually be 2-4 short lines/paragraphs.',
     '- Lead with the concrete event, number, asset, protocol, institution, or risk. Do not begin with abstract framing or vague importance language.',
     '- Do not dress weakly crypto-adjacent stories as major crypto news. If the connection is weak, state the concrete connection briefly or keep the caption restrained.',
-    '- Banned vague/formal Persian for crypto captions: "نشان‌دهنده", "اهمیت ویژه‌ای دارد", "چارچوب‌های قانونی", "تغییر رویکرد مدیریت فعال", "حاکی از آن است", "در راستای", "با هدف شفاف‌سازی", "نقطه عطف", "فضای قانون‌گذاری", "محسوب می‌شود", and similar bureaucratic wording.',
+    '- Banned Persian caption style: do NOT use audience-addressing or meta-explainer phrases such as "برای کاربران کریپتو", "برای کاربران", "نکته مهم این است", "معنی ساده‌اش", "این خبر از جنس", "این خبر بیشتر درباره", "اگر این مدل‌ها", "نه فقط معامله", "نشان می‌دهد ... نیست". Write the news directly.',
     '- Good style examples: "پولی که داخل پروتکل‌های دیفای قفل شده، به زیر ۷۰ میلیارد دلار رسیده است. این یعنی سرمایه از دیفای خارج شده و بازار محتاط‌تر شده." / "مورفو ۱۷۵ میلیون دلار سرمایه جذب کرده و ارزشش به حدود ۲ میلیارد دلار رسیده است. حضور سرمایه‌گذارهای بزرگ یعنی دیفای هنوز برای پول نهادی جذاب است."',
   ] : [];
 
@@ -1119,7 +1119,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- caption_short: concise, engaging 1-2 sentence summary for media captions; respect each target max chars',
     '- caption_full: complete Telegram post with context; respect each target max chars',
     '- Persian (fa) captions must be in natural, fluent Farsi for an Iranian crypto audience — NOT a literal translation and NOT generic U.S. retail/investor copy',
-    '- Persian captions must clearly answer: why does this matter for Persian-speaking crypto users? If there is no clear relevance, keep the caption restrained and do not hype it.',
+    '- Persian captions must read like a normal crypto channel post, not a lesson addressed to the reader. Do not write "برای کاربران..." or "نکته مهم..." lines. If there is no concrete source-backed context, stop after the facts.',
     '- Avoid generic filler such as "نشان‌دهنده پذیرش نهادی", "گامی مهم", "می‌تواند تأثیرگذار باشد" unless the source gives a concrete reason.',
     '- BANNED generic filler in Persian — do NOT use these or close variants: "نشان‌دهنده پذیرش", "نشان‌دهنده افزایش", "نشان‌دهنده تغییرات", "نشان‌دهنده بلوغ", "گامی در جهت", "می‌تواند تأثیرگذار باشد", "پتانسیل دموکراتیزه کردن", "یکی از بزرگترین رویدادهای تاریخ", "محسوب می‌شود". If you cannot give a concrete source-backed reason, omit the "why it matters" line entirely.',
     '- Every number, percentage, ticker, $ amount, date, and named entity in the caption MUST appear in the source text. Do NOT invent figures, valuations, IPO implications, or predictions absent from the source.',
