@@ -163,6 +163,10 @@ export function applyPersianCaptionQualityGuard(
     return { ok: false, reason: 'caption_generic_investment_advice' };
   }
 
+  if (opts?.rejectEnabled && isCryptoCaptionQualityMode(opts) && hasForbiddenCryptoCaptionMetaLanguage(combinedCaption)) {
+    return { ok: false, reason: 'caption_crypto_meta_or_audience_addressing' };
+  }
+
   // Reject only when filler remains AND there is still no concrete signal (i.e.
   // the caption was filler through-and-through, not merely filler-tailed).
   if (hasBannedGenericFiller(combinedCaption) && !captionHasConcreteSignal(combinedCaption)) {
@@ -243,6 +247,30 @@ function hasYearMismatch(sourceText: unknown, caption: string): boolean {
 function hasForbiddenPersianGenericAdvice(text: string): boolean {
   const body = normalizeText(text);
   return body.includes('سرمایه گذاران نباید') || body.includes('سرمایه‌گذاران نباید') || body.includes('سیگنالی برای تحرکات آتی');
+}
+
+function hasForbiddenCryptoCaptionMetaLanguage(text: string): boolean {
+  const body = normalizeText(text);
+  return [
+    'برای کاربران کریپتو',
+    'برای کاربر کریپتو',
+    'برای کاربران',
+    'برای معامله گران',
+    'برای فعالان بازار',
+    'نکته مهم این است',
+    'معنی ساده اش',
+    'به زبان ساده',
+    'این خبر از جنس',
+    'این خبر بیشتر درباره',
+    'این خبر نشان می دهد',
+    'این موضوع نشان می دهد',
+    'اگر این مدل ها',
+    'نه فقط معامله کوتاه مدت',
+    'نه صرفا معامله',
+    'یکی از کاربردهای واقعی',
+    'یکی از کاربردهای جدی',
+    'فقط یک ایده حاشیه ای',
+  ].some(phrase => body.includes(phrase));
 }
 
 // Phase 6G/6I: banned generic filler STEMS (normalized, ZWNJ/space-insensitive).
