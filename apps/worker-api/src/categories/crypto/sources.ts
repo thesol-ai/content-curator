@@ -47,15 +47,18 @@ const TOKEN_PROJECT_COHORTS = [
   ['DefiLlama', 'BanklessHQ', 'TheDefiantNews', 'Tree_of_Alpha'],
 ];
 
-const MARKET_IMPACT_COHORTS = [
-  ['lookonchain', 'glassnode', 'cryptoquant_com'],
+const MARKET_IMPACT_TEXT_COHORTS = [
   ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
   ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
-  ['VitalikButerin', 'ethereum', 'solana', 'base', 'chainlink'],
-  // PRICE/ANALYSIS cohort: structural TA + onchain analysts for the price &
-  // technical-analysis content lane Iranian readers want. NOT pump/signal
-  // accounts — these post chart structure and onchain data, not "buy now".
+  ['RektCapital', 'WClementeIII', 'Pentosh1'],
+  ['CryptoHayes', 'RaoulGMI', 'CryptoCred'],
+];
+
+const MARKET_IMPACT_MEDIA_COHORTS = [
+  ['lookonchain', 'glassnode', 'cryptoquant_com'],
   ['RektCapital', 'WClementeIII', 'glassnode', 'lookonchain'],
+  ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
+  ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
 ];
 
 const GENERIC_LOW_QUALITY_QUERY_EXCLUSIONS = [
@@ -112,9 +115,7 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    // Security alerts keep their topic gate — these accounts post non-crypto
-    // security content too and the gate is actually useful here.
-    return buildSecurityAlertPlan(source, bucket + 4, 8);
+    return buildCohortPlan(source, VOICES_COHORTS, bucket + 4, 'expert_signals', 'media', 8);
   }
 
   if (id === 'src_crypto_x_voices_text') {
@@ -122,7 +123,7 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
   }
 
   if (id === 'src_market_trending_x_media') {
-    return buildTokenProjectWatchPlan(source, bucket + 5, 10);
+    return buildMarketImpactPlan(source, bucket + 5, 'media', 10);
   }
 
   if (id === 'src_market_trending_x_text') {
@@ -352,10 +353,10 @@ function buildExpertSignalsTopicGate(): string {
 }
 
 function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, mode: ApifyRotationMode, maxItems: number): ApifyRotationPlan {
-  const index = positiveModulo(bucket, MARKET_IMPACT_COHORTS.length);
-  const accounts = MARKET_IMPACT_COHORTS[index] ?? MARKET_IMPACT_COHORTS[0]!;
+  const cohorts = mode === 'media' ? MARKET_IMPACT_MEDIA_COHORTS : MARKET_IMPACT_TEXT_COHORTS;
+  const index = positiveModulo(bucket, cohorts.length);
+  const accounts = cohorts[index] ?? cohorts[0]!;
 
-  // PATCH: Market impact accounts post market data — no topic gate needed for primary.
   const searchTerms = buildCleanProfileSearchTerms(accounts, mode);
 
   return {

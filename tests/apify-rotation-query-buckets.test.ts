@@ -124,20 +124,14 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     expect(voicesTextQuery).not.toContain('USDT');
     expect(voicesTextQuery).not.toContain('from:whale_alert');
 
-    const security = bySource(result, 'src_crypto_x_voices_media');
-    const securityQuery = combinedSearch(security);
-    expect(security.cohortName).toContain('security_alert_text');
-    expect(security.accounts).toEqual(['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts']);
-    expect(securityQuery).toContain('"crypto hack"');
-    expect(securityQuery).toContain('"DeFi hack"');
-    expect(securityQuery).toContain('"protocol exploit"');
-    expect(securityQuery).toContain('"smart contract exploit"');
-    expect(securityQuery).toContain('crypto OR DeFi OR protocol');
-    expect(securityQuery).not.toContain('hack OR hacked OR exploit');
-    expect(securityQuery).toContain('-pypi');
-    expect(securityQuery).toContain('-npm');
-    expect(securityQuery).toContain('-python');
-    expect(securityQuery).toContain('-bun');
+    const voicesMedia = bySource(result, 'src_crypto_x_voices_media');
+    const voicesMediaQuery = combinedSearch(voicesMedia);
+    expect(voicesMedia.cohortName).toContain('expert_signals_media');
+    expect(voicesMediaQuery).toContain('from:');
+    expect(voicesMediaQuery).toContain('filter:media');
+    expect(voicesMediaQuery).not.toContain('-filter:media');
+    expect(voicesMediaQuery).not.toContain('"crypto hack"');
+    expect(voicesMediaQuery).not.toContain('-pypi');
 
     const market = bySource(result, 'src_market_trending_x_text');
     const marketQuery = combinedSearch(market);
@@ -146,11 +140,11 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     expect(marketQuery).not.toContain('ETF OR "spot ETF"');
     expect(marketQuery).toContain('-giveaway');
 
-    const tokenProject = bySource(result, 'src_market_trending_x_media');
-    const tokenProjectQuery = combinedSearch(tokenProject);
-    expect(tokenProject.cohortName).toContain('token_project_watch_text');
-    expect(tokenProjectQuery).toContain('from:');
-    expect(tokenProjectQuery).not.toContain('"mainnet" OR "testnet"');
-    expect(tokenProjectQuery).toContain('-"get access"');
+    const marketMedia = bySource(result, 'src_market_trending_x_media');
+    const marketMediaQuery = combinedSearch(marketMedia);
+    expect(marketMedia.cohortName).toContain('market_impact_media');
+    expect(marketMediaQuery).toContain('from:');
+    expect(marketMediaQuery).toContain('filter:media');
+    expect(marketMediaQuery).not.toContain('-filter:media');
   });
 });
