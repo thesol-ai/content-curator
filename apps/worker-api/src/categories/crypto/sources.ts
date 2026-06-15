@@ -530,7 +530,6 @@ function buildSearchInputOverride(
     conversation_id: '',
     quoted_tweet_id: '',
     quoted_user_id: '',
-    card_name: '',
     url: '',
     'filter:blue_verified': false,
     'filter:consumer_video': false,
