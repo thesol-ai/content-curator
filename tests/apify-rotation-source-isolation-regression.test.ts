@@ -44,6 +44,12 @@ function makeEnv(extraSources: any[] = []) {
   } as any;
 }
 
+function searchTermsFor(plan: any): string[] {
+  const terms = plan.inputOverride.searchTerms;
+  expect(Array.isArray(terms)).toBe(true);
+  return terms.map(String);
+}
+
 describe('Apify rotation source isolation regression safety net', () => {
   it('ignores unknown or future-category source ids instead of planning them', async () => {
     const result = await runApifyRotation(makeEnv([
@@ -70,15 +76,18 @@ describe('Apify rotation source isolation regression safety net', () => {
     expect(result.plans).toHaveLength(CURRENT_ROTATION_SOURCE_IDS.length);
 
     for (const plan of result.plans) {
-      const query = String(plan.inputOverride.query);
+      const terms = searchTermsFor(plan);
+      const query = terms[0] ?? '';
 
-      expect(plan.inputOverride.query).toBe(plan.inputOverride.twitterContent);
+      expect(plan.inputOverride.query).toBeUndefined();
+      expect(plan.inputOverride.twitterContent).toBe('');
       expect(plan.inputOverride.queryType).toBe('Latest');
       expect(plan.inputOverride.lang).toBe('en');
-      expect(plan.inputOverride.searchTerms).toBeUndefined();
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
 
       expect(query).toContain('from:');
+      expect(query).toContain('since:');
+      expect(query).toContain('until:');
       expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
       expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
     }

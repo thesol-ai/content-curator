@@ -94,7 +94,11 @@ describe('category source strategy registry', () => {
       const plan = cryptoSourceStrategy.buildRotationPlan(source(id), 123);
       expect(plan).not.toBeNull();
       expect(plan?.source.id).toBe(id);
-      expect(plan?.inputOverride.query).toBe(plan?.inputOverride.twitterContent);
+      const terms = plan?.inputOverride.searchTerms as unknown[];
+      expect(plan?.inputOverride.query).toBeUndefined();
+      expect(plan?.inputOverride.twitterContent).toBe('');
+      expect(Array.isArray(terms)).toBe(true);
+      expect(terms.length).toBeGreaterThan(0);
       expect(plan?.inputOverride.queryType).toBe('Latest');
       expect(plan?.inputOverride.lang).toBe('en');
     }
@@ -123,20 +127,26 @@ describe('category source strategy registry', () => {
 
     for (const attempt of attempts) {
       const input = attempt.inputOverride;
-      const query = String(input.query);
+      const terms = input.searchTerms as unknown[];
+      const firstTerm = String(terms[0] ?? '');
 
-      expect(input.query).toBe(input.twitterContent);
+      expect(input.query).toBeUndefined();
+      expect(input.twitterContent).toBe('');
+      expect(Array.isArray(terms)).toBe(true);
       expect(input.queryType).toBe('Latest');
       expect(input.lang).toBe('en');
       expect(String(input.since_time)).toMatch(/^\d{10}$/);
-      expect(query).toContain('-filter:replies');
-      expect(query).toContain('lang:en');
+      expect(firstTerm).toContain('-filter:replies');
+      expect(firstTerm).toContain('lang:en');
+      expect(firstTerm).toContain('since:');
+      expect(firstTerm).toContain('until:');
     }
 
     expect(attempts[1]?.inputOverride.maxItems).toBe(30);
     expect(attempts[2]?.inputOverride.maxItems).toBe(40);
-    expect(String(attempts[2]?.inputOverride.query)).toContain('"token launch"');
-    expect(String(attempts[2]?.inputOverride.query)).toContain('-"airdrop claim"');
+    const rescueTerms = attempts[2]?.inputOverride.searchTerms as unknown[];
+    expect(String(rescueTerms[0] ?? '')).toContain('"token launch"');
+    expect(String(rescueTerms[0] ?? '')).toContain('-"airdrop claim"');
   });
 
   it('keeps runApifyRotation planning the same current crypto sources and skipping future categories', async () => {
@@ -154,15 +164,19 @@ describe('category source strategy registry', () => {
     expect(result.plans.some((p: any) => p.sourceId === 'src_unregistered_x_news_text')).toBe(false);
 
     for (const plan of result.plans) {
-      const query = String(plan.inputOverride.query);
+      const terms = plan.inputOverride.searchTerms as unknown[];
+      const firstTerm = String(terms[0] ?? '');
 
-      expect(plan.inputOverride.query).toBe(plan.inputOverride.twitterContent);
+      expect(plan.inputOverride.query).toBeUndefined();
+      expect(plan.inputOverride.twitterContent).toBe('');
       expect(plan.inputOverride.queryType).toBe('Latest');
       expect(plan.inputOverride.lang).toBe('en');
-      expect(plan.inputOverride.searchTerms).toBeUndefined();
+      expect(Array.isArray(terms)).toBe(true);
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
-      expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
-      expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
+      expect((firstTerm.match(/-filter:replies/g) ?? []).length).toBe(1);
+      expect((firstTerm.match(/\blang:en\b/g) ?? []).length).toBe(1);
+      expect(firstTerm).toContain('since:');
+      expect(firstTerm).toContain('until:');
     }
   });
 });

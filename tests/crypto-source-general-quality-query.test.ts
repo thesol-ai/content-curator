@@ -41,6 +41,12 @@ function makeEnv() {
   } as any;
 }
 
+function combinedSearch(plan: any): string {
+  const terms = plan.inputOverride.searchTerms;
+  expect(Array.isArray(terms)).toBe(true);
+  return terms.map(String).join(' ');
+}
+
 describe('generic low-quality exclusions for crypto source queries', () => {
   it('adds broad anti-marketing exclusions to every crypto rotation query', async () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
@@ -49,7 +55,7 @@ describe('generic low-quality exclusions for crypto source queries', () => {
     expect(result.plans).toHaveLength(SOURCE_IDS.length);
 
     for (const plan of result.plans) {
-      const query = String(plan.inputOverride.query);
+      const query = combinedSearch(plan);
       expect(query).toContain('-giveaway');
       expect(query).toContain('-campaign');
       expect(query).toContain('-voucher');

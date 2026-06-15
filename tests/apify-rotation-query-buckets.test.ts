@@ -58,6 +58,16 @@ function bySource(result: any, sourceId: string): any {
   return plan;
 }
 
+function searchTermsFor(plan: any): string[] {
+  const terms = plan.inputOverride.searchTerms;
+  expect(Array.isArray(terms)).toBe(true);
+  return terms.map(String);
+}
+
+function combinedSearch(plan: any): string {
+  return searchTermsFor(plan).join(' ');
+}
+
 describe('Phase 10 crypto input quality Apify rotation queries', () => {
   it('keeps rotation bounded with existing six source ids and lower noisy-source maxItems', async () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
@@ -67,20 +77,24 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     expect(result.plans.map((p: any) => p.sourceId).sort()).toEqual([...SOURCE_IDS].sort());
 
     for (const plan of result.plans) {
-      const query = String(plan.inputOverride.query);
+      const terms = searchTermsFor(plan);
+      const query = terms[0] ?? '';
 
       expect(plan.inputOverride.maxItems).toBe(EXPECTED_MAX_ITEMS_BY_SOURCE[plan.sourceId]);
       expect(plan.inputOverride.maxItems).toBeLessThanOrEqual(18);
       expect(plan.inputOverride.queryType).toBe('Latest');
       expect(plan.inputOverride.lang).toBe('en');
-      expect(plan.inputOverride.query).toBe(plan.inputOverride.twitterContent);
-      expect(plan.inputOverride.searchTerms).toBeUndefined();
+
+      expect(plan.inputOverride.query).toBeUndefined();
+      expect(plan.inputOverride.twitterContent).toBe('');
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
 
       expect(query).toContain('from:');
+      expect(query).toContain('since:');
+      expect(query).toContain('until:');
       expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
       expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
-      expect((query.match(/min_faves:/g) ?? []).length).toBeLessThanOrEqual(1);
+      expect((query.match(/min_faves:/g) ?? []).length).toBe(0);
     }
   });
 
@@ -88,49 +102,55 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
 
     const newsText = bySource(result, 'src_crypto_x_news_text');
+    const newsTextQuery = combinedSearch(newsText);
     expect(newsText.cohortName).toContain('core_news_text');
-    expect(String(newsText.inputOverride.query)).toContain('from:');
-    expect(String(newsText.inputOverride.query)).toContain('-filter:media');
-    expect(String(newsText.inputOverride.query)).not.toContain('crypto OR bitcoin');
-    expect(String(newsText.inputOverride.query)).not.toContain('stablecoin');
-    expect(String(newsText.inputOverride.query)).toContain('-giveaway');
-    expect(String(newsText.inputOverride.query)).toContain('-campaign');
+    expect(newsTextQuery).toContain('from:');
+    expect(newsTextQuery).toContain('-filter:media');
+    expect(newsTextQuery).not.toContain('crypto OR bitcoin');
+    expect(newsTextQuery).not.toContain('stablecoin');
+    expect(newsTextQuery).toContain('-giveaway');
+    expect(newsTextQuery).toContain('-campaign');
 
     const newsMedia = bySource(result, 'src_crypto_x_news_media');
-    expect(String(newsMedia.inputOverride.query)).toContain('filter:media');
-    expect(String(newsMedia.inputOverride.query)).not.toContain('digital asset');
-    expect(String(newsMedia.inputOverride.query)).toContain('-voucher');
+    const newsMediaQuery = combinedSearch(newsMedia);
+    expect(newsMediaQuery).toContain('filter:media');
+    expect(newsMediaQuery).not.toContain('digital asset');
+    expect(newsMediaQuery).toContain('-voucher');
 
     const voicesText = bySource(result, 'src_crypto_x_voices_text');
+    const voicesTextQuery = combinedSearch(voicesText);
     expect(voicesText.cohortName).toContain('expert_signals_text');
-    expect(String(voicesText.inputOverride.query)).toContain('from:');
-    expect(String(voicesText.inputOverride.query)).not.toContain('USDT');
-    expect(String(voicesText.inputOverride.query)).not.toContain('from:whale_alert');
+    expect(voicesTextQuery).toContain('from:');
+    expect(voicesTextQuery).not.toContain('USDT');
+    expect(voicesTextQuery).not.toContain('from:whale_alert');
 
     const security = bySource(result, 'src_crypto_x_voices_media');
+    const securityQuery = combinedSearch(security);
     expect(security.cohortName).toContain('security_alert_text');
     expect(security.accounts).toEqual(['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts']);
-    expect(String(security.inputOverride.query)).toContain('"crypto hack"');
-    expect(String(security.inputOverride.query)).toContain('"DeFi hack"');
-    expect(String(security.inputOverride.query)).toContain('"protocol exploit"');
-    expect(String(security.inputOverride.query)).toContain('"smart contract exploit"');
-    expect(String(security.inputOverride.query)).toContain('crypto OR DeFi OR protocol');
-    expect(String(security.inputOverride.query)).not.toContain('hack OR hacked OR exploit');
-    expect(String(security.inputOverride.query)).toContain('-pypi');
-    expect(String(security.inputOverride.query)).toContain('-npm');
-    expect(String(security.inputOverride.query)).toContain('-python');
-    expect(String(security.inputOverride.query)).toContain('-bun');
+    expect(securityQuery).toContain('"crypto hack"');
+    expect(securityQuery).toContain('"DeFi hack"');
+    expect(securityQuery).toContain('"protocol exploit"');
+    expect(securityQuery).toContain('"smart contract exploit"');
+    expect(securityQuery).toContain('crypto OR DeFi OR protocol');
+    expect(securityQuery).not.toContain('hack OR hacked OR exploit');
+    expect(securityQuery).toContain('-pypi');
+    expect(securityQuery).toContain('-npm');
+    expect(securityQuery).toContain('-python');
+    expect(securityQuery).toContain('-bun');
 
     const market = bySource(result, 'src_market_trending_x_text');
+    const marketQuery = combinedSearch(market);
     expect(market.cohortName).toContain('market_impact_text');
-    expect(String(market.inputOverride.query)).toContain('from:');
-    expect(String(market.inputOverride.query)).not.toContain('ETF OR "spot ETF"');
-    expect(String(market.inputOverride.query)).toContain('-giveaway');
+    expect(marketQuery).toContain('from:');
+    expect(marketQuery).not.toContain('ETF OR "spot ETF"');
+    expect(marketQuery).toContain('-giveaway');
 
     const tokenProject = bySource(result, 'src_market_trending_x_media');
+    const tokenProjectQuery = combinedSearch(tokenProject);
     expect(tokenProject.cohortName).toContain('token_project_watch_text');
-    expect(String(tokenProject.inputOverride.query)).toContain('from:');
-    expect(String(tokenProject.inputOverride.query)).not.toContain('"mainnet" OR "testnet"');
-    expect(String(tokenProject.inputOverride.query)).toContain('-"get access"');
+    expect(tokenProjectQuery).toContain('from:');
+    expect(tokenProjectQuery).not.toContain('"mainnet" OR "testnet"');
+    expect(tokenProjectQuery).toContain('-"get access"');
   });
 });
