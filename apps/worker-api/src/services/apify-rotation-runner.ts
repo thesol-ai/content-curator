@@ -273,7 +273,7 @@ export async function runApifyRotation(
           },
         });
 
-        if (datasetId && health.realRawCount > 0) {
+        if (datasetId && isHealthyApifyDataset(health)) {
           selected = { attempt, run };
           break;
         }
@@ -631,6 +631,18 @@ function emptyDatasetHealth(): DatasetHealth {
     actorMockCount: 0,
     actorMockSamples: [],
   };
+}
+
+function isHealthyApifyDataset(health: DatasetHealth): boolean {
+  if (health.realRawCount <= 0) return false;
+  if (health.actorMockCount <= 0) return true;
+
+  const rawCount = Math.max(1, health.rawCount);
+  const mockRatio = health.actorMockCount / rawCount;
+
+  // Reject Kaito low-yield datasets like 1 real + 14 mock filler rows.
+  // Sparse but clean datasets still pass, e.g. 1 real + 0 mock.
+  return health.realRawCount >= 3 && mockRatio <= 0.8;
 }
 
 function getRotationDatasetProbeLimit(env: Env): number {
