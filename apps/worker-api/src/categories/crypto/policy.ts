@@ -71,6 +71,11 @@ function isTrustedCryptoNativeSource(account: string): boolean {
     'ericbalchunas', 'jseyff', 'nategeraci', 'eleanorterrett',
     // Security / investigators
     'peckshieldalert', 'slowmist_team', 'cyversalerts', 'zachxbt', 'certikalert',
+    // Technical / market-cycle analysts (structural TA + onchain, NOT pump/signal
+    // accounts). Added for the price/analysis content lane. hasCryptoRelevance
+    // still requires a crypto-native context term alongside, so this only lifts
+    // the trust bar for genuine analysis — not buy-signal shilling.
+    'rektcapital', 'wclementeiii',
   ]);
 }
 

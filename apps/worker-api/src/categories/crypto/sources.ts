@@ -52,6 +52,10 @@ const MARKET_IMPACT_COHORTS = [
   ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
   ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
   ['VitalikButerin', 'ethereum', 'solana', 'base', 'chainlink'],
+  // PRICE/ANALYSIS cohort: structural TA + onchain analysts for the price &
+  // technical-analysis content lane Iranian readers want. NOT pump/signal
+  // accounts — these post chart structure and onchain data, not "buy now".
+  ['RektCapital', 'WClementeIII', 'glassnode', 'lookonchain'],
 ];
 
 const GENERIC_LOW_QUALITY_QUERY_EXCLUSIONS = [
@@ -172,6 +176,18 @@ const DISCOVERY_TOPICS: DiscoveryTopic[] = [
   {
     topic: 'onchain OR "exchange outflow" OR "exchange inflow" OR liquidation OR "open interest"',
     exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake`,
+  },
+  {
+    // PRICE-ACTION lane: قیمت و نوسان ارزهای محبوب (محتوای مورد علاقه مخاطب فارسی).
+    // تمرکز روی حرکت قیمت واقعی، نه وعده‌ی صعود. -shill/-"buy now" جلوی pump را می‌گیرد.
+    topic: '("bitcoin price" OR "btc price" OR "ethereum price" OR "eth price" OR "solana price" OR "sol price" OR "xrp price" OR "price analysis" OR "all-time high" OR "ATH" OR rally OR "sell-off" OR correction OR breakout)',
+    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake -shill -"buy now" -"sell now" -pump`,
+  },
+  {
+    // TECHNICAL-ANALYSIS lane: تحلیل فنی و سطوح، نه سیگنال خرید.
+    // "support"/"resistance"/"chart" محتوای تحلیلی است؛ -"signal group" -"100x" pump را رد می‌کند.
+    topic: '("technical analysis" OR "support level" OR "resistance level" OR "key support" OR "key resistance" OR "moving average" OR RSI OR "chart pattern" OR "trading range" OR consolidation)',
+    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake -shill -"signal group" -"join my" -"vip signals"`,
   },
 ];
 
