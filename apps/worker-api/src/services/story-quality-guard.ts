@@ -38,6 +38,10 @@ export function getSourceAudienceRejectReason(
 
   if (isExplicitScamOrPrizeCampaign(combined)) return 'iran_audience_promotional_campaign';
 
+  // FIX: project-shill thread (e.g. "How I avoid X using @Project ... #ProjectDAO
+  // #EcoStar @founder"). Branded-hashtag/handle stacking + promo framing = ad.
+  if (isProjectShillThread(item.text)) return 'iran_audience_promotional_campaign';
+
   if (account === 'binance' && isExchangeMarketing(combined)) {
     return 'iran_audience_exchange_marketing';
   }
@@ -573,6 +577,30 @@ function hasFullyUngroundedFigures(sourceText: unknown, caption: string): boolea
   // grounded if ANY core appears in the source digits
   const grounded = cores.some(core => src.includes(core));
   return !grounded;
+}
+
+function isProjectShillThread(rawText: unknown): boolean {
+  const raw = String(rawText ?? '');
+  if (!raw.trim()) return false;
+  const lower = raw.toLowerCase();
+
+  // Count branded signals.
+  const hashtags = (raw.match(/#[\p{L}\p{N}_]+/gu) || []).length;
+  const mentions = (raw.match(/@[\p{L}\p{N}_]+/gu) || []).length;
+
+  // Promo framing common to shill threads. Word-boundary phrases are grouped
+  // separately from the thread emoji and the "using @handle" form, because \b
+  // does not behave reliably around emoji or the @ symbol (review fix).
+  const promoFraming =
+    /\b(how i|my strategy|case study|step by step|here are a few|simple practices|let me show you|thread)\b/i.test(lower)
+    || /\b(dao|ecostar|ecosystem star|use my)\b/i.test(lower)
+    || lower.includes('🧵')
+    || /using\s+@/i.test(lower);
+
+  // A real news item rarely stacks 2+ branded hashtags AND a handle AND promo framing.
+  // Require the combination so we don't reject legitimate single-tag news.
+  const brandedStack = hashtags >= 2 && mentions >= 1;
+  return brandedStack && promoFraming;
 }
 
 function isExplicitScamOrPrizeCampaign(body: string): boolean {
