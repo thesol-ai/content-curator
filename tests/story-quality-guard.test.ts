@@ -28,6 +28,32 @@ describe('story quality guard', () => {
     expect(getSourceAudienceRejectReason({ sourceAccount: 'chainlink', text: 'High-speed prediction markets powered by Chainlink integrations.' })).toBe('iran_audience_project_marketing');
   });
 
+  it('rejects project-shill threads (JustLend pattern) but not legitimate news', () => {
+    // JustLend: stacked branded hashtags + handle + "How I ... case study" framing → shill.
+    expect(getSourceAudienceRejectReason({
+      sourceAccount: 'ZenzenTom',
+      text: '🧵 How I Avoid Liquidation While Using JustLend. Here are a few simple practices I personally use as a case study. 👇🏽 #TRONEcoStar #JustLendDAO @justinsuntron #DeFi',
+    })).toBe('iran_audience_promotional_campaign');
+
+    // Another shill via the "using @handle" + branded-tag stack form.
+    expect(getSourceAudienceRejectReason({
+      sourceAccount: 'somefarmer',
+      text: 'My strategy for stacking points using @SomeProtocol #SomeDAO #Airdrop @founder',
+    })).toBe('iran_audience_promotional_campaign');
+
+    // Legit single-tag news with a mention → must NOT be rejected as shill.
+    expect(getSourceAudienceRejectReason({
+      sourceAccount: 'WatcherGuru',
+      text: 'Bitcoin reclaims $65,000 after the latest macro data, per @WatcherGuru. #Bitcoin',
+    })).not.toBe('iran_audience_promotional_campaign');
+
+    // Legit two-tag factual news, no promo framing → must NOT be flagged as shill.
+    expect(getSourceAudienceRejectReason({
+      sourceAccount: 'CoinDesk',
+      text: 'Ethereum ETF sees $200M in net inflows today according to @CoinDesk data. #Ethereum #ETF',
+    })).not.toBe('iran_audience_promotional_campaign');
+  });
+
   it('repairs common Persian spacing defects', () => {
     expect(repairPersianCaptionText('اینفناوری در حوزهدارایی‌های توکنیزه شده ۴.۹۵ میلیوندلار خروجی داشت.')).toContain('این فناوری در حوزه دارایی‌های توکنیزه شده ۴.۹۵ میلیون دلار خروجی داشت.');
   });

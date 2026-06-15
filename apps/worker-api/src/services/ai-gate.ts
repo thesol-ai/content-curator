@@ -461,24 +461,36 @@ function extractJsonObject(text: string): { items: any[] } | null {
   }
 }
 
+function statusIdFromUrl(raw: unknown): string | null {
+  const m = /(?:status|statuses)\/(\d{6,25})/.exec(String(raw ?? ''));
+  return m ? m[1]! : null;
+}
+
 function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateResult[] {
   const byUrl = new Map<string, any>();
   const byPostId = new Map<string, any>();
+  const byStatusId = new Map<string, any>(); // ROOT-CAUSE FIX: stable tweet-id fallback
 
   for (const p of parsed) {
     if (typeof p.url === 'string') {
       for (const key of urlLookupKeys(p.url)) byUrl.set(key, p);
+      const sid = statusIdFromUrl(p.url);
+      if (sid) byStatusId.set(sid, p);
     }
     if (typeof p.post_id === 'string' && p.post_id.trim()) {
       byPostId.set(p.post_id.trim(), p);
+      const sid = statusIdFromUrl(p.post_id);
+      if (sid) byStatusId.set(sid, p);
     }
   }
 
   const validPriorities = ['breaking', 'high', 'normal', 'low'];
 
   return original.map(item => {
+    const itemSid = statusIdFromUrl(item.sourceUrl) ?? statusIdFromUrl(item.postId);
     const p = urlLookupKeys(item.sourceUrl).reduce<any>((found, key) => found ?? byUrl.get(key), undefined)
-      ?? byPostId.get(item.postId);
+      ?? byPostId.get(item.postId)
+      ?? (itemSid ? byStatusId.get(itemSid) : undefined); // ROOT-CAUSE FIX
 
     if (!p) {
       console.warn(`[Scoring] No result for URL/post_id: ${item.sourceUrl} / ${item.postId}`);

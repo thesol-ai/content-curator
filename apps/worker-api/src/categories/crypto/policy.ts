@@ -208,6 +208,17 @@ const DIRECT_CRYPTO_ANCHORS = [
   'telegram mini',
   'notcoin',
   'hamster kombat',
+
+  // FIX: high-precision crypto-treasury figures/firms — unambiguous in crypto
+  // context, so a "Saylor still buying" headline reaches AI instead of being
+  // pre-AI killed as non-crypto. Kept narrow (specific names only).
+  'saylor',
+  'microstrategy',
+  'micro strategy',
+  'metaplanet',
+  'marathon digital',
+  'bitcoin treasury',
+  'btc treasury',
 ];
 
 

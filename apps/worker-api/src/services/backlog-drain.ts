@@ -288,6 +288,14 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
         await releaseClaimedCandidatesToPending(env, [candidate.row.id], 'missing_ai_result');
         continue;
       }
+      // FIX: an item the model never actually scored (its URL/post_id was absent
+      // from Claude's batch response) must be RETRIED, not buried as ai_rejected.
+      // decrementAttempt:false so attempt_count still climbs and caps runaway retries.
+      if (ai.riskFlags?.includes('not_scored')) {
+        await releaseClaimedCandidatesToPending(env, [candidate.row.id], 'not_scored_retry');
+        skipped += 1;
+        continue;
+      }
 
       const ev = await evaluateCandidateDb(env, channels, candidate, ai);
       const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
@@ -317,6 +325,14 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     if (!ai) {
       await releaseClaimedCandidatesToPending(env, [candidate.row.id], 'missing_ai_result');
       decisions.push(null);
+      continue;
+    }
+    // FIX: model never scored this item (absent from Claude batch response) →
+    // retry instead of burying as ai_rejected. attempt_count still caps retries.
+    if (ai.riskFlags?.includes('not_scored')) {
+      await releaseClaimedCandidatesToPending(env, [candidate.row.id], 'not_scored_retry');
+      decisions.push(null);
+      skipped += 1;
       continue;
     }
 
