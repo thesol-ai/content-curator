@@ -206,16 +206,13 @@ function buildDiscoveryPlan(
     cohortName: `discovery_${queryType.toLowerCase()}_${idx}`,
     cohortIndex: idx,
     accounts: [],
-    inputOverride: {
+    inputOverride: buildTopicSearchInputOverride(
       query,
-      twitterContent: query,
       maxItems,
+      hoursBack,
       queryType,
-      lang: 'en',
-      since_time: currentSinceTimeSeconds(hoursBack),
-      min_faves: 50,
-      min_retweets: 5,
-    },
+      { minFaves: 50, minRetweets: 5 },
+    ),
   };
 }
 
@@ -241,12 +238,12 @@ export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotat
     return attempts;
   }
 
-  const sameAccountsQuery = buildProfileTopicContent(plan.accounts, 'default');
+  const sameAccountsTerms = buildProfileSearchTerms(plan.accounts, 'default');
   attempts.push({
     attempt: 'same_accounts_profile_24h',
     reason: 'Primary query returned no real tweet rows; retry same accounts for last 24h without topic/media gates.',
     inputOverride: buildSearchInputOverride(
-      sameAccountsQuery,
+      sameAccountsTerms,
       Math.max(baseMaxItems, 30),
       24, // was 168
     ),
@@ -254,12 +251,12 @@ export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotat
 
   const rescueAccounts = rescueAccountsForSource(plan.source.id, plan.accounts);
   if (rescueAccounts.join('|').toLowerCase() !== plan.accounts.join('|').toLowerCase()) {
-    const rescueQuery = buildProfileTopicContent(rescueAccounts, 'default', buildRescueTopicGate());
+    const rescueTerms = buildProfileSearchTerms(rescueAccounts, 'default', buildRescueTopicGate());
     attempts.push({
       attempt: 'source_rescue_pool_24h',
       reason: 'Same-account fallback returned no real tweet rows; retry trusted high-yield source pool.',
       inputOverride: buildSearchInputOverride(
-        rescueQuery,
+        rescueTerms,
         Math.max(baseMaxItems, 40),
         24, // was 168
       ),
@@ -282,61 +279,53 @@ function buildCohortPlan(
   const index = positiveModulo(bucket, cohorts.length);
   const accounts = cohorts[index] ?? cohorts[0]!;
 
-  // When topicGate is not provided, use clean profile query (no keyword filter).
-  const query = topicGate
-    ? buildProfileTopicContent(accounts, mode, topicGate, minFaves)
-    : buildCleanProfileContent(accounts, mode);
+  // Use Kaito searchTerms: one independent X query per account.
+  // This avoids one large `(from:a OR from:b)` twitterContent string, which
+  // produced Kaito id=-1/no-result rows for low-volume news accounts.
+  const searchTerms = topicGate
+    ? buildProfileSearchTerms(accounts, mode, topicGate)
+    : buildCleanProfileSearchTerms(accounts, mode);
 
   return {
     source,
     cohortName: `${family}_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(query, maxItems),
+    inputOverride: buildSearchInputOverride(searchTerms, maxItems, 12, { minFaves }),
   };
 }
 
-function buildTwitterContent(accounts: string[], mode: ApifyRotationMode): string {
-  return buildProfileTopicContent(accounts, mode);
-}
-
-// PATCH: Clean profile query — account filter + media mode + minimal spam
-// exclusions only. No topic keywords. Used for primary queries on trusted
-// crypto-native accounts where the account itself is the content signal.
-function buildCleanProfileContent(
+function buildCleanProfileSearchTerms(
   accounts: string[],
   mode: ApifyRotationMode,
-): string {
-  const accountQuery = accounts.map(account => `from:${account}`).join(' OR ');
-  const parts = [`(${accountQuery})`];
-  if (mode === 'media') parts.push('filter:media');
-  if (mode === 'text') parts.push('-filter:media');
-  return withGenericLowQualityExclusions([
-    ...parts,
-    '-filter:replies',
-    'lang:en',
-    '-presale',
-    '-airdrop',
-  ]).join(' ');
+): string[] {
+  return accounts.map(account => {
+    const parts = [`from:${account}`];
+    if (mode === 'media') parts.push('filter:media');
+    if (mode === 'text') parts.push('-filter:media');
+    return withGenericLowQualityExclusions([
+      ...parts,
+      '-filter:replies',
+      'lang:en',
+      '-presale',
+      '-airdrop',
+    ]).join(' ');
+  });
 }
 
-function buildProfileTopicContent(
+function buildProfileSearchTerms(
   accounts: string[],
   mode: ApifyRotationMode,
   topicGate?: string,
-  minFaves = 0,
-): string {
-  const accountQuery = accounts.map(account => `from:${account}`).join(' OR ');
-  const parts = [`(${accountQuery})`];
-
-  if (topicGate) parts.push(topicGate);
-  if (mode === 'media') parts.push('filter:media');
-  if (mode === 'text') parts.push('-filter:media');
-
-  parts.push('-filter:replies', 'lang:en');
-  if (minFaves > 0) parts.push(`min_faves:${minFaves}`);
-
-  return parts.join(' ');
+): string[] {
+  return accounts.map(account => {
+    const parts = [`from:${account}`];
+    if (topicGate) parts.push(topicGate);
+    if (mode === 'media') parts.push('filter:media');
+    if (mode === 'text') parts.push('-filter:media');
+    parts.push('-filter:replies', 'lang:en');
+    return parts.join(' ');
+  });
 }
 
 function buildCoreNewsTopicGate(): string {
@@ -367,14 +356,14 @@ function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, m
   const accounts = MARKET_IMPACT_COHORTS[index] ?? MARKET_IMPACT_COHORTS[0]!;
 
   // PATCH: Market impact accounts post market data — no topic gate needed for primary.
-  const query = buildCleanProfileContent(accounts, mode);
+  const searchTerms = buildCleanProfileSearchTerms(accounts, mode);
 
   return {
     source,
     cohortName: `market_impact_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(query, maxItems),
+    inputOverride: buildSearchInputOverride(searchTerms, maxItems),
   };
 }
 
@@ -407,14 +396,14 @@ function buildTokenProjectWatchPlan(source: ApifyRotationSourceRow, bucket: numb
   const accounts = TOKEN_PROJECT_COHORTS[index] ?? TOKEN_PROJECT_COHORTS[0]!;
 
   // PATCH: Clean profile query for primary — topic gate removed.
-  const query = buildCleanProfileContent(accounts, 'text');
+  const searchTerms = buildCleanProfileSearchTerms(accounts, 'text');
 
   return {
     source,
     cohortName: `token_project_watch_text_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(query, maxItems),
+    inputOverride: buildSearchInputOverride(searchTerms, maxItems),
   };
 }
 
@@ -448,14 +437,14 @@ function buildSecurityAlertPlan(source: ApifyRotationSourceRow, bucket: number, 
   const accounts = SECURITY_ALERT_COHORTS[index] ?? SECURITY_ALERT_COHORTS[0]!;
 
   // Security alert accounts post non-crypto security too — keep the topic gate.
-  const query = buildProfileTopicContent(accounts, 'text', buildSecurityAlertTopicGate());
+  const searchTerms = buildProfileSearchTerms(accounts, 'text', buildSecurityAlertTopicGate());
 
   return {
     source,
     cohortName: `security_alert_text_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(query, maxItems),
+    inputOverride: buildSearchInputOverride(searchTerms, maxItems),
   };
 }
 
@@ -496,23 +485,101 @@ function buildSecurityAlertTopicGate(): string {
   ]).join(' ');
 }
 
-// PATCH: Default primary window cut from 72h to 12h.
-// 72h was too wide — combined with topic gates it caused consistent 0-result
-// primaries. 12h gives a realistic window for trusted accounts that post
-// several times per day. Fallbacks use their own explicit window values.
-function buildSearchInputOverride(query: string, maxItems: number, hoursBack = 12): Record<string, unknown> {
+function buildTopicSearchInputOverride(
+  query: string,
+  maxItems: number,
+  hoursBack = 12,
+  queryType: 'Latest' | 'Top' = 'Latest',
+  engagement?: { minFaves?: number; minRetweets?: number },
+): Record<string, unknown> {
+  return buildSearchInputOverride([query], maxItems, hoursBack, engagement, queryType);
+}
+
+// Build input matching the KaitoEasyAPI actor schema.
+// Scrape freshness uses a rolling UTC search window. Publishing remains governed
+// elsewhere by the channel timezone, e.g. Asia/Tehran.
+function buildSearchInputOverride(
+  searchTerms: string[],
+  maxItems: number,
+  hoursBack = 12,
+  engagement?: { minFaves?: number; minRetweets?: number },
+  queryType: 'Latest' | 'Top' = 'Latest',
+): Record<string, unknown> {
+  const windowedSearchTerms = appendUtcSearchWindow(searchTerms, hoursBack);
+  const minFaves = Math.max(0, Math.floor(Number(engagement?.minFaves ?? 0)));
+  const minRetweets = Math.max(0, Math.floor(Number(engagement?.minRetweets ?? 0)));
+
   return {
-    query,
-    twitterContent: query,
+    tweetIDs: [],
+    twitterContent: '',
+    searchTerms: windowedSearchTerms,
     maxItems,
-    queryType: 'Latest',
+    queryType,
     lang: 'en',
     since_time: currentSinceTimeSeconds(hoursBack),
+    until_time: '',
+    from: '',
+    to: '',
+    '@': '',
+    list: '',
+    near: '',
+    within: '',
+    geocode: '',
+    since_id: '',
+    max_id: '',
+    conversation_id: '',
+    quoted_tweet_id: '',
+    quoted_user_id: '',
+    card_name: '',
+    url: '',
+    'filter:blue_verified': false,
+    'filter:consumer_video': false,
+    'filter:has_engagement': false,
+    'filter:hashtags': false,
+    'filter:images': false,
+    'filter:links': false,
+    'filter:media': false,
+    'filter:mentions': false,
+    'filter:native_video': false,
+    'filter:nativeretweets': false,
+    'filter:news': false,
+    'filter:pro_video': false,
+    'filter:quote': false,
+    'filter:replies': false,
+    'filter:safe': false,
+    'filter:spaces': false,
+    'filter:twimg': false,
+    'filter:videos': false,
+    'filter:vine': false,
+    'include:nativeretweets': false,
+    min_retweets: minRetweets,
+    min_faves: minFaves,
+    min_replies: 0,
+    '-min_retweets': 0,
+    '-min_faves': 0,
+    '-min_replies': 0,
   };
 }
 
 function currentSinceTimeSeconds(hoursBack = 24): string {
   return String(Math.floor(Date.now() / 1000) - hoursBack * 60 * 60);
+}
+
+function appendUtcSearchWindow(searchTerms: string[], hoursBack: number): string[] {
+  const until = new Date();
+  const since = new Date(until.getTime() - hoursBack * 60 * 60 * 1000);
+  const sinceTerm = `since:${formatXSearchUtc(since)}`;
+  const untilTerm = `until:${formatXSearchUtc(until)}`;
+
+  return searchTerms.map(term => {
+    const cleaned = String(term ?? '').trim();
+    if (!cleaned) return `${sinceTerm} ${untilTerm}`;
+    return `${cleaned} ${sinceTerm} ${untilTerm}`;
+  });
+}
+
+function formatXSearchUtc(date: Date): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, '_UTC').replace('T', '_');
 }
 
 function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): string[] {
