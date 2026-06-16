@@ -1,2204 +1,888 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="en" dir="ltr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Content Curator</title>
-<script src="./config.js" onerror="null"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content Curator — Control</title>
 <style>
-:root{
-  --bg:#0c0c0e;--surface:#151518;--surface2:#1c1c20;--surface3:#222227;
-  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.11);--border3:rgba(255,255,255,0.18);
-  --text:#e2e2e6;--muted:#6b6b7a;--dim:#2e2e35;
-  --green:#22c55e;--green-bg:rgba(34,197,94,.1);--green-border:rgba(34,197,94,.25);
-  --amber:#f59e0b;--amber-bg:rgba(245,158,11,.1);--amber-border:rgba(245,158,11,.25);
-  --red:#ef4444;--red-bg:rgba(239,68,68,.1);--red-border:rgba(239,68,68,.25);
-  --blue:#60a5fa;--blue-bg:rgba(96,165,250,.1);--blue-border:rgba(96,165,250,.25);
-  --purple:#a78bfa;--purple-bg:rgba(167,139,250,.1);--purple-border:rgba(167,139,250,.25);
-  --sidebar:220px;--topbar:52px;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden}
-body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:13px;line-height:1.5}
-button{cursor:pointer;font-family:inherit;font-size:13px}
-input,select,textarea{font-family:inherit;font-size:13px}
-a{color:var(--blue);text-decoration:none}
-code{font-family:'JetBrains Mono','Fira Code',monospace;font-size:12px;background:var(--surface3);padding:1px 5px;border-radius:4px}
+  :root{
+    --bg:#0c0c0e; --surface:#151518; --surface-2:#1b1b20; --dim:#2e2e35;
+    --text:#e6e6ea; --muted:#8a8a98; --faint:#5a5a68;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --blue:#60a5fa;
+    --purple:#a78bfa; --cyan:#22d3ee;
+    --radius:10px; --gap:16px;
+    --font:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    --mono:'JetBrains Mono','Fira Code',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5}
+  a{color:var(--blue);text-decoration:none}
+  button{font-family:inherit;cursor:pointer}
+  code,.mono{font-family:var(--mono)}
 
-/* ── Layout ──────────────────────────────────────────────── */
-.app{display:flex;height:100vh}
-.sidebar{width:var(--sidebar);background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
-.main-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.topbar{height:var(--topbar);background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0}
-.page-content{flex:1;overflow-y:auto;padding:24px}
+  /* ---------- App shell ---------- */
+  .app{display:none;min-height:100vh}
+  .layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
+  .sidebar{background:var(--surface);border-right:1px solid var(--dim);padding:18px 12px;display:flex;flex-direction:column;gap:6px}
+  .brand{font-weight:700;font-size:15px;padding:6px 10px 2px}
+  .brand small{display:block;font-weight:400;font-size:11px;color:var(--muted);margin-top:3px}
+  .env-pill{font-family:var(--mono);font-size:11px;color:var(--cyan);padding:2px 10px 14px}
 
-/* ── Sidebar ─────────────────────────────────────────────── */
-.logo{padding:18px 16px 14px;border-bottom:1px solid var(--border)}
-.logo-name{font-size:15px;font-weight:700;letter-spacing:-.02em}
-.logo-env{font-size:10px;color:var(--muted);margin-top:3px;font-family:monospace}
-.nav-group{margin-top:6px}
-.nav-label{font-size:10px;color:var(--muted);padding:10px 16px 4px;letter-spacing:.08em;text-transform:uppercase}
-.nav-btn{display:flex;align-items:center;gap:9px;width:100%;padding:8px 16px;font-size:13px;color:var(--muted);background:none;border:none;border-right:2px solid transparent;text-align:right;transition:all .15s}
-.nav-btn:hover{color:var(--text);background:rgba(255,255,255,.03)}
-.nav-btn.active{color:var(--text);background:rgba(167,139,250,.07);border-right-color:var(--purple)}
-.nav-btn .ico{width:16px;height:16px;flex-shrink:0;opacity:.65}
-.nav-btn.active .ico{opacity:1}
-.nav-btn .badge-nav{font-size:10px;margin-right:auto;padding:1px 6px;border-radius:10px;background:var(--surface3)}
+  .nav-group{margin-top:10px}
+  .nav-group-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:6px 10px 4px}
+  .nav-item{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer;border:none;background:none;width:100%;text-align:left}
+  .nav-item:hover{background:var(--surface-2);color:var(--text)}
+  .nav-item.active{background:var(--surface-2);color:var(--text);box-shadow:inset 2px 0 0 var(--blue)}
+  .nav-item .ico{width:16px;text-align:center;opacity:.85}
+  .nav-item .badge{margin-left:auto;font-family:var(--mono);font-size:11px;background:var(--dim);color:var(--text);padding:1px 7px;border-radius:20px}
 
-/* ── Topbar ──────────────────────────────────────────────── */
-.topbar-left{display:flex;align-items:center;gap:10px}
-.page-title{font-size:14px;font-weight:600}
-.topbar-right{display:flex;align-items:center;gap:8px}
-.pill{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:500}
-.pill-green{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
-.pill-amber{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
-.pill-red{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
-.pill-dim{background:var(--surface3);color:var(--muted);border:1px solid var(--border2)}
-.pill-blue{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-border)}
+  .dev-zone{margin-top:auto;border-top:1px solid var(--dim);padding-top:10px}
+  .dev-zone .nav-group-label{color:var(--amber)}
 
-/* ── Buttons ─────────────────────────────────────────────── */
-.btn{padding:7px 14px;border-radius:7px;border:1px solid var(--border2);background:transparent;color:var(--text);transition:all .15s}
-.btn:hover{background:rgba(255,255,255,.05);border-color:var(--border3)}
-.btn-sm{padding:4px 10px;font-size:12px;border-radius:5px;border:1px solid var(--border2);background:transparent;color:var(--text)}
-.btn-sm:hover{background:rgba(255,255,255,.05)}
-.btn-primary{background:var(--purple);border-color:var(--purple);color:white}
-.btn-primary:hover{background:#9775fa;border-color:#9775fa}
-.btn-green{background:var(--green-bg);border-color:var(--green-border);color:var(--green)}
-.btn-green:hover{background:rgba(34,197,94,.18)}
-.btn-red{background:var(--red-bg);border-color:var(--red-border);color:var(--red)}
-.btn-red:hover{background:rgba(239,68,68,.18)}
-.btn-amber{background:var(--amber-bg);border-color:var(--amber-border);color:var(--amber)}
-.btn-amber:hover{background:rgba(245,158,11,.18)}
-.btn:disabled{opacity:.4;cursor:not-allowed}
+  /* ---------- Main ---------- */
+  .main{display:flex;flex-direction:column;min-width:0}
+  .topbar{height:54px;border-bottom:1px solid var(--dim);display:flex;align-items:center;gap:14px;padding:0 22px;background:var(--surface)}
+  .page-title{font-weight:600;font-size:15px}
+  .topbar .spacer{flex:1}
+  .pill{font-family:var(--mono);font-size:11px;padding:3px 10px;border-radius:20px;background:var(--surface-2);color:var(--muted);border:1px solid var(--dim)}
+  .pill.on{color:var(--green);border-color:rgba(34,197,94,.4)}
+  .pill.off{color:var(--red);border-color:rgba(239,68,68,.4)}
+  .win-select{background:var(--surface-2);color:var(--text);border:1px solid var(--dim);border-radius:8px;padding:5px 8px;font-size:12px;font-family:var(--mono)}
 
-/* ── Cards & Panels ──────────────────────────────────────── */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
-.card+.card{margin-top:12px}
-.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-.panel-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
-.panel-actions{display:flex;gap:8px;align-items:center}
+  .content{padding:22px;overflow:auto;flex:1}
 
-/* ── Stat cards ───────────────────────────────────────────── */
-.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
-.stat-label{font-size:11px;color:var(--muted);margin-bottom:5px}
-.stat-val{font-size:26px;font-weight:700;letter-spacing:-.04em;line-height:1}
-.stat-sub{font-size:11px;color:var(--muted);margin-top:4px}
+  /* ---------- Cards / grid ---------- */
+  .grid{display:grid;gap:var(--gap)}
+  .grid.cols-4{grid-template-columns:repeat(4,1fr)}
+  .grid.cols-3{grid-template-columns:repeat(3,1fr)}
+  .grid.cols-2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:1100px){.grid.cols-4{grid-template-columns:repeat(2,1fr)}.grid.cols-3{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:700px){.layout{grid-template-columns:1fr}.sidebar{display:none}.grid.cols-4,.grid.cols-3,.grid.cols-2{grid-template-columns:1fr}}
 
-/* ── Table ───────────────────────────────────────────────── */
-.tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);padding:6px 10px;text-align:right;border-bottom:1px solid var(--border)}
-.tbl td{padding:9px 10px;border-bottom:1px solid var(--border)}
-.tbl tr:last-child td{border-bottom:none}
-.tbl tr:hover td{background:rgba(255,255,255,.015)}
-.mono{font-family:monospace;font-size:12px}
+  .card{background:var(--surface);border:1px solid var(--dim);border-radius:var(--radius);padding:16px}
+  .card h3{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+  .stat{background:var(--surface);border:1px solid var(--dim);border-radius:var(--radius);padding:14px 16px}
+  .stat .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .stat .value{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:6px}
+  .stat .sub{font-size:11px;color:var(--faint);margin-top:4px}
+  .stat .value.good{color:var(--green)} .stat .value.warn{color:var(--amber)} .stat .value.bad{color:var(--red)}
 
-/* ── Rows ────────────────────────────────────────────────── */
-.row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
-.row:last-child{border-bottom:none;padding-bottom:0}
-.row:first-child{padding-top:0}
-.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.dot-green{background:var(--green)}
-.dot-amber{background:var(--amber)}
-.dot-red{background:var(--red)}
-.dot-dim{background:var(--dim)}
+  /* ---------- Tables ---------- */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;border-bottom:1px solid var(--dim);font-weight:600}
+  td{padding:8px 10px;border-bottom:1px solid var(--surface-2)}
+  tr:hover td{background:var(--surface-2)}
+  .num{font-family:var(--mono);text-align:right}
 
-/* ── Toggle ─────────────────────────────────────────────── */
-.toggle-wrap{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
-.toggle-wrap:last-child{border-bottom:none;padding-bottom:0}
-.toggle-wrap:first-child{padding-top:0}
-.toggle-info .t-name{font-size:13px;font-weight:500}
-.toggle-info .t-desc{font-size:11px;color:var(--muted);margin-top:2px}
-.toggle{width:38px;height:22px;border-radius:11px;background:var(--dim);border:1px solid var(--border2);position:relative;cursor:pointer;transition:background .2s,border-color .2s;flex-shrink:0}
-.toggle.on{background:var(--green);border-color:var(--green)}
-.toggle::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:white;top:2px;right:2px;transition:right .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
-.toggle.on::after{right:18px}
+  .status-pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;font-family:var(--mono)}
+  .s-green{background:rgba(34,197,94,.15);color:var(--green)}
+  .s-amber{background:rgba(245,158,11,.15);color:var(--amber)}
+  .s-red{background:rgba(239,68,68,.15);color:var(--red)}
+  .s-dim{background:var(--surface-2);color:var(--muted)}
 
-/* ── Forms ───────────────────────────────────────────────── */
-.form-group{margin-bottom:14px}
-.form-label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:5px}
-.form-hint{font-size:11px;color:var(--muted);margin-top:4px}
-.form-input{width:100%;background:var(--surface2);border:1px solid var(--border2);border-radius:7px;padding:9px 12px;color:var(--text);outline:none;transition:border-color .15s}
-.form-input:focus{border-color:var(--purple)}
-.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.form-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .btn{background:var(--surface-2);color:var(--text);border:1px solid var(--dim);border-radius:8px;padding:7px 13px;font-size:13px}
+  .btn:hover{border-color:var(--faint)}
+  .btn-primary{background:var(--blue);color:#06121f;border-color:var(--blue);font-weight:600}
+  .btn-danger{background:var(--red);color:#fff;border-color:var(--red)}
+  .btn-sm{padding:4px 9px;font-size:12px}
 
-/* ── Tags ────────────────────────────────────────────────── */
-.tag{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:600}
-.tag-purple{background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple-border)}
-.tag-blue{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-border)}
-.tag-green{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
-.tag-dim{background:var(--surface3);color:var(--muted);border:1px solid var(--border)}
-.tag-amber{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
-.tag-red{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+  .empty{color:var(--faint);font-size:13px;padding:20px;text-align:center}
+  .err-inline{color:var(--red);font-size:12px;padding:10px;border:1px dashed rgba(239,68,68,.4);border-radius:8px}
+  .muted{color:var(--muted)} .faint{color:var(--faint)}
+  .dev-banner{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:var(--amber);padding:8px 14px;border-radius:8px;font-size:12px;margin-bottom:16px}
 
-/* ── Modal ───────────────────────────────────────────────── */
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;align-items:center;justify-content:center}
-.modal-overlay.open{display:flex}
-.modal{background:var(--surface);border:1px solid var(--border2);border-radius:14px;width:500px;max-width:95vw;max-height:90vh;overflow-y:auto}
-.modal-header{padding:20px 24px 0;display:flex;align-items:center;justify-content:space-between}
-.modal-title{font-size:16px;font-weight:700}
-.modal-close{background:none;border:none;color:var(--muted);font-size:20px;line-height:1;padding:4px}
-.modal-close:hover{color:var(--text)}
-.modal-body{padding:20px 24px}
-.modal-footer{padding:0 24px 20px;display:flex;gap:8px;justify-content:flex-end}
-.preview-box{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.8;direction:auto}
-.preview-box a{color:var(--blue);text-decoration:underline}
-.action-row{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;margin-top:6px}
-
-/* ── Wizard ──────────────────────────────────────────────── */
-.wizard-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:200;align-items:center;justify-content:center}
-.wizard-overlay.open{display:flex}
-.wizard{background:var(--surface);border:1px solid var(--border2);border-radius:16px;width:640px;max-width:95vw;max-height:92vh;overflow:hidden;display:flex;flex-direction:column}
-.wizard-header{padding:24px 28px 20px;border-bottom:1px solid var(--border)}
-.wizard-title{font-size:18px;font-weight:700;margin-bottom:4px}
-.wizard-subtitle{font-size:13px;color:var(--muted)}
-.wizard-steps{display:flex;gap:0;padding:0 28px;margin-bottom:0;border-bottom:1px solid var(--border);overflow-x:auto}
-.wizard-step{padding:12px 16px;font-size:12px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;cursor:default}
-.wizard-step.active{color:var(--purple);border-bottom-color:var(--purple)}
-.wizard-step.done{color:var(--green)}
-.wizard-body{flex:1;overflow-y:auto;padding:24px 28px}
-.wizard-footer{padding:16px 28px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-.wizard-progress{font-size:12px;color:var(--muted)}
-.step-page{display:none}
-.step-page.active{display:block}
-.step-title{font-size:16px;font-weight:700;margin-bottom:6px}
-.step-desc{font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.7}
-.info-box{background:var(--blue-bg);border:1px solid var(--blue-border);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--blue);line-height:1.7;margin-bottom:16px}
-.warn-box{background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--amber);line-height:1.7;margin-bottom:16px}
-.success-box{background:var(--green-bg);border:1px solid var(--green-border);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--green);line-height:1.7;margin-bottom:16px}
-.check-row{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px}
-.check-row .ico-check{color:var(--green);font-size:16px}
-.check-row .ico-x{color:var(--red);font-size:16px}
-.check-row .ico-wait{color:var(--muted);font-size:16px}
-
-/* ── Alert ───────────────────────────────────────────────── */
-.alert{border-radius:8px;padding:11px 14px;font-size:13px;margin-bottom:16px;display:flex;align-items:flex-start;gap:8px}
-.alert-amber{background:var(--amber-bg);border:1px solid var(--amber-border);color:var(--amber)}
-.alert-red{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red)}
-.alert-blue{background:var(--blue-bg);border:1px solid var(--blue-border);color:var(--blue)}
-.alert-green{background:var(--green-bg);border:1px solid var(--green-border);color:var(--green)}
-
-/* ── Loading ─────────────────────────────────────────────── */
-.loading{display:flex;align-items:center;justify-content:center;padding:48px;color:var(--muted)}
-.spin{width:18px;height:18px;border:2px solid var(--dim);border-top-color:var(--purple);border-radius:50%;animation:spin .7s linear infinite;margin-right:10px}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-/* ── Toast ───────────────────────────────────────────────── */
-#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(60px);background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:10px 18px;font-size:13px;z-index:999;transition:transform .25s,opacity .25s;opacity:0;pointer-events:none}
-#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
-
-/* ── Channel card ────────────────────────────────────────── */
-.ch-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px}
-.ch-card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-.ch-name{font-weight:600;font-family:monospace;flex:1}
-.ch-actions{display:flex;gap:6px}
-.ch-meta{font-size:11px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
-
-/* ── Progress bar ────────────────────────────────────────── */
-.progress{height:4px;background:var(--dim);border-radius:2px;overflow:hidden;margin-top:6px}
-.progress-bar{height:100%;background:var(--purple);border-radius:2px;transition:width .3s}
-
-/* ── Empty state ─────────────────────────────────────────── */
-.empty{text-align:center;padding:40px;color:var(--muted)}
-.empty-icon{font-size:36px;margin-bottom:12px}
-.empty-title{font-size:15px;font-weight:600;margin-bottom:6px;color:var(--text)}
-.empty-desc{font-size:13px;line-height:1.6}
-
-/* ── Misc ────────────────────────────────────────────────── */
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt20{margin-top:20px}
-.mb8{margin-bottom:8px}.mb12{margin-bottom:12px}.mb16{margin-bottom:16px}
-.flex{display:flex}.items-center{align-items:center}.gap8{gap:8px}.gap12{gap:12px}
-.flex1{flex:1}.text-muted{color:var(--muted)}.text-green{color:var(--green)}.text-red{color:var(--red)}.text-blue{color:var(--blue)}.text-purple{color:var(--purple)}.text-amber{color:var(--amber)}
-.fw600{font-weight:600}.fs11{font-size:11px}.fs12{font-size:12px}
-hr{border:none;border-top:1px solid var(--border);margin:16px 0}
+  /* ---------- Setup / toast ---------- */
+  .center-screen{display:flex;align-items:center;justify-content:center;height:100vh;padding:20px}
+  .setup-card{background:var(--surface);border:1px solid var(--dim);border-radius:var(--radius);padding:28px;width:420px;max-width:100%}
+  .setup-card h2{margin:0 0 4px;font-size:18px}
+  .setup-card p{margin:0 0 18px;color:var(--muted);font-size:13px}
+  .form-group{margin-bottom:14px}
+  .form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .form-input{width:100%;background:var(--surface-2);border:1px solid var(--dim);border-radius:8px;padding:9px 11px;color:var(--text);font-size:13px;font-family:var(--mono)}
+  .toast-wrap{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999}
+  .toast{background:var(--surface-2);border:1px solid var(--dim);border-radius:8px;padding:10px 16px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+  .toast.ok{border-color:rgba(34,197,94,.5)} .toast.err{border-color:rgba(239,68,68,.5)}
+  .spinner{color:var(--muted);font-size:13px;padding:30px;text-align:center}
 </style>
 </head>
 <body>
 
-<!-- ══ App Shell ══════════════════════════════════════════════ -->
-<div class="app" id="app" style="display:none">
-  <nav class="sidebar">
-    <div class="logo">
-      <div class="logo-name">Content Curator</div>
-      <div class="logo-env" id="sidebar-env">connecting…</div>
+<!-- ============ SETUP SCREEN ============ -->
+<div id="setup-screen" class="center-screen">
+  <div class="setup-card">
+    <h2>Content Curator</h2>
+    <p>Connect to your Worker API. The secret is stored only in this browser.</p>
+    <div class="form-group">
+      <label class="form-label">API URL</label>
+      <input class="form-input" id="setup-url" placeholder="https://content-curator.YOUR_ACCOUNT.workers.dev">
     </div>
-    <div class="nav-group">
-      <div class="nav-label">نظارت</div>
-      <button class="nav-btn active" onclick="nav('overview')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-        overview
-      </button>
-      <button class="nav-btn" onclick="nav('queue')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="18" r="1"/></svg>
-        publish queue
-        <span class="badge-nav" id="nav-queue-count">—</span>
-      </button>
-      <button class="nav-btn" onclick="nav('runs')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3"/></svg>
-        discovery runs
-      </button>
-      <button class="nav-btn" onclick="nav('items')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        content items
-      </button>
+    <div class="form-group">
+      <label class="form-label">Internal API Secret</label>
+      <input class="form-input" id="setup-secret" type="password" placeholder="your-internal-api-secret">
     </div>
-    <div class="nav-group">
-      <div class="nav-label">تنظیمات</div>
-      <button class="nav-btn" onclick="nav('categories')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
-        categories
-      </button>
-      <button class="nav-btn" onclick="nav('channels')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-        channels
-      </button>
-      <button class="nav-btn" onclick="nav('sources')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        source accounts
-      </button>
-      <button class="nav-btn" onclick="nav('apify')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-        apify datasets
-      </button>
-      <button class="nav-btn" onclick="nav('ai')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-        AI settings
-      </button>
-    </div>
-    <div class="nav-group">
-      <div class="nav-label">کنترل</div>
-      <button class="nav-btn" onclick="nav('switches')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
-        system switches
-      </button>
-      <button class="nav-btn" onclick="nav('connection')">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        connection
-      </button>
-      <button class="nav-btn" onclick="openWizard()">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-        setup wizard
-      </button>
-    </div>
-  </nav>
-
-  <div class="main-area">
-    <div class="topbar">
-      <div class="topbar-left">
-        <span class="page-title" id="page-title">overview</span>
-      </div>
-      <div class="topbar-right">
-        <span class="pill pill-dim" id="pill-curation">—</span>
-        <span class="pill pill-dim" id="pill-publish">—</span>
-        <span class="pill pill-dim" id="pill-scheduler">—</span>
-        <button class="btn btn-red btn-sm" onclick="emergencyStop()">⏹ stop all</button>
-        <button class="btn btn-sm" onclick="refresh()">↻</button>
-      </div>
-    </div>
-    <div class="page-content" id="page-content">
-      <div class="loading"><span class="spin"></span>در حال بارگذاری…</div>
-    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="setupConnect()">Connect</button>
+    <div id="setup-err" style="margin-top:12px;font-size:13px;color:var(--red);text-align:center"></div>
   </div>
 </div>
 
-<!-- ══ First-time Setup Screen ════════════════════════════════ -->
-<div id="setup-screen" style="display:flex;align-items:center;justify-content:center;height:100vh;padding:20px">
-  <div style="width:480px;max-width:100%">
-    <div style="text-align:center;margin-bottom:32px">
-      <div style="font-size:28px;font-weight:800;letter-spacing:-.03em;margin-bottom:8px">Content Curator</div>
-      <div style="color:var(--muted);font-size:14px">برای شروع، اتصال به Worker API را تنظیم کنید</div>
-    </div>
-    <div class="card">
-      <div class="form-group">
-        <label class="form-label">Worker API URL</label>
-        <input class="form-input" id="setup-url" placeholder="https://content-curator.YOUR_ACCOUNT.workers.dev">
-        <div class="form-hint">آدرس Cloudflare Worker شما</div>
+<!-- ============ APP ============ -->
+<div class="app" id="app">
+  <div class="layout">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div>
+        <div class="brand">Content Curator<small>Operations Console</small></div>
+        <div class="env-pill" id="env-pill">connecting…</div>
       </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Internal API Secret</label>
-        <input class="form-input" id="setup-secret" type="password" placeholder="your-internal-api-secret">
-        <div class="form-hint">همان مقداری که با <code>wrangler secret put INTERNAL_API_SECRET</code> تنظیم کردید</div>
-      </div>
-    </div>
-    <button class="btn btn-primary" style="width:100%;margin-top:12px;padding:11px" onclick="setupConnect()">
-      اتصال و ورود
-    </button>
-    <div id="setup-err" style="margin-top:10px;font-size:13px;color:var(--red);text-align:center"></div>
-  </div>
-</div>
 
-<!-- ══ Setup Wizard ═══════════════════════════════════════════ -->
-<div class="wizard-overlay" id="wizard">
-  <div class="wizard">
-    <div class="wizard-header">
-      <div class="wizard-title">🚀 راه‌اندازی اولیه</div>
-      <div class="wizard-subtitle">مرحله به مرحله همه تنظیمات را انجام دهید</div>
-    </div>
-    <div class="wizard-steps" id="wizard-steps"></div>
-    <div class="wizard-body" id="wizard-body"></div>
-    <div class="wizard-footer">
-      <span class="wizard-progress" id="wizard-progress"></span>
-      <div style="display:flex;gap:8px">
-        <button class="btn" onclick="wizardBack()" id="wiz-back">← قبلی</button>
-        <button class="btn btn-primary" onclick="wizardNext()" id="wiz-next">بعدی →</button>
-      </div>
-    </div>
-  </div>
-</div>
+      <div class="nav-group" id="nav-admin"></div>
 
-<!-- ══ Modals ══════════════════════════════════════════════════ -->
-<!-- Channel Modal -->
-<div class="modal-overlay" id="modal-channel">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title" id="modal-ch-title">افزودن کانال</div>
-      <button class="modal-close" onclick="closeModal('modal-channel')">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Channel ID *</label>
-          <input class="form-input" id="ch-id" placeholder="crypto_fa">
-          <div class="form-hint">مثال: crypto_fa, design_en</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Category *</label>
-          <select class="form-input" id="ch-cat"></select>
-        </div>
+      <div class="dev-zone">
+        <div class="nav-group" id="nav-dev"></div>
+        <button class="nav-item" style="color:var(--faint)" onclick="logout()">
+          <span class="ico">⏻</span><span>Sign out</span>
+        </button>
       </div>
-      <div class="form-group">
-        <label class="form-label">Telegram Chat ID *</label>
-        <input class="form-input" id="ch-chat" placeholder="@channel_username یا -100xxxxxxxxxx">
-        <div class="form-hint">username کانال با @ یا Chat ID عددی</div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">زبان *</label>
-          <select class="form-input" id="ch-lang">
-            <option value="fa">🇮🇷 فارسی (fa)</option>
-            <option value="en">🇬🇧 English (en)</option>
-            <option value="ar">🇸🇦 العربية (ar)</option>
-            <option value="tr">🇹🇷 Türkçe (tr)</option>
-            <option value="ru">🇷🇺 Русский (ru)</option>
-            <option value="de">🇩🇪 Deutsch (de)</option>
-            <option value="fr">🇫🇷 Français (fr)</option>
-            <option value="es">🇪🇸 Español (es)</option>
-            <option value="pt">🇧🇷 Português (pt)</option>
-            <option value="zh">🇨🇳 中文 (zh)</option>
-            <option value="hi">🇮🇳 हिन्दी (hi)</option>
-            <option value="id">🇮🇩 Indonesia (id)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Timezone</label>
-          <select class="form-input" id="ch-tz">
-            <option value="Asia/Tehran">Asia/Tehran (ایران)</option>
-            <option value="UTC">UTC</option>
-            <option value="Asia/Dubai">Asia/Dubai</option>
-            <option value="Europe/London">Europe/London</option>
-            <option value="America/New_York">America/New_York</option>
-            <option value="Asia/Istanbul">Asia/Istanbul</option>
-            <option value="Asia/Riyadh">Asia/Riyadh</option>
-          </select>
-        </div>
-      </div>
-      <hr>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">محدودیت‌های زمانی</div>
-      <div class="form-row3">
-        <div class="form-group">
-          <label class="form-label">Max / روز</label>
-          <input class="form-input" id="ch-day" type="number" value="10" min="1" max="50">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Max / ساعت</label>
-          <input class="form-input" id="ch-hour" type="number" value="2" min="1" max="10">
-        </div>
-        <div class="form-group">
-          <label class="form-label">فاصله min (دقیقه)</label>
-          <input class="form-input" id="ch-gap" type="number" value="30" min="5" max="240">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">بازه مجاز</label>
-          <input class="form-input" id="ch-allowed" value='["08:00-23:59"]'>
-          <div class="form-hint">JSON array. مثال: ["09:00-23:00"]</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">بازه مسدود</label>
-          <input class="form-input" id="ch-blocked" value='["00:00-08:00"]'>
-          <div class="form-hint">JSON array. ساعات بدون ارسال</div>
-        </div>
-      </div>
-      <hr>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">AI و لحن کانال</div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Channel Label</label>
-          <input class="form-input" id="ch-label" placeholder="Crypto فارسی — آموزشی">
-          <div class="form-hint">نام نمایشی برای context ترجمه و داشبورد</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Tone Profile</label>
-          <select class="form-input" id="ch-tone">
-            <option value="neutral">neutral</option>
-            <option value="formal">formal</option>
-            <option value="casual">casual</option>
-            <option value="educational">educational</option>
-            <option value="news">news</option>
-            <option value="analytical">analytical</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Custom Instructions</label>
-        <textarea class="form-input" id="ch-instructions" rows="3" placeholder="مثلاً: مخاطب مبتدی است، اصطلاحات تخصصی را ساده توضیح بده"></textarea>
-        <div class="form-hint">فقط برای همین کانال در ترجمه استفاده می‌شود</div>
-      </div>
-      <hr>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">Prompt Studio — Channel / Language</div>
-      <div class="form-row3">
-        <div class="form-group"><label class="form-label">Editorial Mode</label><select class="form-input" id="ch-editorial-mode"><option value="news">news</option><option value="educational">educational</option><option value="analytical">analytical</option><option value="brief">brief</option><option value="explainer">explainer</option></select></div>
-        <div class="form-group"><label class="form-label">Audience Level</label><select class="form-input" id="ch-audience-level"><option value="beginner">beginner</option><option value="intermediate">intermediate</option><option value="professional">professional</option></select></div>
-        <div class="form-group"><label class="form-label">Caption Style</label><select class="form-input" id="ch-caption-style"><option value="contextual">contextual</option><option value="straight_news">straight_news</option><option value="educational_summary">educational_summary</option><option value="insight_first">insight_first</option></select></div>
-      </div>
-      <div class="form-row3">
-        <div class="form-group"><label class="form-label">Creativity</label><input class="form-input" id="ch-creativity" type="number" min="0" max="1" step="0.1" value="0.2"><div class="form-hint">0 = دقیق‌تر، 1 = آزادتر</div></div>
-        <div class="form-group"><label class="form-label">Full Caption Max</label><input class="form-input" id="ch-caption-max" type="number" min="280" max="3500" value="1200"></div>
-        <div class="form-group"><label class="form-label">Short Caption Max</label><input class="form-input" id="ch-caption-short-max" type="number" min="80" max="900" value="280"></div>
-      </div>
-      <div class="form-group"><label class="form-label">Language Prompt</label><textarea class="form-input" id="ch-language-prompt" rows="3" maxlength="2000" placeholder="مثلاً: فارسی روان و خبری، بدون ترجمه تحت‌اللفظی، با توضیح کوتاه برای اصطلاحات تخصصی"></textarea></div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">Terminology Notes</label><textarea class="form-input" id="ch-terminology-notes" rows="3" maxlength="2000" placeholder="مثلاً: stablecoin = استیبل‌کوین، liquidation = لیکوئید شدن"></textarea></div>
-        <div class="form-group"><label class="form-label">Forbidden Phrases</label><textarea class="form-input" id="ch-forbidden-phrases" rows="3" placeholder="هر عبارت در یک خط؛ مثل: در پستی جدید"></textarea></div>
-      </div>
-      <hr>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">قالب پیام تلگرام</div>
-      <div class="form-row3">
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="ch-source-enabled"> نمایش منبع</label>
-          <div class="form-hint">اگر فعال باشد، فقط label لینک‌دار نمایش داده می‌شود؛ URL خام نمی‌آید.</div>
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="ch-disable-preview"> خاموش‌کردن link preview</label>
-          <div class="form-hint">برای جلوگیری از کارت X/Twitter زیر پیام.</div>
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="ch-semantic-enabled"> semantic dedupe</label>
-          <div class="form-hint">کنترل آماده برای فاز dedupe.</div>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Source Label Override</label>
-          <input class="form-input" id="ch-source-label" maxlength="32" placeholder="منبع یا Source">
-          <div class="form-hint">اختیاری. خالی بماند تا بر اساس زبان ساخته شود.</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Semantic Window (hours)</label>
-          <input class="form-input" id="ch-semantic-window" type="number" value="24" min="1" max="168">
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="ch-signature-enabled"> امضای انتهای پیام</label>
-          <textarea class="form-input" id="ch-signature-text" rows="2" maxlength="300" placeholder="— The Sol Crypto"></textarea>
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="ch-footer-enabled"> نمایش ID/username کانال</label>
-          <input class="form-input" id="ch-footer-text" maxlength="80" placeholder="@thesolxcrypto_fa">
-          <div class="form-hint">اگر خالی باشد و chat id با @ شروع شود، همان استفاده می‌شود.</div>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Max posts/source/day</label>
-        <input class="form-input" id="ch-max-source-day" type="number" min="1" max="50" placeholder="اختیاری">
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeModal('modal-channel')">انصراف</button>
-      <button class="btn btn-primary" onclick="saveChannel()">ذخیره کانال</button>
-    </div>
-  </div>
-</div>
+    </nav>
 
-<!-- Category Modal -->
-<div class="modal-overlay" id="modal-cat">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title" id="modal-cat-title">افزودن Category</div>
-      <button class="modal-close" onclick="closeModal('modal-cat')">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">ID *</label>
-          <input class="form-input" id="cat-id" placeholder="crypto">
-          <div class="form-hint">حروف کوچک، بدون فاصله</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">نام نمایشی *</label>
-          <input class="form-input" id="cat-label" placeholder="کریپتو">
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Prompt Profile</label>
-        <select class="form-input" id="cat-profile">
-          <option value="crypto_editorial">crypto_editorial — کریپتو و بلاکچین</option>
-          <option value="design_editorial">design_editorial — دیزاین و UX</option>
-          <option value="marketing_editorial">marketing_editorial — مارکتینگ</option>
-          <option value="branding_editorial">branding_editorial — برندینگ</option>
-          <option value="finance_editorial">finance_editorial — فایننس</option>
-          <option value="product_editorial">product_editorial — پروداکت</option>
-          <option value="ai_news_editorial">ai_news_editorial — هوش مصنوعی</option>
-          <option value="default_editorial">default_editorial — عمومی</option>
+    <!-- Main -->
+    <div class="main">
+      <div class="topbar">
+        <span class="page-title" id="page-title">Overview</span>
+        <span class="spacer"></span>
+        <select class="win-select" id="window-select" onchange="onWindowChange()">
+          <option value="24">24h</option>
+          <option value="48">48h</option>
+          <option value="72">72h</option>
         </select>
+        <span class="pill" id="pill-curation">curation —</span>
+        <span class="pill" id="pill-publish">publish —</span>
+        <span class="pill" id="pill-scheduler">scheduler —</span>
       </div>
-      <div class="form-group">
-        <label class="form-label">Custom Prompt</label>
-        <textarea class="form-input" id="cat-custom-prompt" rows="4" placeholder="اگر پر شود، به جای profile آماده برای Claude scoring استفاده می‌شود"></textarea>
-        <div class="form-hint">اختیاری. برای دسته‌بندی‌های خاص یا policy دقیق‌تر.</div>
-      </div>
-      <hr>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px">Prompt Studio — Category</div>
-      <div class="form-group">
-        <label class="form-label">Editorial Guidelines</label>
-        <textarea class="form-input" id="cat-editorial-guidelines" rows="4" maxlength="3000" placeholder="مثلاً: خروجی باید شبیه پست خبری/آموزشی تلگرام باشد، نه ترجمه خام توییت. افراد مهم را در اولین اشاره معرفی کن."></textarea>
-        <div class="form-hint">برای بازنویسی نهایی همه زبان‌های این category استفاده می‌شود.</div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Selection Criteria</label>
-          <textarea class="form-input" id="cat-selection-criteria" rows="3" maxlength="2000" placeholder="چه چیزهایی باعث انتخاب پست شود؟"></textarea>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Rejection Criteria</label>
-          <textarea class="form-input" id="cat-rejection-criteria" rows="3" maxlength="2000" placeholder="چه چیزهایی باعث رد پست شود؟ مثل reply بدون context یا تکرار موضوعی"></textarea>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Required Context</label>
-          <textarea class="form-input" id="cat-required-context" rows="3" maxlength="2000" placeholder="مثلاً: ویتالیک بوترین = هم‌بنیان‌گذار اتریوم"></textarea>
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-top:24px"><input type="checkbox" id="cat-avoid-duplicate-people"> جلوگیری از تکرار موضوعی درباره یک شخص/ایده</label>
-          <div class="form-hint">به Claude یادآوری می‌کند چند پست مشابه پشت سر هم انتخاب نکند.</div>
-        </div>
-      </div>
-      <div class="form-row3">
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="cat-allow-replies"> اجازه انتشار replyها</label>
-          <div class="form-hint">برای کانال خبری معمولاً خاموش بماند.</div>
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="cat-allow-retweets"> اجازه retweet/repost</label>
-          <div class="form-hint">اگر خاموش باشد repostها قبل از AI رد می‌شوند.</div>
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="cat-allow-quotes"> اجازه quote post</label>
-          <div class="form-hint">برای quoteهای بدون context بهتر است خاموش شود.</div>
-        </div>
-      </div>
-      <div class="form-row3">
-        <div class="form-group">
-          <label class="form-label">Text-only Policy</label>
-          <select class="form-input" id="cat-text-only-policy">
-            <option value="allow">allow — مجاز</option>
-            <option value="penalize">penalize — فقط با score بالاتر</option>
-            <option value="reject">reject — رد قبل از AI</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Min score for text-only</label>
-          <input class="form-input" id="cat-min-score-text-only" type="number" min="0" max="100" placeholder="اختیاری">
-          <div class="form-hint">برای policy=penalize مفید است.</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Min score for media</label>
-          <input class="form-input" id="cat-min-score-media" type="number" min="0" max="100" placeholder="اختیاری">
-        </div>
-      </div>
-      <div class="form-row3">
-        <div class="form-group">
-          <label class="form-label">Score Threshold</label>
-          <input class="form-input" id="cat-score" type="number" value="75" min="0" max="100">
-          <div class="form-hint">0–100. حداقل امتیاز برای انتشار</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Freshness (ساعت)</label>
-          <input class="form-input" id="cat-fresh" type="number" value="48" min="1">
-          <div class="form-hint">پست‌های قدیمی‌تر score کمتر</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Media Mode</label>
-          <select class="form-input" id="cat-media">
-            <option value="optional">optional — اگر بود</option>
-            <option value="preferred">preferred — ترجیح media</option>
-            <option value="disabled">disabled — فقط متن</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">زبان‌های هدف</label>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px" id="lang-checkboxes"></div>
-        <div class="form-hint mt8">هر زبان = یک کانال جداگانه لازم دارد</div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeModal('modal-cat')">انصراف</button>
-      <button class="btn btn-primary" onclick="saveCat()">ذخیره</button>
+      <div class="content" id="content"><div class="spinner">Loading…</div></div>
     </div>
   </div>
 </div>
 
-<!-- Apify Source Modal -->
-<div class="modal-overlay" id="modal-apify">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">افزودن Apify Dataset</div>
-      <button class="modal-close" onclick="closeModal('modal-apify')">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="info-box">
-        Dataset ID را از <strong>Apify Console → Task → Last Run → Dataset</strong> بگیرید.
-        هر Task یک Dataset ID ثابت دارد که در همه run‌ها استفاده می‌شود.
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Category *</label>
-          <select class="form-input" id="ap-cat"></select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Platform *</label>
-          <select class="form-input" id="ap-plat">
-            <option value="x">Twitter / X</option>
-            <option value="instagram">Instagram</option>
-            <option value="linkedin">LinkedIn</option>
-            <option value="rss">RSS</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Apify Dataset ID *</label>
-        <input class="form-input" id="ap-dataset" placeholder="abc123XYZ789...">
-        <div class="form-hint">مثال: <code>Abc123XYZabc123</code> — از Apify Console بگیرید</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Label (اختیاری)</label>
-        <input class="form-input" id="ap-label" placeholder="Crypto Twitter Accounts">
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeModal('modal-apify')">انصراف</button>
-      <button class="btn btn-primary" onclick="saveApify()">افزودن</button>
-    </div>
-  </div>
-</div>
+<div class="toast-wrap" id="toast-wrap"></div>
 
-<!-- Source Account Modal -->
-<div class="modal-overlay" id="modal-src">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">افزودن Source Account</div>
-      <button class="modal-close" onclick="closeModal('modal-src')">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="info-box">اکانت‌های whitelist — AI Gate برای این‌ها score بالاتر در نظر می‌گیرد.</div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Category *</label>
-          <select class="form-input" id="src-cat"></select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Platform *</label>
-          <select class="form-input" id="src-plat">
-            <option value="x">Twitter / X</option>
-            <option value="instagram">Instagram</option>
-            <option value="linkedin">LinkedIn</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Account Handle *</label>
-          <input class="form-input" id="src-handle" placeholder="coindesk">
-          <div class="form-hint">بدون @</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Trust Level</label>
-          <select class="form-input" id="src-trust">
-            <option value="high">high — منبع اصلی</option>
-            <option value="medium" selected>medium — معمولی</option>
-            <option value="low">low — احتیاط</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Display Name (اختیاری)</label>
-        <input class="form-input" id="src-name" placeholder="CoinDesk">
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeModal('modal-src')">انصراف</button>
-      <button class="btn btn-primary" onclick="saveSrc()">افزودن</button>
-    </div>
-  </div>
-</div>
-
-
-<!-- Queue Preview Modal -->
-<div class="modal-overlay" id="modal-preview">
-  <div class="modal" style="width:720px">
-    <div class="modal-header">
-      <div class="modal-title" id="preview-title">Preview</div>
-      <button class="modal-close" onclick="closeModal('modal-preview')">×</button>
-    </div>
-    <div class="modal-body" id="preview-body">
-      <div class="loading"><span class="spin"></span>در حال آماده‌سازی preview…</div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeModal('modal-preview')">بستن</button>
-    </div>
-  </div>
-</div>
-
-<div id="toast"></div>
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="config.js"></script>
 <script>
-// ══ Config & State ═════════════════════════════════════════════
-let API = window.CURATOR_API_URL || localStorage.getItem('curator_api') || '';
-let SECRET = window.CURATOR_SECRET || localStorage.getItem('curator_secret') || '';
-let currentPage = 'overview';
-let wizStep = 0;
-const LANGS = [{v:'fa',l:'🇮🇷 فارسی'},{v:'en',l:'🇬🇧 English'},{v:'ar',l:'🇸🇦 عربی'},{v:'tr',l:'🇹🇷 ترکی'},{v:'ru',l:'🇷🇺 روسی'},{v:'de',l:'🇩🇪 آلمانی'},{v:'fr',l:'🇫🇷 فرانسه'},{v:'es',l:'🇪🇸 اسپانیایی'},{v:'pt',l:'🇧🇷 پرتغالی'},{v:'zh',l:'🇨🇳 چینی'},{v:'hi',l:'🇮🇳 هندی'},{v:'id',l:'🇮🇩 اندونزی'}];
+/* =========================================================================
+   STRINGS — single source for UI text (English). Future i18n hooks here.
+   ========================================================================= */
+const T = {
+  overview:'Overview', pipeline:'Pipeline Health', sources:'Sources',
+  queue:'Queue', content:'Content', cost:'Cost', settings:'Settings',
+  logs:'Logs & Events', runs:'Rotation Runs', rawTracker:'Raw Item Tracker',
+  debug:'Debug Tools',
+};
 
-// ══ Init ═══════════════════════════════════════════════════════
-window.addEventListener('DOMContentLoaded', () => {
-  if (API && SECRET) {
-    showApp();
-  } else {
-    document.getElementById('setup-screen').style.display = 'flex';
-  }
-  // fill lang checkboxes
-  const lc = document.getElementById('lang-checkboxes');
-  if (lc) LANGS.forEach(l => {
-    lc.innerHTML += `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer"><input type="checkbox" value="${l.v}" style="width:13px;height:13px"> ${l.l}</label>`;
+/* =========================================================================
+   NAV MODEL — two layers: ADMIN (management) vs DEV (logs/tracking/debug).
+   Admin sees management, edits, access. Dev zone holds noisy logs/tracking,
+   hidden from the main flow.
+   ========================================================================= */
+const ADMIN_PAGES = [
+  { id:'monitoring', label:'Monitoring', ico:'📈' },
+  { id:'overview', label:T.overview, ico:'◎' },
+  { id:'pipeline', label:T.pipeline, ico:'⚗' },
+  { id:'sources',  label:T.sources,  ico:'⊞' },
+  { id:'queue',    label:T.queue,    ico:'≣', badge:'queue' },
+  { id:'content',  label:T.content,  ico:'▦' },
+  { id:'cost',     label:T.cost,     ico:'$' },
+  { id:'settings', label:T.settings, ico:'⚙' },
+];
+const DEV_PAGES = [
+  { id:'runs',       label:T.runs,       ico:'↻' },
+  { id:'logs',       label:T.logs,       ico:'≡' },
+  { id:'tracker',    label:T.rawTracker, ico:'⊡' },
+  { id:'debug',      label:T.debug,      ico:'⌗' },
+];
+
+let CURRENT_PAGE = 'monitoring';
+let WINDOW_HOURS = 24;
+let MONITOR_BUCKET = 'day';
+let POLL_TIMER = null;
+
+/* =========================================================================
+   API LAYER — single resilient fetch helper.
+   - secret + url from localStorage (unchanged auth model)
+   - 401 → re-prompt; other errors throw with context
+   - never crashes the page; callers wrap in try/catch per card
+   ========================================================================= */
+function getApiUrl(){ return localStorage.getItem('curator_api_url') || window.CURATOR_API_URL || ''; }
+function getSecret(){ return localStorage.getItem('curator_secret') || ''; }
+
+async function api(path, opts = {}){
+  const { method='GET', body } = opts;
+  const res = await fetch(getApiUrl() + path, {
+    method,
+    headers: { 'content-type':'application/json', 'x-internal-api-secret':getSecret() },
+    body: body ? JSON.stringify(body) : undefined,
   });
-});
-
-function showApp() {
-  document.getElementById('setup-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
-  document.getElementById('sidebar-env').textContent = new URL(API).hostname;
-  loadPage('overview');
-  loadPills();
+  if (res.status === 401){ logout(); throw new Error('unauthorized'); }
+  if (!res.ok) throw new Error(path + ' → HTTP ' + res.status);
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : res.text();
 }
 
-// ══ Setup ══════════════════════════════════════════════════════
-async function setupConnect() {
-  const url = document.getElementById('setup-url').value.trim().replace(/\/$/,'');
-  const secret = document.getElementById('setup-secret').value.trim();
-  const errEl = document.getElementById('setup-err');
-  errEl.textContent = '';
-  if (!url || !secret) { errEl.textContent = 'هر دو فیلد اجباری است'; return; }
-  try {
-    const r = await fetch(url + '/health', { headers: {'x-internal-api-secret': secret} });
-    if (!r.ok) throw new Error(`Status ${r.status}`);
-    localStorage.setItem('curator_api', url);
-    localStorage.setItem('curator_secret', secret);
-    API = url; SECRET = secret;
-    showApp();
-  } catch(e) {
-    errEl.textContent = 'اتصال ناموفق: ' + e.message + '. آیا Worker deploy شده و CORS فعال است؟';
-  }
+/* Safe card renderer: isolate failures so one bad endpoint doesn't blank page */
+async function safeCard(el, loader){
+  try { return await loader(); }
+  catch(e){ el.innerHTML = '<div class="err-inline">Failed to load: '+escapeHtml(e.message)+'</div>'; }
 }
 
-// ══ API ════════════════════════════════════════════════════════
-async function api(path, opts={}) {
-  const r = await fetch(API + path, {
-    ...opts,
-    headers: { 'Content-Type':'application/json', 'x-internal-api-secret': SECRET, ...(opts.headers||{}) }
+/* =========================================================================
+   UTIL
+   ========================================================================= */
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtNum(n){ return (n==null||isNaN(n))?'—':new Intl.NumberFormat('en-US').format(n); }
+function fmtPct(n){ return (n==null||isNaN(n))?'—':n.toFixed(1)+'%'; }
+function fmtUtc(iso){ if(!iso) return '—'; try{ return new Intl.DateTimeFormat('en-US',{dateStyle:'short',timeStyle:'short',timeZone:'UTC'}).format(new Date(iso))+' UTC'; }catch{ return String(iso);} }
+function el(id){ return document.getElementById(id); }
+function toast(msg,type='ok'){ const w=el('toast-wrap'); const t=document.createElement('div'); t.className='toast '+type; t.textContent=msg; w.appendChild(t); setTimeout(()=>t.remove(),3200); }
+
+function statCard(label,value,opts={}){
+  const cls = opts.tone? ' '+opts.tone : '';
+  return '<div class="stat"><div class="label">'+escapeHtml(label)+'</div>'+
+    '<div class="value'+cls+'">'+escapeHtml(value)+'</div>'+
+    (opts.sub? '<div class="sub">'+escapeHtml(opts.sub)+'</div>':'')+'</div>';
+}
+function pill(text,status){ return '<span class="status-pill s-'+status+'">'+escapeHtml(text)+'</span>'; }
+
+/* ---------- Chart helpers (Chart.js, distribution charts from real data) ---------- */
+let CHART_REGISTRY = [];
+function destroyCharts(){ CHART_REGISTRY.forEach(c=>{ try{c.destroy();}catch(e){} }); CHART_REGISTRY=[]; }
+const CHART_COLORS = ['#60a5fa','#22c55e','#f59e0b','#a78bfa','#22d3ee','#ef4444','#f472b6','#84cc16','#fb923c','#38bdf8'];
+function chartReady(){ return typeof Chart !== 'undefined'; }
+
+function makeCanvas(id,height){ return '<div style="position:relative;height:'+(height||220)+'px"><canvas id="'+id+'"></canvas></div>'; }
+
+function drawBar(canvasId, labels, values, opts={}){
+  if(!chartReady()) return;
+  const ctx = el(canvasId); if(!ctx) return;
+  const c = new Chart(ctx, {
+    type: opts.horizontal?'bar':'bar',
+    data:{ labels, datasets:[{ label:opts.label||'', data:values,
+      backgroundColor: opts.color || CHART_COLORS[0], borderRadius:4, maxBarThickness:34 }] },
+    options:{ indexAxis: opts.horizontal?'y':'x', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{ x:{ ticks:{color:'#8a8a98',font:{size:11}}, grid:{color:'#1b1b20'} },
+               y:{ ticks:{color:'#8a8a98',font:{size:11}}, grid:{color:'#1b1b20'} } } }
   });
-  if (r.status === 401) { localStorage.clear(); location.reload(); }
-  const d = await r.json();
-  if (!d.ok && d.error) throw new Error(d.error);
-  return d;
+  CHART_REGISTRY.push(c);
+}
+function drawDonut(canvasId, labels, values){
+  if(!chartReady()) return;
+  const ctx = el(canvasId); if(!ctx) return;
+  const c = new Chart(ctx, {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data:values, backgroundColor:CHART_COLORS, borderColor:'#151518', borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+      plugins:{ legend:{ position:'right', labels:{color:'#8a8a98',font:{size:11},boxWidth:12} } } }
+  });
+  CHART_REGISTRY.push(c);
+}
+/* Funnel as a horizontal stacked-ish bar (descending stages) */
+function drawFunnel(canvasId, stages){ // stages: [{label,value}]
+  if(!chartReady()) return;
+  drawBar(canvasId, stages.map(s=>s.label), stages.map(s=>s.value), {horizontal:true, color:'#60a5fa', label:'count'});
+}
+/* Multi-series line chart for trends (daily/weekly/monthly) */
+function drawLine(canvasId, labels, datasets){ // datasets: [{label,data,color}]
+  if(!chartReady()) return;
+  const ctx = el(canvasId); if(!ctx) return;
+  const c = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets: datasets.map((d,i)=>({
+      label:d.label, data:d.data, borderColor:d.color||CHART_COLORS[i%CHART_COLORS.length],
+      backgroundColor:(d.color||CHART_COLORS[i%CHART_COLORS.length])+'22',
+      borderWidth:2, tension:0.3, fill:!!d.fill, pointRadius:2, pointHoverRadius:5 })) },
+    options:{ responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{ legend:{ labels:{color:'#8a8a98',font:{size:11},boxWidth:12} } },
+      scales:{ x:{ ticks:{color:'#8a8a98',font:{size:10},maxRotation:0,autoSkip:true,maxTicksLimit:12}, grid:{color:'#1b1b20'} },
+               y:{ beginAtZero:true, ticks:{color:'#8a8a98',font:{size:11}}, grid:{color:'#1b1b20'} } } }
+  });
+  CHART_REGISTRY.push(c);
 }
 
-// ══ Toast & Loading ════════════════════════════════════════════
-function toast(msg, type='ok') {
-  const el = document.getElementById('toast');
-  el.textContent = (type==='ok'?'✓ ':type==='err'?'✗ ':'') + msg;
-  el.style.borderColor = type==='err'?'var(--red-border)':type==='warn'?'var(--amber-border)':'var(--border2)';
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 3000);
+/* =========================================================================
+   SETUP / AUTH
+   ========================================================================= */
+function setupConnect(){
+  const url = el('setup-url').value.trim();
+  const secret = el('setup-secret').value.trim();
+  if(!url || !secret){ el('setup-err').textContent='Both fields are required.'; return; }
+  localStorage.setItem('curator_api_url', url);
+  localStorage.setItem('curator_secret', secret);
+  boot();
 }
-function loading() { return `<div class="loading"><span class="spin"></span>در حال بارگذاری…</div>`; }
+function logout(){
+  localStorage.removeItem('curator_secret');
+  if(POLL_TIMER) clearInterval(POLL_TIMER);
+  el('app').style.display='none';
+  el('setup-screen').style.display='flex';
+}
 
-// ══ Nav ════════════════════════════════════════════════════════
-function nav(page) {
-  currentPage = page;
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  const titles = {overview:'overview',queue:'publish queue',runs:'discovery runs',items:'content items',categories:'categories',channels:'channels',sources:'source accounts',apify:'apify datasets',ai:'AI settings',switches:'system switches',connection:'اتصال و تنظیمات'};
-  document.querySelectorAll('.nav-btn').forEach(b => { if(b.getAttribute('onclick')?.includes(`'${page}'`)) b.classList.add('active'); });
-  document.getElementById('page-title').textContent = titles[page] || page;
+/* =========================================================================
+   NAV RENDER
+   ========================================================================= */
+function renderNav(){
+  el('nav-admin').innerHTML =
+    '<div class="nav-group-label">Management</div>' +
+    ADMIN_PAGES.map(p=>navItemHtml(p)).join('');
+  el('nav-dev').innerHTML =
+    '<div class="nav-group-label">Developer</div>' +
+    DEV_PAGES.map(p=>navItemHtml(p)).join('');
+}
+function navItemHtml(p){
+  const active = p.id===CURRENT_PAGE ? ' active':'';
+  const badge = p.badge? '<span class="badge" id="badge-'+p.badge+'">—</span>':'';
+  return '<button class="nav-item'+active+'" onclick="nav(\''+p.id+'\')">'+
+    '<span class="ico">'+p.ico+'</span><span>'+escapeHtml(p.label)+'</span>'+badge+'</button>';
+}
+
+function nav(page){
+  CURRENT_PAGE = page;
+  const all=[...ADMIN_PAGES,...DEV_PAGES];
+  const p = all.find(x=>x.id===page) || all[0];
+  el('page-title').textContent = p.label;
+  renderNav();
   loadPage(page);
 }
 
-async function loadPage(page) {
-  const c = document.getElementById('page-content');
-  c.innerHTML = loading();
-  try {
-    const pages = {overview:renderOverview, queue:renderQueue, runs:renderRuns, items:renderItems, categories:renderCategories, channels:renderChannels, sources:renderSources, apify:renderApify, ai:renderAI, switches:renderSwitches, connection:renderConnection};
-    if (pages[page]) await pages[page](c);
-  } catch(e) {
-    c.innerHTML = `<div class="alert alert-red">⚠ خطا: ${e.message}</div>`;
-  }
+/* =========================================================================
+   PAGE ROUTER — Stage 1 stubs; real renderers arrive in later stages.
+   ========================================================================= */
+const DEV_PAGE_IDS = DEV_PAGES.map(p=>p.id);
+
+let CHART_QUEUE = [];
+function queueChart(fn){ CHART_QUEUE.push(fn); }
+function flushCharts(){ const q=CHART_QUEUE; CHART_QUEUE=[]; q.forEach(fn=>{ try{fn();}catch(e){console.warn('chart draw failed',e);} }); }
+
+async function loadPage(page){
+  const c = el('content');
+  destroyCharts();
+  CHART_QUEUE = [];
+  const isDev = DEV_PAGE_IDS.includes(page);
+  c.innerHTML = (isDev? '<div class="dev-banner">Developer view — verbose logs and raw tracking. Not part of the management surface.</div>':'')
+    + '<div class="spinner">Loading '+escapeHtml(page)+'…</div>';
+
+  const renderer = PAGE_RENDERERS[page];
+  if(!renderer){ c.innerHTML += '<div class="empty">Coming in a later stage.</div>'; return; }
+  const host = document.createElement('div');
+  await safeCard(host, ()=>renderer(host));
+  c.innerHTML = (isDev? '<div class="dev-banner">Developer view — verbose logs and raw tracking. Not part of the management surface.</div>':'');
+  c.appendChild(host);
+  flushCharts();
 }
 
-function refresh() { loadPage(currentPage); loadPills(); }
+/* =========================================================================
+   PAGE RENDERERS — field names verified against backend builders.
+   ========================================================================= */
+const PAGE_RENDERERS = {
 
-// ══ Status Pills ════════════════════════════════════════════════
-async function loadPills() {
-  try {
-    const d = await api('/internal/admin/settings');
-    const s = {}; (d.settings||[]).forEach(r => s[r.key]=r.value);
-    const [curation, dryRun, publish, scheduler] = [s.apify_curation_enabled==='true', s.apify_curation_dry_run==='true', s.telegram_publish_enabled==='true', s.maintenance_mode==='true'];
-    setPill('pill-curation', curation?'curation: on':'curation: off', curation?'green':'dim');
-    setPill('pill-publish', !publish?'publish: off':dryRun?'dry-run':'📡 live!', !publish?'dim':dryRun?'amber':'green');
-    setPill('pill-scheduler', scheduler?'maintenance':'scheduler', scheduler?'red':'blue');
-    const q = await api('/internal/stats');
-    const qEl = document.getElementById('nav-queue-count');
-    if (qEl) qEl.textContent = q.queue_pending || '0';
-  } catch(e) {}
-}
-function setPill(id, txt, type) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = txt;
-  el.className = 'pill pill-'+type;
-}
+  /* ---------- MONITORING (executive trends: daily/weekly/monthly) ---------- */
+  monitoring: async (host)=>{
+    const bucket = MONITOR_BUCKET;
+    const days = bucket==='month'? 365 : (bucket==='week'? 120 : 30);
+    const ts = await api('/internal/report/timeseries?bucket='+bucket+'&days='+days).catch(()=>({series:[]}));
+    const series = ts.series || [];
 
-// ══ Overview ═══════════════════════════════════════════════════
-async function renderOverview(c) {
-  const [stats, queue, runs, cats, channels] = await Promise.all([
-    api('/internal/stats'), api('/internal/queue?status=scheduled&limit=5'),
-    api('/internal/runs?limit=4'), api('/internal/categories'), api('/internal/channels')
-  ]);
-  const chActive = (channels.channels||[]).filter(ch=>ch.publish_enabled).length;
-  const chTotal = (channels.channels||[]).length;
-  c.innerHTML = `
-  <div class="stats-grid">
-    <div class="stat-card"><div class="stat-label">queue pending</div><div class="stat-val text-blue">${stats.queue_pending||0}</div><div class="stat-sub">آیتم در صف ارسال</div></div>
-    <div class="stat-card"><div class="stat-label">published 24h</div><div class="stat-val text-green">${stats.published_24h||0}</div><div class="stat-sub">ارسال شده</div></div>
-    <div class="stat-card"><div class="stat-label">items today</div><div class="stat-val">${stats.items_today||0}</div><div class="stat-sub">آیتم جدید امروز</div></div>
-    <div class="stat-card"><div class="stat-label">active channels</div><div class="stat-val">${chActive}<span style="font-size:14px;color:var(--muted)">/${chTotal}</span></div><div class="stat-sub">از ${cats.categories?.length||0} category</div></div>
-  </div>
-  <div class="grid2">
-    <div class="card">
-      <div class="panel-head"><div class="panel-title">next in queue</div><button class="btn-sm" onclick="nav('queue')">همه →</button></div>
-      ${(queue.queue||[]).length ? (queue.queue||[]).map(q=>`
-      <div class="row">
-        <div class="dot dot-green"></div>
-        <div style="flex:1;min-width:0">
-          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(q.caption_short||'—').slice(0,55)}</div>
-          <div class="fs11 text-muted">${q.channel_id} · ${q.telegram_method||''}</div>
-        </div>
-        <div class="fs11 text-muted">${fmtTime(q.scheduled_at)}</div>
-      </div>`).join('') : '<div class="empty" style="padding:20px"><div class="text-muted">صف خالی است</div></div>'}
-    </div>
-    <div class="card">
-      <div class="panel-head"><div class="panel-title">recent runs</div><button class="btn-sm btn-amber" onclick="triggerRun()">▶ trigger</button></div>
-      ${(runs.runs||[]).length ? (runs.runs||[]).map(r=>`
-      <div class="row">
-        <div class="dot ${r.status==='completed'||r.status==='dry_run'?'dot-green':r.status==='failed'?'dot-red':'dot-amber'}"></div>
-        <span class="text-purple fw600 mono" style="width:70px">${r.category_id}</span>
-        <span class="text-muted fs12" style="width:70px">${r.platform}</span>
-        <span class="fs12">↓${r.items_fetched} new:${r.items_new} q:${r.items_queued}</span>
-        <span class="tag ${statusTag(r.status)}">${r.status}</span>
-      </div>`).join('') : '<div class="text-muted fs12" style="padding:8px 0">هنوز run نشده</div>'}
-    </div>
-  </div>
-  <div class="card mt16">
-    <div class="panel-head"><div class="panel-title">channels overview</div><button class="btn-sm" onclick="nav('channels')">مدیریت →</button></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
-      ${(channels.channels||[]).map(ch=>`
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px 12px">
-        <div class="flex items-center gap8 mb8">
-          <div class="dot ${ch.publish_enabled?'dot-green':'dot-dim'}"></div>
-          <span class="fw600 mono fs12">${ch.id}</span>
-          <span class="tag tag-purple" style="margin-right:auto">${ch.language}</span>
-        </div>
-        <div class="fs11 text-muted">${ch.telegram_chat_id}</div>
-        <div class="fs11 text-muted mt8">${ch.max_per_day}/day · ${ch.max_per_hour}/hr</div>
-        <div class="flex gap8 mt8">
-          <button class="btn-sm ${ch.publish_enabled?'btn-red':'btn-green'}" style="font-size:11px;flex:1" onclick="toggleChannelPub('${ch.id}',${ch.publish_enabled?0:1})">${ch.publish_enabled?'⏸ pause':'▶ start'}</button>
-        </div>
-      </div>`).join('')}
-    </div>
-  </div>`;
-}
+    // headline KPIs = sums over the window
+    const sum = (k)=> series.reduce((a,r)=>a+(r[k]||0),0);
+    const totalPub = sum('published');
+    const totalScraped = sum('scraped');
+    const totalSelected = sum('selected');
+    const totalTokens = sum('ai_tokens');
+    const selectRate = totalScraped? (totalSelected/totalScraped*100):0;
+    const pubPerActiveBucket = series.length? (totalPub/series.length):0;
 
-// ══ Queue ══════════════════════════════════════════════════════
-let queueStatus = 'scheduled';
-const QUEUE_STATUSES = ['scheduled','retry','failed','published','cancelled'];
-async function renderQueue(c) {
-  const data = await api(`/internal/queue?status=${queueStatus}&limit=80`);
-  const stats = await api('/internal/stats').catch(() => ({}));
-  c.innerHTML = `
-  <div class="card mb16">
-    <div class="panel-head">
-      <div class="panel-title">publish queue</div>
-      <div class="panel-actions">
-        <button class="btn-sm btn-green" onclick="publishDueNow()">▶ publish due</button>
-        <button class="btn-sm" onclick="loadPage('queue')">refresh</button>
-      </div>
-    </div>
-    <div class="flex gap8" style="flex-wrap:wrap">
-      ${QUEUE_STATUSES.map(st=>`<button class="btn-sm ${queueStatus===st?'btn-primary':''}" onclick="setQueueStatus('${st}')">${st}${queueCountBadge(st, stats)}</button>`).join('')}
-    </div>
-  </div>
-  <div class="card">
-    <div class="panel-head"><div class="panel-title">${queueStatus} (${data.queue?.length||0})</div></div>
-    ${queueRows(data.queue||[], queueStatus)}
-  </div>`;
-}
-function queueCountBadge(st, stats) {
-  const map = {scheduled:'queue_pending', retry:'queue_retry', failed:'queue_failed'};
-  const key = map[st];
-  return key && stats[key] !== undefined ? ` · ${stats[key]}` : '';
-}
-function setQueueStatus(st) { queueStatus = st; loadPage('queue'); }
-function queueRows(items, status) {
-  if (!items.length) return '<div class="text-muted fs12" style="padding:8px 0">آیتمی وجود ندارد</div>';
-  return items.map(q=>`
-  <div class="row" style="align-items:flex-start">
-    <div class="dot ${status==='published'?'dot-green':status==='failed'?'dot-red':status==='retry'?'dot-amber':status==='cancelled'?'dot-dim':'dot-green'}" style="margin-top:7px"></div>
-    <div style="flex:1;min-width:0">
-      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(q.caption_short||'')}">${esc((q.caption_short||'—').slice(0,90))}</div>
-      <div class="fs11 text-muted">${q.channel_id} · ${q.telegram_method||''} · retry:${q.retry_count||0} · ${q.id}</div>
-      ${q.publish_error?`<div class="fs11 text-red">${esc(q.publish_error.slice(0,120))}</div>`:''}
-      ${q.media_warning?`<div class="fs11 text-amber">media: ${esc(q.media_warning.slice(0,120))}</div>`:''}
-      ${q.all_message_ids&&q.all_message_ids!=='[]'?`<div class="fs11 text-muted mono">messages: ${esc(q.all_message_ids)}</div>`:''}
-      <div class="action-row" style="justify-content:flex-start">
-        <button class="btn-sm" onclick="previewQ('${q.id}')">preview</button>
-        ${safeHref(q.source_url)?`<a class="btn-sm" href="${esc(safeHref(q.source_url))}" target="_blank" rel="noopener">source</a>`:''}
-        ${(status==='scheduled'||status==='retry'||status==='failed')?`<button class="btn-sm btn-green" onclick="publishNowQ('${q.id}')">publish now</button>`:''}
-        ${(status==='failed'||status==='retry')?`<button class="btn-sm btn-amber" onclick="retryQ('${q.id}')">retry</button>`:''}
-        ${(status==='scheduled'||status==='retry'||status==='failed')?`<button class="btn-sm btn-red" onclick="cancelQ('${q.id}')">cancel</button>`:''}
-        <button class="btn-sm" onclick="viewMedia('${q.item_id}')">media</button>
-      </div>
-    </div>
-    <div style="text-align:left;min-width:92px">
-      <div class="fs11 text-muted">${status==='published'?'✓ '+fmtDate(q.published_at):fmtTime(q.scheduled_at)}</div>
-      <span class="tag ${statusTag(status)}">${status}</span>
-    </div>
-  </div>`).join('');
-}
-async function publishDueNow() {
-  const raw = prompt('چند آیتم due منتشر شود؟', '3');
-  if (raw === null) return;
-  const limit = Math.max(1, Math.min(100, Number(raw)||3));
-  try {
-    const r = await api('/internal/publish/due', {method:'POST', body:JSON.stringify({limit})});
-    toast(`published:${r.published||0} failed:${r.failed||0} skipped:${r.skipped||0}`);
-    loadPage('queue'); loadPills();
-  } catch(e) { toast(e.message,'err'); }
-}
-async function publishNowQ(id) {
-  if (!confirm('این آیتم همین الان publish شود؟')) return;
-  try {
-    const r = await api(`/internal/queue/${id}/publish-now`, {method:'POST'});
-    toast(r.published ? 'publish انجام شد' : `publish نشد: ${r.reason||r.status||'unknown'}`, r.published?'ok':'warn');
-    loadPage('queue'); loadPills();
-  } catch(e) { toast(e.message,'err'); }
-}
-async function retryQ(id) {
-  try {
-    await api(`/internal/queue/${id}/retry`, {method:'POST'});
-    toast('آیتم برای retry زمان‌بندی شد'); loadPage('queue'); loadPills();
-  } catch(e) { toast(e.message,'err'); }
-}
-async function cancelQ(id) {
-  if (!confirm('آیا مطمئن هستید؟')) return;
-  await api(`/internal/queue/${id}`, {method:'DELETE'});
-  toast('آیتم cancel شد'); loadPage('queue'); loadPills();
-}
-async function previewQ(id) {
-  const body = document.getElementById('preview-body');
-  document.getElementById('preview-title').textContent = `Preview: ${id}`;
-  body.innerHTML = loading();
-  document.getElementById('modal-preview').classList.add('open');
-  try {
-    const p = await api(`/internal/queue/${id}/preview`);
-    body.innerHTML = renderPreview(p);
-  } catch(e) {
-    body.innerHTML = `<div class="alert alert-red">خطا: ${esc(e.message)}</div>`;
-  }
-}
-function renderPreview(p) {
-  const full = p.captions?.full_html || '';
-  const media = p.captions?.media_html || '';
-  const follow = p.telegram_preview?.follow_up;
-  return `
-  <div class="grid2 mb16">
-    <div class="card">
-      <div class="panel-title mb8">queue</div>
-      <div class="fs12 text-muted">method: <code>${esc(p.method||'')}</code></div>
-      <div class="fs12 text-muted">channel: <code>${esc(p.channelId||'')}</code> · ${esc(p.channel?.telegram_chat_id||'')}</div>
-      <div class="fs12 text-muted">status: <span class="tag ${statusTag(p.status)}">${esc(p.status||'')}</span></div>
-    </div>
-    <div class="card">
-      <div class="panel-title mb8">formatting</div>
-      <div class="fs12">source: ${p.formatting?.source_visible?'✅':'—'} · signature: ${p.formatting?.signature_configured?'✅':'—'} · footer: ${p.formatting?.channel_footer_configured?'✅':'—'}</div>
-      <div class="fs12 text-muted">link preview disabled: ${p.formatting?.disable_link_preview?'✅':'—'}</div>
-      ${(p.warnings||[]).map(w=>`<div class="fs11 text-amber">⚠ ${esc(w)}</div>`).join('')}
-    </div>
-  </div>
-  <div class="form-group">
-    <label class="form-label">Full Telegram HTML</label>
-    <div class="preview-box">${telegramHtmlToPreview(full)}</div>
-  </div>
-  ${media && media!==full?`<div class="form-group"><label class="form-label">Media caption HTML</label><div class="preview-box">${telegramHtmlToPreview(media)}</div></div>`:''}
-  ${follow?`<div class="warn-box">این آیتم follow-up sendMessage هم خواهد داشت و link preview آن خاموش است.</div>`:''}
-  <details class="mt16"><summary class="fs12 text-muted">raw html</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:8px;overflow:auto">${esc(full)}</pre></details>`;
-}
-function telegramHtmlToPreview(html) {
-  return String(html||'').replace(/\n/g,'<br>');
-}
-async function viewMedia(itemId) {
-  try {
-    const d = await api(`/internal/media?item=${encodeURIComponent(itemId)}&limit=20`);
-    document.getElementById('preview-title').textContent = `Media: ${itemId}`;
-    document.getElementById('preview-body').innerHTML = (d.media||[]).length ? `
-      ${(d.media||[]).map(m=>`<div class="row"><span class="tag tag-blue">${esc(m.media_type)}</span><span class="flex1 mono fs11" style="word-break:break-all">${esc(m.source_url)}</span><span class="tag ${m.processing_status==='uploaded'||m.processing_status==='ready'?'tag-green':'tag-dim'}">${esc(m.processing_status||'')}</span></div>`).join('')}
-    ` : '<div class="text-muted fs12">media record وجود ندارد</div>';
-    document.getElementById('modal-preview').classList.add('open');
-  } catch(e) { toast(e.message,'err'); }
-}
+    const bucketBtns = ['day','week','month'].map(b=>
+      '<button class="btn btn-sm'+(b===bucket?' btn-primary':'')+'" onclick="setMonitorBucket(\''+b+'\')">'+
+      (b==='day'?'Daily':b==='week'?'Weekly':'Monthly')+'</button>').join(' ');
 
-// ══ Runs ═══════════════════════════════════════════════════════
-async function renderRuns(c) {
-  const data = await api('/internal/runs?limit=40');
-  c.innerHTML = `
-  <div class="card">
-    <div class="panel-head">
-      <div class="panel-title">discovery runs (${data.runs?.length||0})</div>
-      <div class="panel-actions">
-        <button class="btn btn-amber" onclick="triggerRun()">▶ trigger now</button>
-      </div>
-    </div>
-    <div style="overflow-x:auto">
-    <table class="tbl">
-    <thead><tr>
-      <th>category</th><th>platform</th><th>fetch</th><th>new</th><th>dup</th><th>AI✓</th><th>queued</th><th>status</th><th>duration</th><th>زمان</th>
-    </tr></thead>
-    <tbody>
-    ${(data.runs||[]).map(r=>`
-    <tr>
-      <td class="text-purple fw600 mono">${r.category_id}</td>
-      <td class="text-blue mono">${r.platform}</td>
-      <td>${r.items_fetched||0}</td>
-      <td class="text-green">${r.items_new||0}</td>
-      <td class="text-muted">${r.items_duplicate||0}</td>
-      <td>${r.items_ai_selected||0}</td>
-      <td class="text-blue">${r.items_queued||0}</td>
-      <td><span class="tag ${statusTag(r.status)}">${r.status}</span></td>
-      <td class="text-muted">${r.duration_ms?Math.round(r.duration_ms/1000)+'s':'—'}</td>
-      <td class="text-muted">${fmtDate(r.created_at)}</td>
-    </tr>`).join('')}
-    </tbody></table></div>
-  </div>`;
-}
-async function triggerRun() {
-  const dryRun = confirm('Dry-run؟\nOK = dry-run (بدون ارسال)\nCancel = واقعی');
-  const r = await api('/internal/curation/trigger', {method:'POST', body:JSON.stringify({dryRun, force:true})});
-  toast(`Trigger شد — ${r.runs?.length||0} run شروع شد`);
-  setTimeout(() => loadPage('runs'), 1500);
-}
+    const labels = series.map(r=>r.bucket);
 
-// ══ Items ══════════════════════════════════════════════════════
-async function renderItems(c) {
-  const [sel, rej] = await Promise.all([
-    api('/internal/items?status=ai_selected&limit=30'),
-    api('/internal/items?status=ai_rejected&limit=20'),
-  ]);
-  c.innerHTML = `
-  <div class="grid2">
-    <div class="card">
-      <div class="panel-head"><div class="panel-title">✓ selected by AI (${sel.items?.length||0})</div></div>
-      ${itemRows(sel.items||[])}
-    </div>
-    <div class="card">
-      <div class="panel-head"><div class="panel-title">✗ rejected (${rej.items?.length||0})</div></div>
-      ${itemRows(rej.items||[], true)}
-    </div>
-  </div>`;
-}
-function itemRows(items, rej=false) {
-  if (!items.length) return '<div class="text-muted fs12" style="padding:8px 0">آیتمی نیست</div>';
-  return items.map(it=>`
-  <div class="row">
-    <div class="dot ${rej?'dot-amber':'dot-green'}"></div>
-    <div style="flex:1;min-width:0">
-      <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((it.text||'—').slice(0,60))}</div>
-      <div class="fs11 text-muted">${it.platform} · @${it.source_account} · score:${(it.ai_score||0).toFixed(0)} · ${it.ai_risk||'?'}</div>
-    </div>
-    <a href="${it.source_url}" target="_blank" class="fs11" style="white-space:nowrap">↗ منبع</a>
-  </div>`).join('');
-}
+    host.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">'+
+        '<span class="muted">Granularity:</span>'+bucketBtns+
+        '<span class="faint" style="margin-left:auto">'+series.length+' '+bucket+' buckets · all times UTC</span></div>'+
+      '<div class="grid cols-4" style="margin-bottom:16px">'+
+        statCard('Published', fmtNum(totalPub), {tone:'good', sub:'~'+pubPerActiveBucket.toFixed(1)+' / '+bucket})+
+        statCard('Scraped', fmtNum(totalScraped))+
+        statCard('Select rate', selectRate.toFixed(1)+'%', {tone: selectRate>=15?'good':(selectRate>=5?'warn':'bad'), sub:'selected / scraped'})+
+        statCard('AI tokens', fmtNum(totalTokens))+
+      '</div>'+
+      '<div class="card" style="margin-bottom:16px"><h3>Publishing & scraping trend</h3>'+makeCanvas('chart-trend-vol',260)+'</div>'+
+      '<div class="grid cols-2">'+
+        '<div class="card"><h3>Selected vs rejected</h3>'+makeCanvas('chart-trend-quality',230)+'</div>'+
+        '<div class="card"><h3>AI usage (calls & tokens)</h3>'+makeCanvas('chart-trend-ai',230)+'</div>'+
+      '</div>'+
+      (series.length? '' : '<div class="empty" style="margin-top:16px">No time-series data yet. Once the pipeline runs for a few '+bucket+'s, trends appear here.</div>');
 
-// ══ Categories ══════════════════════════════════════════════════
-async function renderCategories(c) {
-  const [cats, channels] = await Promise.all([api('/internal/categories'), api('/internal/channels')]);
-  const chMap = {};
-  (channels.channels||[]).forEach(ch => { if(!chMap[ch.category_id]) chMap[ch.category_id]=[]; chMap[ch.category_id].push(ch); });
-  c.innerHTML = `
-  <div class="alert alert-blue">
-    💡 هر category می‌تواند N کانال با زبان‌های مختلف داشته باشد. کافی است کانال جدیدی با همان category_id اضافه کنید.
-  </div>
-  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button class="btn btn-primary" onclick="openCatModal()">+ افزودن category</button>
-  </div>
-  ${(cats.categories||[]).length===0?`<div class="empty"><div class="empty-icon">📂</div><div class="empty-title">هنوز categoryای ندارید</div><div class="empty-desc">با دکمه بالا category اول را بسازید</div></div>`:
-  (cats.categories||[]).map(cat => {
-    const chs = chMap[cat.id]||[];
-    const langs = JSON.parse(cat.language_targets||'[]');
-    return `
-    <div class="card mb12">
-      <div class="flex items-center gap8 mb8">
-        <span class="fw600" style="font-size:15px">${cat.id}</span>
-        <span class="text-muted">—</span>
-        <span>${cat.label}</span>
-        <span class="tag ${cat.enabled?'tag-green':'tag-dim'}" style="margin-right:auto">${cat.enabled?'active':'disabled'}</span>
-        <button class="btn-sm" onclick="openCatEdit('${cat.id}')">ویرایش</button>
-      </div>
-      <div class="fs12 text-muted mono mb8">profile: ${cat.prompt_profile}${cat.custom_prompt?' · custom prompt':''} · threshold: ${cat.score_threshold} · freshness: ${cat.freshness_hours}h · media: ${cat.media_mode}</div>
-      <div class="fs11 text-muted mb8">${cat.editorial_guidelines?'📝 editorial guidelines · ':''}${cat.selection_criteria?'🎯 selection criteria · ':''}${cat.rejection_criteria?'🚫 rejection criteria · ':''}${cat.required_context?'📌 required context · ':''}${cat.avoid_duplicate_people_stories!==0?'dedupe reminder on':'dedupe reminder off'}</div>
-      <div class="fs11 text-muted mb8">reply: ${cat.allow_replies?'allow':'reject'} · retweet: ${cat.allow_retweets!==0?'allow':'reject'} · quote: ${cat.allow_quotes!==0?'allow':'reject'} · text-only: ${cat.text_only_policy||'allow'}${cat.min_score_for_text_only!=null?' · text score ≥ '+cat.min_score_for_text_only:''}${cat.min_score_for_media!=null?' · media score ≥ '+cat.min_score_for_media:''}</div>
-      <div class="flex gap8 mb8" style="flex-wrap:wrap">
-        <span class="fs11 text-muted">زبان‌ها:</span>
-        ${langs.map(l=>`<span class="tag tag-purple">${l}</span>`).join('')}
-      </div>
-      <div class="flex gap8" style="flex-wrap:wrap;align-items:center">
-        <span class="fs11 text-muted">کانال‌ها:</span>
-        ${chs.map(ch=>`
-        <span class="flex items-center gap8" style="background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:3px 8px">
-          <span class="dot ${ch.publish_enabled?'dot-green':'dot-dim'}"></span>
-          <span class="mono fs11">${ch.id}</span>
-          <span class="tag tag-blue" style="font-size:9px">${ch.language}</span>
-        </span>`).join('')}
-        <button class="btn-sm" onclick="openChModal('${cat.id}')">+ کانال</button>
-      </div>
-    </div>`}).join('')}`;
-}
-
-// ══ Channels ═══════════════════════════════════════════════════
-async function renderChannels(c) {
-  const data = await api('/internal/channels');
-  const chs = data.channels||[];
-  c.innerHTML = `
-  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button class="btn btn-primary" onclick="openChModal()">+ افزودن کانال</button>
-  </div>
-  ${chs.length===0?`<div class="empty"><div class="empty-icon">📡</div><div class="empty-title">هنوز کانالی ندارید</div><div class="empty-desc">ابتدا یک category بسازید، بعد کانال اضافه کنید</div></div>`:
-  chs.map(ch=>`
-  <div class="ch-card">
-    <div class="ch-card-head">
-      <div class="dot ${ch.publish_enabled?'dot-green':'dot-dim'}"></div>
-      <span class="ch-name">${esc(ch.channel_label||ch.id)}</span><span class="text-muted fs11 mono">${esc(ch.id)}</span>
-      <span class="tag tag-purple">${esc(ch.language)}</span>
-      <span class="tag tag-dim">${esc(ch.category_id)}</span>
-      <span class="tag ${ch.publish_enabled?'tag-green':'tag-dim'}" style="margin-right:auto">${ch.publish_enabled?'publishing':'paused'}</span>
-      <div class="ch-actions">
-        <button class="btn-sm ${ch.publish_enabled?'btn-red':'btn-green'}" onclick="toggleChannelPub('${ch.id}',${ch.publish_enabled?0:1})">${ch.publish_enabled?'⏸ pause':'▶ start'}</button>
-        <button class="btn-sm" onclick="openChEdit(${JSON.stringify(ch).replace(/"/g,'&quot;')})">ویرایش</button>
-      </div>
-    </div>
-    <div class="ch-meta">
-      <span>📡 ${esc(ch.telegram_chat_id)}</span>
-      <span>🌍 ${esc(ch.timezone)}</span>
-      <span>📅 max ${ch.max_per_day}/day</span>
-      <span>⏱ max ${ch.max_per_hour}/hr</span>
-      <span>⏳ gap ${ch.min_gap_minutes}min</span>
-      <span>🎙 ${esc(ch.tone_profile||'neutral')}</span>
-      <span>🧭 ${esc(ch.editorial_mode||'news')}</span>
-      <span>👥 ${esc(ch.audience_level||'intermediate')}</span>
-      <span>✍️ ${esc(ch.caption_style||'contextual')}</span>
-    </div>
-    <div class="ch-meta mt8">
-      <span>✅ allowed: ${esc(ch.allowed_windows)}</span>
-      <span>🚫 blocked: ${esc(ch.blocked_windows)}</span>
-      ${ch.custom_instructions?'<span>🧠 custom AI instructions</span>':''}
-    </div>
-    <div class="ch-meta mt8">
-      <span class="tag ${ch.source_enabled!==0?'tag-green':'tag-dim'}">source ${ch.source_enabled!==0?'on':'off'}</span>
-      <span class="tag ${ch.disable_link_preview!==0?'tag-green':'tag-red'}">preview ${ch.disable_link_preview!==0?'off':'on'}</span>
-      <span class="tag ${ch.signature_enabled?'tag-green':'tag-dim'}">signature ${ch.signature_enabled?'on':'off'}</span>
-      <span class="tag ${ch.channel_id_footer_enabled?'tag-green':'tag-dim'}">footer ${ch.channel_id_footer_enabled?'on':'off'}</span>
-      <span class="tag ${ch.semantic_dedupe_enabled!==0?'tag-blue':'tag-dim'}">dedupe ${ch.semantic_dedupe_window_hours||24}h</span>
-      ${ch.source_label_override?`<span class="text-muted fs11">source label: ${esc(ch.source_label_override)}</span>`:''}
-    </div>
-  </div>`).join('')}`;
-}
-async function toggleChannelPub(id, enable) {
-  await api(`/internal/channels/${id}/publish`, {method:'POST', body:JSON.stringify({enabled:enable===1})});
-  toast(enable?'▶ کانال فعال شد':'⏸ کانال متوقف شد'); loadPage('channels'); loadPills();
-}
-
-// ══ Sources ════════════════════════════════════════════════════
-async function renderSources(c) {
-  const data = await api('/internal/source-accounts');
-  const accs = data.accounts||[];
-  c.innerHTML = `
-  <div class="alert alert-blue">اکانت‌های whitelist — AI Gate برای این اکانت‌ها score بالاتری در نظر می‌گیرد و در prompt به Claude نشان می‌دهد.</div>
-  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button class="btn btn-primary" onclick="openSrcModal()">+ افزودن اکانت</button>
-  </div>
-  ${accs.length===0?`<div class="empty"><div class="empty-icon">👤</div><div class="empty-title">هنوز اکانتی ندارید</div><div class="empty-desc">اکانت‌های مورد نظر را اضافه کنید تا AI به آن‌ها اولویت بدهد</div></div>`:''}
-  <div class="card">
-    ${accs.map(a=>`
-    <div class="row">
-      <div class="dot ${a.enabled?'dot-green':'dot-dim'}"></div>
-      <span class="tag tag-blue" style="width:70px;text-align:center">${a.platform}</span>
-      <span class="mono fw600 flex1">@${a.account_handle}</span>
-      <span class="text-muted fs11" style="width:80px">${a.category_id}</span>
-      <span class="tag ${a.trust_level==='high'?'tag-green':a.trust_level==='medium'?'tag-amber':'tag-dim'}">${a.trust_level}</span>
-      <button class="btn-sm btn-red" style="font-size:10px" onclick="delSrc('${a.id}')">حذف</button>
-    </div>`).join('')}
-  </div>`;
-}
-async function delSrc(id) {
-  if (!confirm('حذف شود؟')) return;
-  await api(`/internal/source-accounts/${id}`, {method:'DELETE'});
-  toast('حذف شد'); loadPage('sources');
-}
-
-// ══ Apify ══════════════════════════════════════════════════════
-async function renderApify(c) {
-  const [srcs, cats] = await Promise.all([api('/internal/apify-sources'), api('/internal/categories')]);
-  const src = srcs.sources||[];
-  fillSelect('ap-cat', cats.categories||[], 'id', c => c.id + ' — ' + c.label);
-  const webhookUrl = `${API}/webhook/apify?secret=YOUR_INTERNAL_SECRET`;
-  c.innerHTML = `
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">webhook URL برای Apify</div></div>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px 14px;font-family:monospace;font-size:12px;word-break:break-all">${webhookUrl}</div>
-    <div class="fs11 text-muted mt8">
-      در Apify Console → Task → Integrations → Webhooks این URL را وارد کنید.<br>
-      Event: <code>ACTOR.RUN.SUCCEEDED</code> · Payload: <code>{"datasetId":"{{resource.defaultDatasetId}}","platform":"x"}</code>
-    </div>
-  </div>
-  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-    <button class="btn btn-primary" onclick="openApifyModal()">+ افزودن dataset</button>
-  </div>
-  ${src.length===0?`<div class="empty"><div class="empty-icon">🗄</div><div class="empty-title">هنوز dataset تنظیم نشده</div><div class="empty-desc">ابتدا یک Task در Apify اجرا کنید، سپس Dataset ID را اینجا اضافه کنید</div></div>`:''}
-  <div class="card">
-    ${src.map(s=>`
-    <div class="row">
-      <div class="dot ${s.enabled?'dot-green':'dot-dim'}"></div>
-      <span class="tag tag-blue" style="width:70px;text-align:center">${s.platform}</span>
-      <span class="text-muted fs11" style="width:80px">${s.category_id}</span>
-      <span class="mono fs12 flex1">${s.apify_dataset_id}</span>
-      <span class="text-muted fs11">${s.label||''}</span>
-      <button class="btn-sm btn-red" style="font-size:10px" onclick="delApify('${s.id}')">حذف</button>
-    </div>`).join('')}
-  </div>`;
-  // re-fill select after render
-  fillSelect('ap-cat', cats.categories||[], 'id', c => c.id + ' — ' + c.label);
-}
-async function delApify(id) {
-  if (!confirm('حذف شود؟')) return;
-  await api(`/internal/apify-sources/${id}`, {method:'DELETE'});
-  toast('حذف شد'); loadPage('apify');
-}
-
-// ══ AI Settings ════════════════════════════════════════════════
-async function renderAI(c) {
-  // نمایش تنظیمات AI از wrangler و status اتصال providers
-  let health = {};
-  let stats = {};
-  try { health = await api('/health'); } catch(e) {}
-  try { stats = await api('/internal/stats'); } catch(e) {}
-
-  const GEMINI_MODELS = [
-    {v:'gemini-2.5-flash-lite', l:'Gemini 2.5 Flash-Lite — ارزان‌ترین ($0.10/$0.40 per 1M)'},
-    {v:'gemini-2.5-flash',      l:'Gemini 2.5 Flash — متعادل ($0.30/$2.50 per 1M)'},
-    {v:'gemini-2.5-pro',        l:'Gemini 2.5 Pro — قوی‌ترین ($1.25/$10 per 1M)'},
-    {v:'gemini-3.1-flash-lite', l:'Gemini 3.1 Flash-Lite — جدیدترین ارزان'},
-  ];
-  const OPENAI_MODELS = [
-    {v:'gpt-4.1-nano',  l:'GPT-4.1 Nano — ارزان‌ترین ($0.10/$0.40 per 1M)'},
-    {v:'gpt-4o-mini',   l:'GPT-4o Mini — محبوب ($0.15/$0.60 per 1M)'},
-    {v:'gpt-4.1-mini',  l:'GPT-4.1 Mini — بهتر ($0.40/$1.60 per 1M)'},
-    {v:'gpt-4.1',       l:'GPT-4.1 — قوی ($2.00/$8.00 per 1M)'},
-  ];
-  const CLAUDE_MODELS = [
-    {v:'claude-haiku-4-5-20251001', l:'Claude Haiku 4.5 — سریع و ارزان ($0.80/$4.00 per 1M)'},
-    {v:'claude-sonnet-4-6',         l:'Claude Sonnet 4.6 — قوی‌تر ($3.00/$15 per 1M)'},
-  ];
-
-  const stream = stats.runtime_config?.stream_transcode || {};
-  const streamEnabled = stream.enabled === true;
-  const partialMediaEnabled = stats.runtime_config?.media_group_partial_publish_enabled !== false;
-
-  c.innerHTML = `
-  <div class="alert alert-blue">
-    <strong>معماری دو مرحله‌ای:</strong><br>
-    مرحله ۱ — <span class="tag tag-purple">Claude Haiku</span> فقط Scoring + Risk assessment (ارزان — ~2K output tokens per run)<br>
-    مرحله ۲ — <span class="tag tag-blue">Gemini یا OpenAI</span> Translation + Caption نوشتن (بیشتر output — باید ارزان‌ترین انتخاب شود)
-  </div>
-
-  <div class="alert ${streamEnabled?'alert-amber':'alert-green'}">
-    <strong>Cloudflare Stream fallback:</strong>
-    <span class="tag ${streamEnabled?'tag-amber':'tag-dim'}">${streamEnabled?'enabled':'disabled'}</span><br>
-    ${streamEnabled
-      ? 'Stream فقط بعد از شکست sendVideo با خطای media استفاده می‌شود و ممکن است هزینه ایجاد کند.'
-      : 'غیرفعال است؛ حتی اگر secretها ست شده باشند، بدون STREAM_TRANSCODE_ENABLED=true هیچ call هزینه‌دار انجام نمی‌شود.'}
-    <div class="fs11 text-muted mt8">reason: ${esc(stream.reason || 'unknown')} · configured: ${stream.configured?'yes':'no'}</div>
-    <div class="fs11 text-muted mt8">media group partial publish: <span class="tag ${partialMediaEnabled?'tag-amber':'tag-red'}">${partialMediaEnabled?'enabled':'disabled'}</span></div>
-  </div>
-
-  <div class="grid2 mb16">
-    <div class="card">
-      <div class="panel-head">
-        <div class="panel-title">مرحله ۱ — Scoring (Claude)</div>
-        <span class="tag tag-purple">Claude</span>
-      </div>
-      <div class="form-group">
-        <label class="form-label">مدل Claude برای Scoring</label>
-        <select class="form-input" id="ai-scoring-model" onchange="previewAICost()">
-          ${CLAUDE_MODELS.map(m=>`<option value="${m.v}">${m.l}</option>`).join('')}
-        </select>
-        <div class="form-hint">فقط برای score دادن و risk detection. هر run یک call می‌زند.</div>
-      </div>
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px;font-size:12px;color:var(--muted)">
-        API Key: <code>ANTHROPIC_API_KEY</code><br>
-        هزینه تخمینی: ~$0.02 per run (50 آیتم)
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="panel-head">
-        <div class="panel-title">مرحله ۲ — Translation Provider</div>
-        <span class="tag tag-green">ارزان‌تر</span>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Provider ترجمه</label>
-        <select class="form-input" id="ai-trans-provider" onchange="onProviderChange()">
-          <option value="gemini">🔵 Google Gemini (توصیه شده)</option>
-          <option value="openai">🟢 OpenAI GPT</option>
-          <option value="claude">🟣 Claude (fallback)</option>
-        </select>
-        <div class="form-hint">ترجمه حدود ۹۰٪ هزینه را می‌خورد — ارزان‌ترین provider را انتخاب کنید</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">مدل</label>
-        <select class="form-input" id="ai-trans-model" onchange="previewAICost()">
-          ${GEMINI_MODELS.map(m=>`<option value="${m.v}">${m.l}</option>`).join('')}
-        </select>
-      </div>
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:10px;font-size:12px;color:var(--muted)" id="ai-trans-key-info">
-        API Key: <code>GEMINI_API_KEY</code>
-      </div>
-    </div>
-  </div>
-
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">تخمین هزینه ماهانه</div></div>
-    <div id="ai-cost-preview" style="font-size:13px;line-height:2">
-      <div class="loading"><span class="spin"></span></div>
-    </div>
-  </div>
-
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">تنظیم API Keys</div></div>
-    <div class="alert alert-amber">
-      ⚠ API Keys باید از طریق terminal با <code>wrangler secret put</code> تنظیم شوند — هرگز در کد یا dashboard ذخیره نمی‌شوند.
-    </div>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:monospace;font-size:12px;line-height:2">
-      # Claude (برای Scoring — اجباری)<br>
-      wrangler secret put ANTHROPIC_API_KEY --env production<br><br>
-      # Gemini (اگر provider=gemini)<br>
-      wrangler secret put GEMINI_API_KEY --env production<br><br>
-      # OpenAI (اگر provider=openai)<br>
-      wrangler secret put OPENAI_API_KEY --env production
-    </div>
-    <div class="form-hint mt8">
-      بعد از تنظیم secret، نیازی به redeploy نیست — Cloudflare بلافاصله اعمال می‌کند.
-    </div>
-  </div>
-
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">Budget Protection</div></div>
-    <div class="grid2">
-      ${aiSetting('Max Calls Per Day', '10', 'حداکثر Claude API call در روز')}
-      ${aiSetting('Daily Token Budget', '50,000', 'حداکثر token Claude در روز')}
-      ${aiSetting('Max Candidates Per Run', '50', 'حداکثر آیتم برای هر run')}
-      ${aiSetting('Max Text Chars Per Item', '400', 'متن ارسالی به AI برای هر آیتم')}
-    </div>
-    <div class="form-hint mt8">این مقادیر در <code>wrangler.toml</code> تنظیم می‌شوند.</div>
-  </div>
-
-  <div class="card">
-    <div class="panel-head"><div class="panel-title">Prompt Profiles</div></div>
-    <div class="fs12 text-muted mb12">هر category یک prompt profile دارد که رفتار Claude (Scoring) را تعریف می‌کند.</div>
-    ${renderPromptProfiles()}
-  </div>`;
-
-  // init
-  previewAICost();
-}
-
-function onProviderChange() {
-  const provider = document.getElementById('ai-trans-provider')?.value;
-  const modelSel = document.getElementById('ai-trans-model');
-  const keyInfo = document.getElementById('ai-trans-key-info');
-  if (!modelSel || !keyInfo) return;
-
-  const GEMINI = [{v:'gemini-2.5-flash-lite',l:'Gemini 2.5 Flash-Lite ($0.10/$0.40 per 1M)'},{v:'gemini-2.5-flash',l:'Gemini 2.5 Flash ($0.30/$2.50 per 1M)'},{v:'gemini-2.5-pro',l:'Gemini 2.5 Pro ($1.25/$10 per 1M)'},{v:'gemini-3.1-flash-lite',l:'Gemini 3.1 Flash-Lite'}];
-  const OPENAI = [{v:'gpt-4.1-nano',l:'GPT-4.1 Nano ($0.10/$0.40 per 1M)'},{v:'gpt-4o-mini',l:'GPT-4o Mini ($0.15/$0.60 per 1M)'},{v:'gpt-4.1-mini',l:'GPT-4.1 Mini ($0.40/$1.60 per 1M)'}];
-  const CLAUDE = [{v:'claude-haiku-4-5-20251001',l:'Claude Haiku 4.5 ($0.80/$4.00 per 1M)'},{v:'claude-sonnet-4-6',l:'Claude Sonnet 4.6 ($3.00/$15 per 1M)'}];
-
-  const models = provider==='gemini'?GEMINI:provider==='openai'?OPENAI:CLAUDE;
-  modelSel.innerHTML = models.map(m=>`<option value="${m.v}">${m.l}</option>`).join('');
-
-  const keys = {gemini:'GEMINI_API_KEY', openai:'OPENAI_API_KEY', claude:'ANTHROPIC_API_KEY (همان scoring)'};
-  keyInfo.innerHTML = `API Key: <code>${keys[provider]||''}</code>`;
-
-  previewAICost();
-}
-
-function previewAICost() {
-  const el = document.getElementById('ai-cost-preview');
-  if (!el) return;
-
-  const provider = document.getElementById('ai-trans-provider')?.value || 'gemini';
-  const model = document.getElementById('ai-trans-model')?.value || 'gemini-2.5-flash-lite';
-
-  // تخمین هزینه بر اساس مدل
-  const OUTPUT_PRICES = {
-    'claude-haiku-4-5-20251001': 4.0,
-    'claude-sonnet-4-6': 15.0,
-    'gemini-2.5-flash-lite': 0.40,
-    'gemini-2.5-flash': 2.50,
-    'gemini-2.5-pro': 10.0,
-    'gemini-3.1-flash-lite': 0.40,
-    'gpt-4.1-nano': 0.40,
-    'gpt-4o-mini': 0.60,
-    'gpt-4.1-mini': 1.60,
-    'gpt-4.1': 8.0,
-  };
-
-  const scoringPrice = 4.0; // Claude Haiku output
-  const transPrice = OUTPUT_PRICES[model] || 1.0;
-
-  // فرض: ۵ category، هر روز ۳ run، ۱۵ آیتم selected، ۳ زبان
-  const runsPerMonth = 5 * 3 * 30; // 450
-  const scoringTokensPerRun = 2000; // output tokens برای scoring
-  const transTokensPerRun = 15 * 3 * 600; // 15 آیتم × 3 زبان × 600 chars
-
-  const scoringCost = (runsPerMonth * scoringTokensPerRun / 1_000_000) * scoringPrice;
-  const transCost = (runsPerMonth * transTokensPerRun / 1_000_000) * transPrice;
-  const totalAI = scoringCost + transCost;
-
-  const saving = ((4.0 - transPrice) / 4.0 * 100);
-  const savingText = saving > 0 ? `<span class="text-green">↓ ${Math.round(saving)}٪ ارزان‌تر از Claude</span>` : '';
-
-  el.innerHTML = `
-  <div class="grid3">
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">
-      <div class="fs11 text-muted mb4">Scoring (Claude)</div>
-      <div class="fw600" style="font-size:18px">$${scoringCost.toFixed(2)}</div>
-      <div class="fs11 text-muted">${runsPerMonth} runs × ${(scoringTokensPerRun/1000).toFixed(0)}K tokens</div>
-    </div>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">
-      <div class="fs11 text-muted mb4">Translation (${provider})</div>
-      <div class="fw600 text-green" style="font-size:18px">$${transCost.toFixed(2)}</div>
-      <div class="fs11 text-muted">${savingText}</div>
-    </div>
-    <div style="background:var(--purple-bg);border:1px solid var(--purple-border);border-radius:7px;padding:12px">
-      <div class="fs11 text-muted mb4">جمع AI ماهانه</div>
-      <div class="fw600 text-purple" style="font-size:18px">$${totalAI.toFixed(2)}</div>
-      <div class="fs11 text-muted">+ Apify: ~$15–30</div>
-    </div>
-  </div>
-  <div class="fs11 text-muted mt8">* تخمین بر اساس ۵ category، ۳ run/day، ۱۵ آیتم selected، ۳ زبان. هزینه واقعی بستگی به تعداد آیتم دارد.</div>`;
-}
-function aiSetting(label, val, hint) {
-  return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">
-    <div class="fs11 text-muted mb8">${label}</div>
-    <div class="mono fw600">${val}</div>
-    <div class="fs11 text-muted mt8">${hint}</div>
-  </div>`;
-}
-function renderPromptProfiles() {
-  const profiles = [
-    {id:'crypto_editorial', name:'Crypto/Blockchain', desc:'تحلیل بازار، پروتکل، توکن، امنیت. هیچ توصیه مالی نمی‌دهد. Risk: pump_and_dump, financial_advice'},
-    {id:'design_editorial', name:'Design/UX', desc:'تجربه کاربری، سیستم طراحی، ابزارها. Risk: plagiarism, misleading_attribution'},
-    {id:'marketing_editorial', name:'Marketing/Growth', desc:'استراتژی، کانال، کمپین، نتایج قابل سنجش. Risk: exaggerated_claims, fake_case_study'},
-    {id:'product_editorial', name:'Product/Startup', desc:'تأثیر کاربری، adoption، roadmap. Risk: vaporware, misleading_roadmap'},
-    {id:'ai_news_editorial', name:'AI/ML News', desc:'قابلیت‌های مدل، ایمنی، benchmark. از hype اجتناب می‌کند. Risk: capability_exaggeration'},
-    {id:'default_editorial', name:'General', desc:'محتوای عمومی با حفظ واقعیت و attribution'},
-  ];
-  return profiles.map(p=>`
-  <div class="row">
-    <span class="tag tag-purple" style="width:150px;text-align:center">${p.id}</span>
-    <span class="fw600 fs12" style="width:120px">${p.name}</span>
-    <span class="text-muted fs12 flex1">${p.desc}</span>
-  </div>`).join('');
-}
-
-// ══ Switches ═══════════════════════════════════════════════════
-async function renderSwitches(c) {
-  const d = await api('/internal/admin/settings');
-  const s = {}; (d.settings||[]).forEach(r => s[r.key]=r.value);
-  const sw = [
-    {key:'apify_curation_enabled', name:'Apify Curation', desc:'فعال/غیرفعال کردن کل pipeline. اگر off باشد، cron هیچ کاری نمی‌کند.'},
-    {key:'apify_curation_dry_run', name:'Dry-run Mode', desc:'Claude score می‌دهد، caption می‌نویسد، اما هیچ چیزی publish نمی‌شود. برای تست عالی است.'},
-    {key:'telegram_publish_enabled', name:'Telegram Publish', desc:'ارسال واقعی به کانال‌های تلگرام. همیشه dry-run را اول test کنید.'},
-    {key:'maintenance_mode', name:'Maintenance Mode', desc:'همه عملیات متوقف می‌شود. برای debug یا update استفاده کنید.'},
-  ];
-  c.innerHTML = `
-  <div class="alert alert-amber">⚠ تغییرات بلافاصله اعمال می‌شوند. با دقت استفاده کنید.</div>
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">system switches</div></div>
-    ${sw.map(sw=>{
-      const on = s[sw.key]==='true';
-      return `
-      <div class="toggle-wrap">
-        <div class="toggle-info">
-          <div class="t-name">${sw.name}</div>
-          <div class="t-desc">${sw.desc}</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="tag ${on?'tag-green':'tag-dim'}">${on?'on':'off'}</span>
-          <div class="toggle ${on?'on':''}" onclick="toggleSw('${sw.key}',${on})"></div>
-        </div>
-      </div>`;}).join('')}
-  </div>
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">channel control</div></div>
-    <div class="fs12 text-muted mb12">برای pause/resume هر کانال به صفحه Channels بروید.</div>
-    <button class="btn btn-red" onclick="emergencyStop()">⏹ Emergency Stop — همه را خاموش کن</button>
-  </div>
-  <div class="card">
-    <div class="panel-head"><div class="panel-title">راهنمای فازبندی فعال‌سازی</div></div>
-    <div style="font-size:13px;line-height:2">
-      <div>۱. <span class="tag tag-dim">curation: off · dry-run: on · publish: off</span> → ساخت categories و channels</div>
-      <div>۲. <span class="tag tag-amber">curation: on · dry-run: on · publish: off</span> → تست AI gate و scoring</div>
-      <div>۳. <span class="tag tag-amber">curation: on · dry-run: off · publish: off</span> → queue ساخته می‌شود اما ارسال نمی‌شود</div>
-      <div>۴. <span class="tag tag-green">curation: on · dry-run: off · publish: on</span> → فقط یک کانال test را فعال کنید</div>
-      <div>۵. <span class="tag tag-green">همه on</span> → کانال‌های عمومی را فعال کنید</div>
-    </div>
-  </div>`;
-}
-async function toggleSw(key, currentOn) {
-  await api('/internal/admin/toggle', {method:'POST', body:JSON.stringify({key, value:String(!currentOn)})});
-  toast(`${key}: ${!currentOn?'on':'off'}`); loadPage('switches'); loadPills();
-}
-
-// ══ Connection ════════════════════════════════════════════════
-async function renderConnection(c) {
-  let health = null, err = null;
-  try { health = await api('/health'); } catch(e) { err = e.message; }
-  c.innerHTML = `
-  <div class="card mb16">
-    <div class="panel-head"><div class="panel-title">وضعیت اتصال</div></div>
-    <div class="${health?'alert alert-green':'alert alert-red'}">
-      ${health?`✓ متصل — ${API}<br>DB: ${health.db} · Environment: ${health.environment}`:`✗ خطا: ${err}`}
-    </div>
-    <div class="form-group mt16">
-      <label class="form-label">Worker API URL</label>
-      <input class="form-input" id="conn-url" value="${API}">
-    </div>
-    <div class="form-group">
-      <label class="form-label">API Secret</label>
-      <input class="form-input" type="password" id="conn-secret" value="${SECRET}">
-    </div>
-    <div class="flex gap8 mt8">
-      <button class="btn btn-primary" onclick="saveConn()">ذخیره و اتصال مجدد</button>
-      <button class="btn btn-red" onclick="logout()">خروج و پاک کردن</button>
-    </div>
-  </div>`;
-}
-async function saveConn() {
-  const url = document.getElementById('conn-url').value.trim().replace(/\/$/,'');
-  const secret = document.getElementById('conn-secret').value.trim();
-  localStorage.setItem('curator_api', url); localStorage.setItem('curator_secret', secret);
-  API = url; SECRET = secret;
-  document.getElementById('sidebar-env').textContent = new URL(url).hostname;
-  toast('ذخیره شد'); loadPage('connection');
-}
-function logout() {
-  if (!confirm('خارج شوید؟')) return;
-  localStorage.clear(); location.reload();
-}
-
-// ══ Emergency Stop ═════════════════════════════════════════════
-async function emergencyStop() {
-  if (!confirm('همه switches خاموش شود؟')) return;
-  for (const key of ['apify_curation_enabled','telegram_publish_enabled']) {
-    await api('/internal/admin/toggle', {method:'POST', body:JSON.stringify({key, value:'false'})});
-  }
-  toast('⏹ همه switches خاموش شد','warn'); loadPills(); loadPage('switches');
-}
-
-let editingChannelId = null;
-let editingCategoryId = null;
-
-// ══ Modals ════════════════════════════════════════════════════
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-document.querySelectorAll('.modal-overlay').forEach(m => m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); }));
-
-function formatForbiddenPhrases(value) { try { const parsed = JSON.parse(value||'[]'); return Array.isArray(parsed) ? parsed.join('\n') : (value||''); } catch { return value||''; } }
-
-async function openChModal(categoryId) {
-  const cats = await api('/internal/categories');
-  fillSelect('ch-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label, categoryId);
-  editingChannelId = null;
-  document.getElementById('ch-id').disabled = false;
-  document.getElementById('ch-id').value = '';
-  document.getElementById('ch-chat').value = '';
-  document.getElementById('ch-label').value = '';
-  document.getElementById('ch-tone').value = 'neutral';
-  document.getElementById('ch-instructions').value = '';
-  document.getElementById('ch-editorial-mode').value = 'news';
-  document.getElementById('ch-audience-level').value = 'intermediate';
-  document.getElementById('ch-caption-style').value = 'contextual';
-  document.getElementById('ch-creativity').value = 0.2;
-  document.getElementById('ch-caption-max').value = 1200;
-  document.getElementById('ch-caption-short-max').value = 280;
-  document.getElementById('ch-language-prompt').value = '';
-  document.getElementById('ch-terminology-notes').value = '';
-  document.getElementById('ch-forbidden-phrases').value = '';
-  document.getElementById('ch-lang').value = 'fa';
-  document.getElementById('ch-tz').value = 'Asia/Tehran';
-  document.getElementById('ch-day').value = 10;
-  document.getElementById('ch-hour').value = 2;
-  document.getElementById('ch-gap').value = 30;
-  document.getElementById('ch-allowed').value = '["08:00-23:59"]';
-  document.getElementById('ch-blocked').value = '["00:00-08:00"]';
-  setChecked('ch-source-enabled', true);
-  document.getElementById('ch-source-label').value = '';
-  setChecked('ch-disable-preview', true);
-  setChecked('ch-signature-enabled', false);
-  document.getElementById('ch-signature-text').value = '';
-  setChecked('ch-footer-enabled', false);
-  document.getElementById('ch-footer-text').value = '';
-  setChecked('ch-semantic-enabled', true);
-  document.getElementById('ch-semantic-window').value = 24;
-  document.getElementById('ch-max-source-day').value = '';
-  document.getElementById('modal-ch-title').textContent = 'افزودن کانال';
-  document.getElementById('modal-channel').classList.add('open');
-}
-async function openChEdit(ch) {
-  const cats = await api('/internal/categories');
-  fillSelect('ch-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label, ch.category_id);
-  editingChannelId = ch.id;
-  document.getElementById('ch-id').disabled = true;
-  document.getElementById('ch-id').value = ch.id;
-  document.getElementById('ch-chat').value = ch.telegram_chat_id;
-  document.getElementById('ch-lang').value = ch.language;
-  document.getElementById('ch-tz').value = ch.timezone;
-  document.getElementById('ch-day').value = ch.max_per_day;
-  document.getElementById('ch-hour').value = ch.max_per_hour;
-  document.getElementById('ch-gap').value = ch.min_gap_minutes;
-  document.getElementById('ch-allowed').value = ch.allowed_windows;
-  document.getElementById('ch-blocked').value = ch.blocked_windows;
-  document.getElementById('ch-label').value = ch.channel_label || '';
-  document.getElementById('ch-tone').value = ch.tone_profile || 'neutral';
-  document.getElementById('ch-instructions').value = ch.custom_instructions || '';
-  document.getElementById('ch-editorial-mode').value = ch.editorial_mode || 'news';
-  document.getElementById('ch-audience-level').value = ch.audience_level || 'intermediate';
-  document.getElementById('ch-caption-style').value = ch.caption_style || 'contextual';
-  document.getElementById('ch-creativity').value = ch.creativity_level ?? 0.2;
-  document.getElementById('ch-caption-max').value = ch.caption_max_chars || 1200;
-  document.getElementById('ch-caption-short-max').value = ch.caption_short_max_chars || 280;
-  document.getElementById('ch-language-prompt').value = ch.language_prompt || '';
-  document.getElementById('ch-terminology-notes').value = ch.terminology_notes || '';
-  document.getElementById('ch-forbidden-phrases').value = formatForbiddenPhrases(ch.forbidden_phrases);
-  setChecked('ch-source-enabled', ch.source_enabled !== 0);
-  document.getElementById('ch-source-label').value = ch.source_label_override || '';
-  setChecked('ch-disable-preview', ch.disable_link_preview !== 0);
-  setChecked('ch-signature-enabled', !!ch.signature_enabled);
-  document.getElementById('ch-signature-text').value = ch.signature_text || '';
-  setChecked('ch-footer-enabled', !!ch.channel_id_footer_enabled);
-  document.getElementById('ch-footer-text').value = ch.channel_id_footer_text || '';
-  setChecked('ch-semantic-enabled', ch.semantic_dedupe_enabled !== 0);
-  document.getElementById('ch-semantic-window').value = ch.semantic_dedupe_window_hours || 24;
-  document.getElementById('ch-max-source-day').value = ch.max_posts_per_source_per_day ?? '';
-  document.getElementById('modal-ch-title').textContent = 'ویرایش کانال: ' + ch.id;
-  document.getElementById('modal-channel').classList.add('open');
-}
-async function saveChannel() {
-  const maxSourceDayRaw = document.getElementById('ch-max-source-day').value;
-  const body = {
-    id:document.getElementById('ch-id').value.trim(),
-    category_id:document.getElementById('ch-cat').value,
-    telegram_chat_id:document.getElementById('ch-chat').value.trim(),
-    language:document.getElementById('ch-lang').value,
-    timezone:document.getElementById('ch-tz').value,
-    max_per_day:+document.getElementById('ch-day').value,
-    max_per_hour:+document.getElementById('ch-hour').value,
-    min_gap_minutes:+document.getElementById('ch-gap').value,
-    allowed_windows:document.getElementById('ch-allowed').value,
-    blocked_windows:document.getElementById('ch-blocked').value,
-    channel_label:document.getElementById('ch-label').value.trim(),
-    tone_profile:document.getElementById('ch-tone').value,
-    custom_instructions:document.getElementById('ch-instructions').value.trim(),
-    editorial_mode:document.getElementById('ch-editorial-mode').value,
-    audience_level:document.getElementById('ch-audience-level').value,
-    caption_style:document.getElementById('ch-caption-style').value,
-    creativity_level:+document.getElementById('ch-creativity').value,
-    caption_max_chars:+document.getElementById('ch-caption-max').value,
-    caption_short_max_chars:+document.getElementById('ch-caption-short-max').value,
-    language_prompt:document.getElementById('ch-language-prompt').value.trim(),
-    terminology_notes:document.getElementById('ch-terminology-notes').value.trim(),
-    forbidden_phrases:document.getElementById('ch-forbidden-phrases').value.trim(),
-    source_enabled:isChecked('ch-source-enabled'),
-    source_label_override:document.getElementById('ch-source-label').value.trim(),
-    disable_link_preview:isChecked('ch-disable-preview'),
-    signature_enabled:isChecked('ch-signature-enabled'),
-    signature_text:document.getElementById('ch-signature-text').value.trim(),
-    channel_id_footer_enabled:isChecked('ch-footer-enabled'),
-    channel_id_footer_text:document.getElementById('ch-footer-text').value.trim(),
-    semantic_dedupe_enabled:isChecked('ch-semantic-enabled'),
-    semantic_dedupe_window_hours:+document.getElementById('ch-semantic-window').value,
-    max_posts_per_source_per_day:maxSourceDayRaw ? +maxSourceDayRaw : null,
-  };
-  if (!body.id||!body.telegram_chat_id) { toast('ID و Chat ID اجباری است','err'); return; }
-  try {
-    if (editingChannelId) {
-      await api(`/internal/channels/${editingChannelId}`, {method:'PATCH', body:JSON.stringify(body)});
-    } else {
-      await api('/internal/channels', {method:'POST', body:JSON.stringify(body)});
+    if(series.length){
+      queueChart(()=>drawLine('chart-trend-vol', labels, [
+        {label:'Published', data:series.map(r=>r.published), color:'#22c55e', fill:true},
+        {label:'Scraped', data:series.map(r=>r.scraped), color:'#60a5fa'},
+      ]));
+      queueChart(()=>drawLine('chart-trend-quality', labels, [
+        {label:'Selected', data:series.map(r=>r.selected), color:'#22c55e'},
+        {label:'Rejected', data:series.map(r=>r.rejected), color:'#ef4444'},
+      ]));
+      queueChart(()=>drawLine('chart-trend-ai', labels, [
+        {label:'AI calls', data:series.map(r=>r.ai_calls), color:'#a78bfa'},
+        {label:'Tokens (÷100)', data:series.map(r=>Math.round((r.ai_tokens||0)/100)), color:'#f59e0b'},
+      ]));
     }
-    toast('✓ کانال ذخیره شد'); closeModal('modal-channel'); editingChannelId=null; loadPage('channels'); loadPills();
-  } catch(e) { toast(e.message,'err'); }
-}
+  },
 
-async function openCatModal() {
-  editingCategoryId = null;
-  document.getElementById('cat-id').disabled = false;
-  document.getElementById('cat-id').value=''; document.getElementById('cat-label').value='';
-  document.getElementById('cat-custom-prompt').value='';
-  document.getElementById('cat-editorial-guidelines').value='';
-  document.getElementById('cat-selection-criteria').value='';
-  document.getElementById('cat-rejection-criteria').value='';
-  document.getElementById('cat-required-context').value='';
-  setChecked('cat-avoid-duplicate-people', true);
-  setChecked('cat-allow-replies', false);
-  setChecked('cat-allow-retweets', true);
-  setChecked('cat-allow-quotes', true);
-  document.getElementById('cat-text-only-policy').value='allow';
-  document.getElementById('cat-min-score-text-only').value='';
-  document.getElementById('cat-min-score-media').value='';
-  document.getElementById('modal-cat-title').textContent='افزودن Category';
-  document.querySelectorAll('#lang-checkboxes input').forEach(cb => cb.checked = cb.value==='fa');
-  document.getElementById('modal-cat').classList.add('open');
-}
-async function openCatEdit(id) {
-  const d = await api('/internal/categories');
-  const cat = (d.categories||[]).find(c=>c.id===id);
-  if (!cat) return;
-  editingCategoryId = cat.id;
-  document.getElementById('cat-id').disabled = true;
-  document.getElementById('cat-id').value=cat.id;
-  document.getElementById('cat-label').value=cat.label;
-  document.getElementById('cat-profile').value=cat.prompt_profile;
-  document.getElementById('cat-score').value=cat.score_threshold;
-  document.getElementById('cat-fresh').value=cat.freshness_hours;
-  document.getElementById('cat-media').value=cat.media_mode;
-  document.getElementById('cat-custom-prompt').value=cat.custom_prompt||'';
-  document.getElementById('cat-editorial-guidelines').value=cat.editorial_guidelines||'';
-  document.getElementById('cat-selection-criteria').value=cat.selection_criteria||'';
-  document.getElementById('cat-rejection-criteria').value=cat.rejection_criteria||'';
-  document.getElementById('cat-required-context').value=cat.required_context||'';
-  setChecked('cat-avoid-duplicate-people', cat.avoid_duplicate_people_stories !== 0);
-  setChecked('cat-allow-replies', cat.allow_replies !== 0);
-  setChecked('cat-allow-retweets', cat.allow_retweets !== 0);
-  setChecked('cat-allow-quotes', cat.allow_quotes !== 0);
-  document.getElementById('cat-text-only-policy').value=cat.text_only_policy||'allow';
-  document.getElementById('cat-min-score-text-only').value=cat.min_score_for_text_only??'';
-  document.getElementById('cat-min-score-media').value=cat.min_score_for_media??'';
-  const langs = JSON.parse(cat.language_targets||'[]');
-  document.querySelectorAll('#lang-checkboxes input').forEach(cb => cb.checked=langs.includes(cb.value));
-  document.getElementById('modal-cat-title').textContent='ویرایش: '+cat.id;
-  document.getElementById('modal-cat').classList.add('open');
-}
-async function saveCat() {
-  const langs = [...document.querySelectorAll('#lang-checkboxes input:checked')].map(cb=>cb.value);
-  const body = {
-    id:document.getElementById('cat-id').value.trim(),
-    label:document.getElementById('cat-label').value.trim(),
-    prompt_profile:document.getElementById('cat-profile').value,
-    score_threshold:+document.getElementById('cat-score').value,
-    freshness_hours:+document.getElementById('cat-fresh').value,
-    media_mode:document.getElementById('cat-media').value,
-    custom_prompt:document.getElementById('cat-custom-prompt').value.trim(),
-    editorial_guidelines:document.getElementById('cat-editorial-guidelines').value.trim(),
-    selection_criteria:document.getElementById('cat-selection-criteria').value.trim(),
-    rejection_criteria:document.getElementById('cat-rejection-criteria').value.trim(),
-    required_context:document.getElementById('cat-required-context').value.trim(),
-    avoid_duplicate_people_stories:isChecked('cat-avoid-duplicate-people'),
-    allow_replies:isChecked('cat-allow-replies'),
-    allow_retweets:isChecked('cat-allow-retweets'),
-    allow_quotes:isChecked('cat-allow-quotes'),
-    text_only_policy:document.getElementById('cat-text-only-policy').value,
-    min_score_for_text_only:document.getElementById('cat-min-score-text-only').value||null,
-    min_score_for_media:document.getElementById('cat-min-score-media').value||null,
-    language_targets:JSON.stringify(langs),
-  };
-  if (!body.id||!body.label) { toast('ID و نام اجباری است','err'); return; }
-  try {
-    if (editingCategoryId) {
-      await api(`/internal/categories/${editingCategoryId}`, {method:'PATCH', body:JSON.stringify(body)});
-    } else {
-      await api('/internal/categories', {method:'POST', body:JSON.stringify(body)});
-    }
-    toast('✓ Category ذخیره شد'); closeModal('modal-cat'); editingCategoryId=null; loadPage('categories');
-  } catch(e) { toast(e.message,'err'); }
-}
+  /* ---------- OVERVIEW ---------- */
+  overview: async (host)=>{
+    const [s, daily] = await Promise.all([
+      api('/internal/stats'),
+      api('/internal/report/daily?hours='+WINDOW_HOURS).catch(()=>null),
+    ]);
+    const rc = s.runtime_config || {};
+    const aiCalls = s.ai_calls_24h ?? 0;
+    const aiBudget = rc.ai_max_scoring_calls_per_day || 0;
+    const aiTokens = s.ai_tokens_24h ?? 0;
+    const tokenBudget = rc.ai_daily_token_budget || 0;
+    const callTone = aiBudget && aiCalls >= aiBudget*0.9 ? 'bad' : (aiBudget && aiCalls >= aiBudget*0.7 ? 'warn':'good');
+    const tokTone  = tokenBudget && aiTokens >= tokenBudget*0.9 ? 'bad' : (tokenBudget && aiTokens >= tokenBudget*0.7 ? 'warn':'good');
 
-async function openApifyModal() {
-  const cats = await api('/internal/categories');
-  fillSelect('ap-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label);
-  document.getElementById('ap-dataset').value=''; document.getElementById('ap-label').value='';
-  document.getElementById('modal-apify').classList.add('open');
-}
-async function saveApify() {
-  const body = {
-    category_id:document.getElementById('ap-cat').value,
-    platform:document.getElementById('ap-plat').value,
-    apify_dataset_id:document.getElementById('ap-dataset').value.trim(),
-    label:document.getElementById('ap-label').value.trim(),
-  };
-  if (!body.apify_dataset_id) { toast('Dataset ID اجباری است','err'); return; }
-  try {
-    await api('/internal/apify-sources', {method:'POST', body:JSON.stringify(body)});
-    toast('✓ Dataset اضافه شد'); closeModal('modal-apify'); loadPage('apify');
-  } catch(e) { toast(e.message,'err'); }
-}
+    const fn = daily?.funnel || {};
+    const kpiRow = daily ? '<div class="grid cols-4" style="margin-bottom:16px">'+
+        statCard('Duplicate rate', fn.duplicate_rate_pct!=null?fn.duplicate_rate_pct+'%':'—', {tone: fn.duplicate_rate_pct>60?'bad':(fn.duplicate_rate_pct>30?'warn':'good'), sub:'of fetched'})+
+        statCard('Fresh rate', fn.fresh_rate_pct!=null?fn.fresh_rate_pct+'%':'—', {tone:'good'})+
+        statCard('AI select rate', fn.ai_select_rate_pct!=null?fn.ai_select_rate_pct+'%':'—', {sub:'of scored'})+
+        statCard('Queued rate', fn.queued_rate_of_fresh_pct!=null?fn.queued_rate_of_fresh_pct+'%':'—', {sub:'of fresh'})+
+      '</div>' : '';
 
-async function openSrcModal() {
-  const cats = await api('/internal/categories');
-  fillSelect('src-cat', cats.categories||[], 'id', c=>c.id+' — '+c.label);
-  document.getElementById('src-handle').value=''; document.getElementById('src-name').value='';
-  document.getElementById('modal-src').classList.add('open');
-}
-async function saveSrc() {
-  const body = {
-    category_id:document.getElementById('src-cat').value,
-    platform:document.getElementById('src-plat').value,
-    account_handle:document.getElementById('src-handle').value.trim(),
-    display_name:document.getElementById('src-name').value.trim(),
-    trust_level:document.getElementById('src-trust').value,
-  };
-  if (!body.account_handle) { toast('Handle اجباری است','err'); return; }
-  try {
-    await api('/internal/source-accounts', {method:'POST', body:JSON.stringify(body)});
-    toast('✓ اکانت اضافه شد'); closeModal('modal-src'); loadPage('sources');
-  } catch(e) { toast(e.message,'err'); }
-}
+    host.innerHTML =
+      '<div class="grid cols-4" style="margin-bottom:16px">'+
+        statCard('Queue (scheduled)', fmtNum(s.queue_pending), {sub:'retry '+fmtNum(s.queue_retry)+' · failed '+fmtNum(s.queue_failed)})+
+        statCard('Published 24h', fmtNum(s.published_24h), {tone:'good'})+
+        statCard('Items scraped 24h', fmtNum(s.items_today))+
+        statCard('Last rotation', fmtUtc(s.last_run?.created_at), {sub:s.last_run?.status||'—'})+
+      '</div>'+
+      kpiRow+
+      '<div class="grid cols-4" style="margin-bottom:16px">'+
+        statCard('AI calls 24h', fmtNum(aiCalls)+(aiBudget?(' / '+fmtNum(aiBudget)):''), {tone:callTone, sub:'scoring '+fmtNum(s.ai_scoring_calls_24h)+' · translation '+fmtNum(s.ai_translation_calls_24h)})+
+        statCard('AI tokens 24h', fmtNum(aiTokens)+(tokenBudget?(' / '+fmtNum(tokenBudget)):''), {tone:tokTone})+
+        statCard('Media pending', fmtNum(s.media_pending), {sub:'failed '+fmtNum(s.media_failed)+' · uploaded '+fmtNum(s.media_uploaded)})+
+        statCard('Sources / Channels', fmtNum(s.categories)+' cat · '+fmtNum(s.channels)+' ch')+
+      '</div>'+
+      (daily? '<div class="card" style="margin-bottom:16px"><h3>Item status distribution · last '+WINDOW_HOURS+'h</h3>'+makeCanvas('chart-statuses',220)+'</div>':'')+
+      '<div class="card"><h3>Runtime flags</h3>'+
+        flagRow('Curation', rc.curation_enabled)+
+        flagRow('Dry run', rc.dry_run_enabled)+
+        flagRow('Telegram publish', rc.telegram_publish_enabled)+
+        flagRow('Scheduler', rc.telegram_scheduler_enabled)+
+        flagRow('Maintenance mode', rc.maintenance_mode)+
+      '</div>';
 
-// ══ Setup Wizard ═══════════════════════════════════════════════
-const WIZARD_STEPS = [
-  {title:'خوش آمدید', short:'خوش آمدید'},
-  {title:'ساخت Category', short:'Category'},
-  {title:'تنظیم Channel', short:'Channel'},
-  {title:'Apify Dataset', short:'Apify'},
-  {title:'Source Accounts', short:'منابع'},
-  {title:'تست اتصال', short:'تست'},
-  {title:'فعال‌سازی', short:'فعال‌سازی'},
-];
-let wizData = {};
+    const statuses = daily?.statuses?.discovery_items || {};
+    const sKeys = Object.keys(statuses);
+    if(sKeys.length) queueChart(()=>drawBar('chart-statuses', sKeys, sKeys.map(k=>statuses[k]), {label:'items', color:'#60a5fa'}));
+  },
 
-function openWizard() {
-  wizStep = 0;
-  renderWizard();
-  document.getElementById('wizard').classList.add('open');
-}
+  /* ---------- SOURCES ---------- */
+  sources: async (host)=>{
+    const [srcRes, yieldRes, queryRes, perfRes] = await Promise.all([
+      api('/internal/apify-sources').catch(()=>({sources:[]})),
+      api('/internal/report/source-yield?hours='+WINDOW_HOURS).catch(()=>({sources:[]})),
+      api('/internal/report/apify-query-yield?hours='+WINDOW_HOURS).catch(()=>({sources:[]})),
+      api('/internal/report/source-performance?hours='+WINDOW_HOURS).catch(()=>({sources:[],publishedByBucket:[]})),
+    ]);
+    const sources = srcRes.sources || [];
+    const queryByAcct = indexBy(queryRes.sources||[], 'sourceAccount');
 
-function renderWizard() {
-  const stepsEl = document.getElementById('wizard-steps');
-  stepsEl.innerHTML = WIZARD_STEPS.map((s,i)=>`<div class="wizard-step ${i===wizStep?'active':i<wizStep?'done':''}">${i<wizStep?'✓ ':''+(i+1)+'. '}${s.short}</div>`).join('');
-  document.getElementById('wizard-progress').textContent = `مرحله ${wizStep+1} از ${WIZARD_STEPS.length}`;
-  document.getElementById('wiz-back').disabled = wizStep === 0;
-  document.getElementById('wiz-next').textContent = wizStep===WIZARD_STEPS.length-1?'پایان':'بعدی →';
-  renderWizardStep();
-}
+    let rows = sources.map(src=>{
+      const enabled = src.enabled===1 || src.enabled===true;
+      return '<tr>'+
+        '<td><code>'+escapeHtml(src.id)+'</code></td>'+
+        '<td>'+escapeHtml(src.platform||'—')+'</td>'+
+        '<td>'+pill(enabled?'enabled':'disabled', enabled?'green':'dim')+'</td>'+
+        '<td><button class="btn btn-sm" onclick="toggleSource(\''+escapeHtml(src.id)+'\','+(!enabled)+')">'+(enabled?'Disable':'Enable')+'</button></td>'+
+      '</tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">No sources configured.</td></tr>';
 
-function renderWizardStep() {
-  const el = document.getElementById('wizard-body');
-  const steps = [stepWelcome, stepCategory, stepChannel, stepApify, stepSources, stepTest, stepActivate];
-  el.innerHTML = (steps[wizStep] || (()=>''))();
-}
+    const yieldSorted = (yieldRes.sources||[]).sort((a,b)=>b.candidates-a.candidates);
+    const yieldRows = yieldSorted.map(y=>{
+      const q = queryByAcct[y.sourceAccount] || {};
+      const yPct = (y.publishYield!=null? (y.publishYield*100):0);
+      const tone = yPct>=20?'s-green':(yPct>=5?'s-amber':'s-red');
+      return '<tr>'+
+        '<td><code>'+escapeHtml(y.sourceAccount)+'</code></td>'+
+        '<td class="num">'+fmtNum(y.candidates)+'</td>'+
+        '<td class="num">'+fmtNum(y.aiRejected)+'</td>'+
+        '<td class="num">'+fmtNum(y.published)+'</td>'+
+        '<td class="num">'+pill(yPct.toFixed(1)+'%', tone)+'</td>'+
+        '<td class="num">'+fmtNum(q.duplicates||0)+'</td>'+
+      '</tr>';
+    }).join('') || '<tr><td colspan="6" class="empty">No yield data in window.</td></tr>';
 
-function stepWelcome() { return `
-<div class="step-title">به Content Curator خوش آمدید 🚀</div>
-<div class="step-desc">این wizard شما را در ۷ مرحله راهنمایی می‌کند تا سیستم کیورِیشن محتوای خودکار راه‌اندازی کنید.</div>
-<div class="success-box">✓ اتصال به Worker برقرار است — می‌توانیم شروع کنیم.</div>
-<div class="card">
-  <div class="fw600 mb8">چه چیزی می‌سازیم؟</div>
-  <div class="fs13 text-muted" style="line-height:2">
-    ۱. <strong>Categories</strong> — دسته‌بندی محتوا (کریپتو، دیزاین، ...)<br>
-    ۲. <strong>Channels</strong> — کانال‌های تلگرام برای هر زبان<br>
-    ۳. <strong>Apify Datasets</strong> — منابع محتوا (Twitter، Instagram، LinkedIn)<br>
-    ۴. <strong>Source Accounts</strong> — اکانت‌های whitelist<br>
-    ۵. <strong>فعال‌سازی</strong> — مرحله به مرحله تا live شدن
-  </div>
-</div>`; }
+    // source reputation (from source-performance)
+    const repSorted = (perfRes.sources||[]).sort((a,b)=>(b.reputation||0)-(a.reputation||0));
+    const repRows = repSorted.map(s=>{
+      const rep = Math.round(s.reputation||0);
+      const tone = rep>=60?'s-green':(rep>=35?'s-amber':'s-red');
+      return '<tr><td><code>'+escapeHtml(s.sourceAccount)+'</code></td>'+
+        '<td class="num">'+fmtNum(s.published)+'</td>'+
+        '<td class="num">'+((s.acceptanceRate!=null)?(s.acceptanceRate*100).toFixed(0)+'%':'—')+'</td>'+
+        '<td class="num">'+((s.dominanceShare!=null)?(s.dominanceShare*100).toFixed(0)+'%':'—')+'</td>'+
+        '<td class="num">'+pill(String(rep), tone)+'</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="empty">No reputation data.</td></tr>';
 
-function stepCategory() { return `
-<div class="step-title">ساخت اولین Category</div>
-<div class="step-desc">یک category تعریف کنید. بعداً می‌توانید category‌های بیشتر اضافه کنید.</div>
-<div class="form-group">
-  <label class="form-label">نوع محتوا *</label>
-  <select class="form-input" id="wiz-cat-preset" onchange="wizCatPreset()">
-    <option value="">انتخاب کنید...</option>
-    <option value="crypto">کریپتو و بلاکچین</option>
-    <option value="design">دیزاین و UX</option>
-    <option value="marketing">مارکتینگ و Growth</option>
-    <option value="product">پروداکت و استارتاپ</option>
-    <option value="ai">هوش مصنوعی</option>
-    <option value="custom">سفارشی</option>
-  </select>
-</div>
-<div id="wiz-cat-form" style="display:none">
-  <div class="form-row">
-    <div class="form-group"><label class="form-label">Category ID</label><input class="form-input" id="wiz-cat-id"></div>
-    <div class="form-group"><label class="form-label">نام نمایشی</label><input class="form-input" id="wiz-cat-label"></div>
-  </div>
-  <div class="form-row3">
-    <div class="form-group"><label class="form-label">Score Threshold</label><input class="form-input" id="wiz-cat-score" type="number"></div>
-    <div class="form-group"><label class="form-label">Freshness (ساعت)</label><input class="form-input" id="wiz-cat-fresh" type="number"></div>
-    <div class="form-group"><label class="form-label">Media Mode</label><select class="form-input" id="wiz-cat-media"><option value="optional">optional</option><option value="preferred">preferred</option><option value="disabled">disabled</option></select></div>
-  </div>
-  <div class="form-group">
-    <label class="form-label">زبان‌های هدف (هر زبان = یک کانال)</label>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px" id="wiz-lang-checkboxes">
-      ${LANGS.map(l=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer"><input type="checkbox" value="${l.v}" style="width:13px;height:13px"> ${l.l}</label>`).join('')}
-    </div>
-  </div>
-</div>`; }
+    host.innerHTML =
+      '<div class="card" style="margin-bottom:16px"><h3>Published volume by account · last '+WINDOW_HOURS+'h</h3>'+makeCanvas('chart-srcyield',240)+'</div>'+
+      '<div class="grid cols-2" style="margin-bottom:16px">'+
+        '<div class="card"><h3>Per-account yield <span class="faint">(candidates → published)</span></h3>'+
+          '<table><thead><tr><th>Account</th><th class="num">Cand.</th><th class="num">AI rej.</th><th class="num">Pub.</th><th class="num">Yield</th><th class="num">Dupes</th></tr></thead><tbody>'+yieldRows+'</tbody></table></div>'+
+        '<div class="card"><h3>Source reputation</h3>'+
+          '<table><thead><tr><th>Account</th><th class="num">Pub.</th><th class="num">Accept</th><th class="num">Dominance</th><th class="num">Score</th></tr></thead><tbody>'+repRows+'</tbody></table></div>'+
+      '</div>'+
+      '<div class="card"><h3>Configured sources</h3>'+
+        '<table><thead><tr><th>ID</th><th>Platform</th><th>State</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 
-const CAT_PRESETS = {
-  crypto:    {id:'crypto',    label:'کریپتو',    profile:'crypto_editorial',    score:80, fresh:24, media:'optional'},
-  design:    {id:'design',    label:'دیزاین',    profile:'design_editorial',    score:70, fresh:168,media:'preferred'},
-  marketing: {id:'marketing', label:'مارکتینگ',  profile:'marketing_editorial', score:75, fresh:72, media:'optional'},
-  product:   {id:'product',   label:'پروداکت',   profile:'product_editorial',   score:75, fresh:72, media:'optional'},
-  ai:        {id:'ai_news',   label:'هوش مصنوعی',profile:'ai_news_editorial',  score:75, fresh:48, media:'optional'},
-  custom:    {id:'',          label:'',          profile:'default_editorial',   score:75, fresh:48, media:'optional'},
+    const top = yieldSorted.slice(0,10);
+    if(top.length) queueChart(()=>drawBar('chart-srcyield', top.map(y=>y.sourceAccount), top.map(y=>y.published), {label:'published', color:'#22c55e'}));
+  },
+
+  /* ---------- COST ---------- */
+  cost: async (host)=>{
+    const [aiRes, queryRes] = await Promise.all([
+      api('/internal/report/ai-cost-by-source?hours='+WINDOW_HOURS).catch(()=>({sources:[],attributionEnabled:false})),
+      api('/internal/report/apify-query-yield?hours='+WINDOW_HOURS).catch(()=>({sources:[]})),
+    ]);
+    const aiRows = (aiRes.sources||[]).sort((a,b)=>b.totalTokens-a.totalTokens).map(r=>
+      '<tr>'+
+        '<td><code>'+escapeHtml(r.sourceAccount||'—')+'</code></td>'+
+        '<td class="num">'+fmtNum(r.scoringCalls)+'</td>'+
+        '<td class="num">'+fmtNum(r.translationCalls)+'</td>'+
+        '<td class="num">'+fmtNum(r.totalTokens)+'</td>'+
+        '<td class="num">'+fmtNum(r.published)+'</td>'+
+        '<td class="num">'+(r.tokensPerPublished!=null?fmtNum(Math.round(r.tokensPerPublished)):'—')+'</td>'+
+      '</tr>').join('') || '<tr><td colspan="6" class="empty">No AI cost data. '+(aiRes.attributionEnabled===false?'Attribution disabled (needs migration 0019 + flag).':'')+'</td></tr>';
+
+    host.innerHTML =
+      (aiRes.attributionEnabled===false? '<div class="dev-banner" style="border-color:rgba(96,165,250,.35);color:var(--blue);background:rgba(96,165,250,.08)">AI cost attribution is OFF. Enable AI_COST_ATTRIBUTION_ENABLED + migration 0019 for per-source numbers.</div>':'')+
+      '<div class="card"><h3>AI token cost by source · last '+WINDOW_HOURS+'h</h3>'+
+        '<table><thead><tr><th>Account</th><th class="num">Scoring calls</th><th class="num">Translation calls</th><th class="num">Total tokens</th><th class="num">Published</th><th class="num">Tokens/post</th></tr></thead><tbody>'+aiRows+'</tbody></table>'+
+        '<p class="faint" style="margin-top:10px">High tokens/post with low published = wasted spend. Apify charges per run even on mock — cross-check the Sources tab mock indicators.</p></div>';
+  },
+
+  /* ---------- PIPELINE HEALTH (rejection funnel) ---------- */
+  pipeline: async (host)=>{
+    const f = await api('/internal/report/funnel?hours='+WINDOW_HOURS);
+    const t = f.totals || {};
+    const stage = (label,val,tone)=>statCard(label, fmtNum(val), tone?{tone}:{});
+    const rejSection = (title, arr)=>{
+      const rows=(arr||[]).sort((a,b)=>b.count-a.count).map(r=>
+        '<tr><td>'+escapeHtml(r.reason||r.status||'—')+'</td><td class="num">'+fmtNum(r.count)+'</td></tr>').join('')
+        || '<tr><td colspan="2" class="empty">None</td></tr>';
+      return '<div class="card"><h3>'+escapeHtml(title)+'</h3><table><thead><tr><th>Reason</th><th class="num">Count</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    };
+    const r = f.rejections || {};
+    host.innerHTML =
+      '<div class="grid cols-3" style="margin-bottom:16px">'+
+        stage('Fetched', t.fetched)+ stage('New', t.new)+ stage('Duplicate', t.duplicate,'warn')+
+      '</div>'+
+      '<div class="grid cols-3" style="margin-bottom:16px">'+
+        stage('Queued', t.queued,'good')+ stage('Published', t.published,'good')+ stage('Failed', t.failed,'bad')+
+      '</div>'+
+      '<div class="card" style="margin-bottom:16px"><h3>Funnel · fetched → published</h3>'+makeCanvas('chart-funnel',200)+'</div>'+
+      '<p class="faint" style="margin-bottom:14px">Window '+WINDOW_HOURS+'h · this answers "why is the queue empty / why nothing good lands". Big drops below show where items die.</p>'+
+      '<div class="grid cols-2">'+
+        rejSection('Pre-AI gate rejections', r.preAi)+
+        rejSection('AI score rejections', r.ai)+
+        rejSection('Story / theme rejections', r.storyTheme)+
+        rejSection('Rule-gate rejections', r.ruleGate)+
+      '</div>';
+    queueChart(()=>drawFunnel('chart-funnel',[
+      {label:'Fetched',value:t.fetched||0},{label:'New',value:t.new||0},
+      {label:'Queued',value:t.queued||0},{label:'Published',value:t.published||0}
+    ]));
+  },
+
+  /* ---------- QUEUE ---------- */
+  queue: async (host)=>{
+    const [qhRes, qqRes, capRes, gapRes] = await Promise.all([
+      api('/internal/report/queue-health').catch(()=>({channels:[],thresholds:{}})),
+      api('/internal/report/queue-quality').catch(()=>({})),
+      api('/internal/report/source-cap-preview').catch(()=>({rows:[]})),
+      api('/internal/report/gap-fill-preview').catch(()=>({rows:[],movedEarlierCount:0})),
+    ]);
+    const ch = (qhRes.channels||[])[0] || {};
+    const stateTone = ch.state==='healthy'?'good':(ch.state==='lean'?'warn':'bad');
+    const qq = qqRes || {};
+    const sharePct = qq.maxSourceShareNext24h!=null ? (qq.maxSourceShareNext24h*100):null;
+
+    const capRows = (capRes.rows||[]).filter(r=>r.wouldCap>0).map(r=>
+      '<tr><td><code>'+escapeHtml(r.sourceAccount)+'</code></td><td class="num">'+fmtNum(r.published24h)+'</td><td class="num">'+fmtNum(r.cap)+'</td><td class="num">'+pill(fmtNum(r.wouldCap),'amber')+'</td></tr>'
+    ).join('') || '<tr><td colspan="4" class="empty">Nothing would be capped.</td></tr>';
+
+    host.innerHTML =
+      '<div class="grid cols-4" style="margin-bottom:16px">'+
+        statCard('Queue state', (ch.state||'—'), {tone:stateTone, sub:ch.backloaded?'backloaded':''})+
+        statCard('Scheduled next 6h', fmtNum(ch.scheduledNext6h))+
+        statCard('Scheduled next 24h', fmtNum(ch.scheduledNext24h))+
+        statCard('Pending candidates', fmtNum(ch.pendingCandidates))+
+      '</div>'+
+      '<div class="grid cols-4" style="margin-bottom:16px">'+
+        statCard('Last publish (min ago)', ch.lastPublishedAgoMin!=null?fmtNum(ch.lastPublishedAgoMin):'—')+
+        statCard('Rotation age (min)', ch.rotationAgeMin!=null?fmtNum(ch.rotationAgeMin):'—')+
+        statCard('Unique sources 6h', fmtNum(qq.uniqueSourcesNext6h))+
+        statCard('Max source share 24h', sharePct!=null?sharePct.toFixed(0)+'%':'—', {tone: sharePct>40?'warn':'good', sub: qq.topSourceNext24h||''})+
+      '</div>'+
+      '<div class="grid cols-2">'+
+        '<div class="card"><h3>Diversity guardrails</h3>'+
+          '<p class="muted">Unique stories (fingerprints) next 6h: <code>'+fmtNum(qq.uniqueFingerprintsNext6h)+'</code></p>'+
+          '<p class="muted">Top source next 24h: <code>'+escapeHtml(qq.topSourceNext24h||'—')+'</code> ('+(sharePct!=null?sharePct.toFixed(0)+'%':'—')+')</p>'+
+          '<p class="faint">High single-source share = low diversity. The fair picker + quality controller keep this in check.</p></div>'+
+        '<div class="card"><h3>Source cap preview <span class="faint">(what WOULD be capped)</span></h3>'+
+          '<table><thead><tr><th>Account</th><th class="num">Pub 24h</th><th class="num">Cap</th><th class="num">Over</th></tr></thead><tbody>'+capRows+'</tbody></table>'+
+          '<p class="faint" style="margin-top:8px">Gap-fill would move '+fmtNum(gapRes.movedEarlierCount||0)+' items earlier.</p></div>'+
+      '</div>';
+  },
+
+  /* ---------- CONTENT ---------- */
+  content: async (host)=>{
+    const [mix, recent, story] = await Promise.all([
+      api('/internal/report/topic-mix?hours='+WINDOW_HOURS).catch(()=>({byTheme:[],totalPublished:0})),
+      api('/internal/items?limit=25').catch(()=>({items:[]})),
+      api('/internal/report/story-intelligence?hours='+WINDOW_HOURS).catch(()=>null),
+    ]);
+    const total = mix.totalPublished||0;
+    const themeRows = (mix.byTheme||[]).sort((a,b)=>b.count-a.count).map(t=>{
+      const pct = total? (t.count/total*100):0;
+      return '<tr><td>'+escapeHtml(t.theme||'—')+'</td><td class="num">'+fmtNum(t.count)+'</td>'+
+        '<td class="num">'+pct.toFixed(0)+'%</td></tr>';
+    }).join('') || '<tr><td colspan="3" class="empty">No published content in window.</td></tr>';
+
+    const items = recent.items || [];
+    const itemRows = items.slice(0,25).map(it=>{
+      const st = it.status||'—';
+      const tone = st==='published'?'s-green':((st==='ai_rejected'||String(st).includes('reject'))?'s-red':'s-dim');
+      return '<tr><td>'+escapeHtml(String(it.text||'').slice(0,80))+'</td>'+
+        '<td><code>'+escapeHtml(it.source_account||'—')+'</code></td>'+
+        '<td class="num">'+fmtNum(it.ai_score)+'</td>'+
+        '<td>'+pill(st,tone.replace('s-',''))+'</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">No recent items (status=ai_selected).</td></tr>';
+
+    host.innerHTML =
+      (story? '<div class="grid cols-3" style="margin-bottom:16px">'+
+        statCard('Stories with fingerprint', fmtNum(story.totalWithFingerprint))+
+        statCard('Unstable stories', fmtNum(story.unstableLikeCount), {tone: story.unstablePct>20?'warn':'good'})+
+        statCard('Unstable %', story.unstablePct!=null?story.unstablePct.toFixed(1)+'%':'—', {tone: story.unstablePct>20?'bad':'good'})+
+      '</div>':'')+
+      '<div class="grid cols-2" style="margin-bottom:16px">'+
+        '<div class="card"><h3>Topic mix · last '+WINDOW_HOURS+'h ('+fmtNum(total)+' posts)</h3>'+makeCanvas('chart-topicmix',240)+'</div>'+
+        '<div class="card"><h3>Theme breakdown</h3>'+
+          '<table><thead><tr><th>Theme</th><th class="num">Count</th><th class="num">Share</th></tr></thead><tbody>'+themeRows+'</tbody></table></div>'+
+      '</div>'+
+      '<div class="card"><h3>Recent items</h3>'+
+        '<table><thead><tr><th>Text</th><th>Account</th><th class="num">Score</th><th>Status</th></tr></thead><tbody>'+itemRows+'</tbody></table></div>';
+    const themes = (mix.byTheme||[]).sort((a,b)=>b.count-a.count).slice(0,10);
+    if(themes.length) queueChart(()=>drawDonut('chart-topicmix', themes.map(t=>t.theme||'—'), themes.map(t=>t.count)));
+  },
+
+  /* ---------- SETTINGS (management) ---------- */
+  settings: async (host)=>{
+    const [setRes] = await Promise.all([ api('/internal/admin/settings').catch(()=>({settings:[]})) ]);
+    const settings = setRes.settings || [];
+    // Only these keys are server-side toggleable (verified ALLOWED_KEYS).
+    const TOGGLEABLE = {
+      telegram_publish_enabled:'Telegram publish',
+      apify_curation_enabled:'Apify curation',
+      apify_curation_dry_run:'Curation dry-run',
+      maintenance_mode:'Maintenance mode',
+    };
+    const byKey={}; settings.forEach(s=>byKey[s.key]=s.value);
+    const toggles = Object.keys(TOGGLEABLE).map(k=>{
+      const on = truthy(byKey[k]);
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--surface-2)">'+
+        '<div><div>'+escapeHtml(TOGGLEABLE[k])+'</div><code class="faint" style="font-size:11px">'+escapeHtml(k)+'</code></div>'+
+        '<button class="btn btn-sm '+(on?'btn-danger':'btn-primary')+'" onclick="toggleSetting(\''+k+'\','+(!on)+')">'+(on?'Turn OFF':'Turn ON')+'</button></div>';
+    }).join('');
+
+    // read-only view of all other settings
+    const otherRows = settings.filter(s=>!TOGGLEABLE[s.key]).map(s=>
+      '<tr><td><code>'+escapeHtml(s.key)+'</code></td><td>'+escapeHtml(String(s.value).slice(0,60))+'</td><td class="faint">'+fmtUtc(s.updated_at)+'</td></tr>'
+    ).join('') || '<tr><td colspan="3" class="empty">No other settings.</td></tr>';
+
+    host.innerHTML =
+      '<div class="card" style="margin-bottom:16px"><h3>Operational toggles</h3>'+
+        '<p class="faint" style="margin-top:-6px;margin-bottom:10px">Only these four are runtime-toggleable. Other env flags are deploy-time.</p>'+
+        toggles+'</div>'+
+      '<div class="card"><h3>All settings (read-only)</h3>'+
+        '<table><thead><tr><th>Key</th><th>Value</th><th>Updated</th></tr></thead><tbody>'+otherRows+'</tbody></table></div>';
+  },
+
+  /* ========== DEVELOPER ZONE ========== */
+
+  /* ---------- ROTATION RUNS (dev) ---------- */
+  runs: async (host)=>{
+    const res = await api('/internal/runs?limit=30').catch(()=>({runs:[]}));
+    const runs = res.runs || res.results || [];
+    const rows = runs.map(r=>
+      '<tr><td><code>'+escapeHtml(String(r.id).slice(0,16))+'</code></td>'+
+        '<td>'+escapeHtml(r.category_id||'—')+'</td>'+
+        '<td>'+escapeHtml(r.platform||'—')+'</td>'+
+        '<td>'+pill(r.status||'—', r.status==='completed'?'green':(r.status==='failed'?'red':'dim'))+'</td>'+
+        '<td class="num">'+fmtNum(r.items_new)+'</td>'+
+        '<td class="num">'+fmtNum(r.items_queued)+'</td>'+
+        '<td class="faint">'+fmtUtc(r.created_at)+'</td></tr>'
+    ).join('') || '<tr><td colspan="7" class="empty">No runs.</td></tr>';
+    host.innerHTML =
+      '<div style="margin-bottom:14px"><button class="btn btn-primary btn-sm" onclick="triggerCuration()">Trigger curation run</button></div>'+
+      '<div class="card"><h3>Recent rotation runs</h3><table><thead><tr><th>ID</th><th>Category</th><th>Platform</th><th>Status</th><th class="num">New</th><th class="num">Queued</th><th>When</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  },
+
+  /* ---------- LOGS & EVENTS (dev) ---------- */
+  logs: async (host)=>{
+    const res = await api('/internal/backlog/stats').catch(()=>({}));
+    host.innerHTML =
+      '<div class="card" style="margin-bottom:16px"><h3>Backlog drain stats</h3>'+
+        '<pre class="mono" style="font-size:11px;color:var(--muted);overflow:auto;max-height:300px">'+escapeHtml(JSON.stringify(res,null,2))+'</pre></div>'+
+      '<div class="card"><h3>Manual backlog drain</h3>'+
+        '<p class="faint">Force a scoring drain pass (developer action).</p>'+
+        '<button class="btn btn-sm" onclick="drainBacklog()">Run drain</button></div>';
+  },
+
+  /* ---------- RAW ITEM TRACKER (dev) ---------- */
+  tracker: async (host)=>{
+    const statuses=['ai_selected','ai_rejected','pending','duplicate','error'];
+    const sel = TRACKER_STATUS || 'ai_rejected';
+    const res = await api('/internal/items?status='+sel+'&limit=50').catch(()=>({items:[]}));
+    const items = res.items||[];
+    const rows = items.map(it=>
+      '<tr><td><code>'+escapeHtml(String(it.id).slice(0,14))+'</code></td>'+
+        '<td>'+escapeHtml(String(it.text||'').slice(0,70))+'</td>'+
+        '<td><code>'+escapeHtml(it.source_account||'—')+'</code></td>'+
+        '<td class="num">'+fmtNum(it.ai_score)+'</td>'+
+        '<td class="faint">'+escapeHtml(it.reject_reason||'—')+'</td></tr>'
+    ).join('') || '<tr><td colspan="5" class="empty">No items with status='+sel+'.</td></tr>';
+    const tabs = statuses.map(s=>'<button class="btn btn-sm'+(s===sel?' btn-primary':'')+'" onclick="setTrackerStatus(\''+s+'\')">'+s+'</button>').join(' ');
+    host.innerHTML =
+      '<div style="margin-bottom:14px;display:flex;gap:6px;flex-wrap:wrap">'+tabs+'</div>'+
+      '<div class="card"><h3>Raw items · status='+sel+'</h3><table><thead><tr><th>ID</th><th>Text</th><th>Account</th><th class="num">Score</th><th>Reject reason</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  },
+
+  /* ---------- DEBUG TOOLS (dev) ---------- */
+  debug: async (host)=>{
+    const res = await api('/internal/debug/crypto-pipeline').catch(e=>({error:e.message}));
+    host.innerHTML =
+      '<div class="card"><h3>Crypto pipeline debug snapshot</h3>'+
+        '<pre class="mono" style="font-size:11px;color:var(--muted);overflow:auto;max-height:500px">'+escapeHtml(JSON.stringify(res,null,2))+'</pre></div>';
+  },
+
 };
-function wizCatPreset() {
-  const p = CAT_PRESETS[document.getElementById('wiz-cat-preset').value];
-  if (!p) return;
-  document.getElementById('wiz-cat-form').style.display='block';
-  document.getElementById('wiz-cat-id').value=p.id;
-  document.getElementById('wiz-cat-label').value=p.label;
-  document.getElementById('wiz-cat-score').value=p.score;
-  document.getElementById('wiz-cat-fresh').value=p.fresh;
-  document.getElementById('wiz-cat-media').value=p.media;
-  document.querySelectorAll('#wiz-lang-checkboxes input').forEach(cb => cb.checked=cb.value==='fa');
+
+function flagRow(label,on){
+  return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--surface-2)">'+
+    '<span class="muted">'+escapeHtml(label)+'</span>'+pill(on?'on':'off', on?'green':'dim')+'</div>';
+}
+function indexBy(arr,key){ const m={}; (arr||[]).forEach(x=>{ m[x[key]]=x; }); return m; }
+
+function setMonitorBucket(b){ MONITOR_BUCKET=b; loadPage('monitoring'); }
+
+async function toggleSource(id,enable){
+  if(!enable && !confirm('Disable source '+id+'?\n\nIt will stop being scraped until re-enabled.')) return;
+  try{
+    await api('/internal/apify-sources/'+encodeURIComponent(id), {method:'PATCH', body:{enabled:enable}});
+    toast((enable?'Enabled ':'Disabled ')+id,'ok');
+    loadPage('sources');
+  }catch(e){ toast('Toggle failed: '+e.message,'err'); }
 }
 
-function stepChannel() { return `
-<div class="step-title">تنظیم کانال تلگرام</div>
-<div class="step-desc">برای category ساخته‌شده، یک کانال تلگرام تنظیم کنید.</div>
-<div class="info-box">
-  برای هر زبان، یک کانال جداگانه لازم دارید. مثلاً برای کریپتو به فارسی و انگلیسی → دو کانال بسازید.
-</div>
-<div class="form-group">
-  <label class="form-label">Telegram Chat ID یا @username *</label>
-  <input class="form-input" id="wiz-ch-chat" placeholder="@my_crypto_channel یا -100xxxxxxxxxx">
-  <div class="form-hint">Bot باید Admin کانال باشد با دسترسی Post Messages</div>
-</div>
-<div class="form-row">
-  <div class="form-group"><label class="form-label">زبان</label><select class="form-input" id="wiz-ch-lang">${LANGS.map(l=>`<option value="${l.v}">${l.l}</option>`).join('')}</select></div>
-  <div class="form-group"><label class="form-label">Timezone</label><select class="form-input" id="wiz-ch-tz"><option value="Asia/Tehran">ایران (Asia/Tehran)</option><option value="UTC">UTC</option><option value="Asia/Dubai">Dubai</option></select></div>
-</div>
-<div class="form-row3">
-  <div class="form-group"><label class="form-label">Max/روز</label><input class="form-input" id="wiz-ch-day" type="number" value="10"></div>
-  <div class="form-group"><label class="form-label">Max/ساعت</label><input class="form-input" id="wiz-ch-hour" type="number" value="2"></div>
-  <div class="form-group"><label class="form-label">فاصله (دقیقه)</label><input class="form-input" id="wiz-ch-gap" type="number" value="30"></div>
-</div>`; }
-
-function stepApify() { return `
-<div class="step-title">تنظیم Apify Dataset</div>
-<div class="step-desc">Dataset ID منبع محتوای خود را وارد کنید.</div>
-<div class="info-box">
-  <strong>مرحله ۱:</strong> در <a href="https://console.apify.com" target="_blank">Apify Console</a> یک Task بسازید.<br>
-  <strong>مرحله ۲:</strong> Task را یک بار دستی Run کنید.<br>
-  <strong>مرحله ۳:</strong> به Run رفته → Dataset → ID را کپی کنید.
-</div>
-<div class="form-group">
-  <label class="form-label">Platform</label>
-  <select class="form-input" id="wiz-ap-plat">
-    <option value="x">Twitter/X — kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest</option>
-    <option value="instagram">Instagram — apify/instagram-post-scraper</option>
-    <option value="linkedin">LinkedIn — harvestapi/linkedin-profile-posts</option>
-  </select>
-</div>
-<div class="form-group">
-  <label class="form-label">Dataset ID *</label>
-  <input class="form-input" id="wiz-ap-id" placeholder="abc123XYZ789...">
-</div>
-<div class="form-group">
-  <label class="form-label">Label (اختیاری)</label>
-  <input class="form-input" id="wiz-ap-label" placeholder="Crypto Twitter Accounts">
-</div>`; }
-
-function stepSources() { return `
-<div class="step-title">Source Accounts — اکانت‌های منبع</div>
-<div class="step-desc">اکانت‌هایی که AI برای آن‌ها اولویت بالاتر در نظر می‌گیرد. این مرحله اختیاری است.</div>
-<div class="info-box">هر اکانتی که در Apify Task اضافه کردید، می‌توانید اینجا هم اضافه کنید تا AI بداند از این منابع اعتماد کند.</div>
-<div id="wiz-sources-list" style="margin-bottom:12px"></div>
-<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px">
-  <div class="form-row">
-    <div class="form-group"><label class="form-label">Platform</label><select class="form-input" id="wiz-src-plat"><option value="x">Twitter/X</option><option value="instagram">Instagram</option><option value="linkedin">LinkedIn</option></select></div>
-    <div class="form-group"><label class="form-label">Handle (بدون @)</label><input class="form-input" id="wiz-src-handle" placeholder="coindesk"></div>
-  </div>
-  <div class="form-row">
-    <div class="form-group"><label class="form-label">Trust Level</label><select class="form-input" id="wiz-src-trust"><option value="high">high</option><option value="medium" selected>medium</option><option value="low">low</option></select></div>
-    <div class="form-group" style="display:flex;align-items:flex-end"><button class="btn btn-green" onclick="wizAddSrc()">+ اضافه کردن</button></div>
-  </div>
-</div>`; }
-
-let wizSources = [];
-function wizAddSrc() {
-  const plat = document.getElementById('wiz-src-plat').value;
-  const handle = document.getElementById('wiz-src-handle').value.trim();
-  const trust = document.getElementById('wiz-src-trust').value;
-  if (!handle) return;
-  wizSources.push({platform:plat, account_handle:handle, trust_level:trust});
-  document.getElementById('wiz-src-handle').value='';
-  const list = document.getElementById('wiz-sources-list');
-  if (list) list.innerHTML = wizSources.map((s,i)=>`<div class="row"><span class="tag tag-blue">${s.platform}</span><span class="flex1 mono">@${s.account_handle}</span><span class="tag tag-${s.trust_level==='high'?'green':'amber'}">${s.trust_level}</span><button class="btn-sm btn-red" style="font-size:10px" onclick="wizSources.splice(${i},1);wizAddSrc()">×</button></div>`).join('');
-}
-
-function stepTest() { return `
-<div class="step-title">تست سیستم</div>
-<div class="step-desc">قبل از فعال‌سازی، یک dry-run اجرا کنید تا مطمئن شوید همه چیز درست است.</div>
-<div id="wiz-test-status">
-  <button class="btn btn-primary" onclick="runWizTest()">▶ اجرای dry-run test</button>
-</div>`; }
-
-async function runWizTest() {
-  document.getElementById('wiz-test-status').innerHTML = '<div class="loading"><span class="spin"></span>در حال اجرا…</div>';
-  try {
-    const r = await api('/internal/curation/trigger', {method:'POST', body:JSON.stringify({dryRun:true, force:true})});
-    const cats = r.runs||[];
-    document.getElementById('wiz-test-status').innerHTML = `
-    <div class="success-box">✓ Dry-run با موفقیت اجرا شد!</div>
-    ${cats.map(c=>`
-    <div class="card">
-      <div class="fw600 mb8">${c.categoryId} / ${c.platform}</div>
-      <div class="fs12 text-muted">fetched: ${c.itemsFetched} · new: ${c.itemsNew} · ai_selected: ${c.itemsAiSelected} · ok: ${c.ok?'✓':'✗'}</div>
-      ${c.errors?.length?`<div class="text-red fs12 mt8">${c.errors.join(', ')}</div>`:''}
-    </div>`).join('')}`;
-  } catch(e) {
-    document.getElementById('wiz-test-status').innerHTML = `<div class="alert alert-red">✗ خطا: ${e.message}</div><button class="btn btn-primary" onclick="runWizTest()">تلاش مجدد</button>`;
+/* Settings toggle — only ALLOWED_KEYS accepted server-side; value is bool string */
+async function toggleSetting(key,enable){
+  // Guard the high-impact flags with a confirmation.
+  const HIGH_IMPACT = { telegram_publish_enabled:'live Telegram publishing', maintenance_mode:'maintenance mode' };
+  if(HIGH_IMPACT[key]){
+    const verb = enable?'ENABLE':'DISABLE';
+    if(!confirm(verb+' '+HIGH_IMPACT[key]+'?\n\nThis affects the live channel. Continue?')) return;
   }
+  try{
+    await api('/internal/admin/toggle', {method:'POST', body:{key, value:String(enable)}});
+    toast(key+' → '+(enable?'on':'off'),'ok');
+    loadPills();
+    loadPage('settings');
+  }catch(e){ toast('Toggle failed: '+e.message,'err'); }
 }
 
-function stepActivate() { return `
-<div class="step-title">فعال‌سازی 🎉</div>
-<div class="step-desc">همه چیز آماده است. سیستم را مرحله به مرحله فعال کنید.</div>
-<div class="warn-box">⚠ کانال را ابتدا روی یک کانال private test تست کنید. بعد از اطمینان، کانال عمومی را فعال کنید.</div>
-<div class="card">
-  <div class="fw600 mb12">مرحله فعال‌سازی:</div>
-  <div class="toggle-wrap">
-    <div class="toggle-info"><div class="t-name">۱. Apify Curation</div><div class="t-desc">pipeline را فعال کنید</div></div>
-    <button class="btn btn-green" onclick="wizActivate('apify_curation_enabled','true',this)">فعال کردن</button>
-  </div>
-  <div class="toggle-wrap">
-    <div class="toggle-info"><div class="t-name">۲. Dry-run را خاموش کنید</div><div class="t-desc">آیتم‌ها وارد queue می‌شوند</div></div>
-    <button class="btn btn-amber" onclick="wizActivate('apify_curation_dry_run','false',this)">خاموش کردن dry-run</button>
-  </div>
-  <div class="toggle-wrap">
-    <div class="toggle-info"><div class="t-name">۳. Telegram Publish</div><div class="t-desc">ارسال واقعی به کانال test</div></div>
-    <button class="btn btn-green" onclick="wizActivate('telegram_publish_enabled','true',this)">فعال کردن publish</button>
-  </div>
-</div>
-<div class="success-box mt16">
-  بعد از فعال‌سازی، به صفحه <strong>Channels</strong> بروید و کانال test را فعال کنید.<br>
-  بعد از تأیید، کانال‌های عمومی را یک به یک فعال کنید.
-</div>`; }
-
-async function wizActivate(key, value, btn) {
-  await api('/internal/admin/toggle', {method:'POST', body:JSON.stringify({key, value})});
-  btn.textContent='✓ انجام شد'; btn.disabled=true; btn.className='btn btn-primary';
-  toast(`${key}: ${value}`); loadPills();
+async function triggerCuration(){
+  try{ await api('/internal/curation/trigger', {method:'POST', body:{}}); toast('Curation triggered','ok'); setTimeout(()=>loadPage('runs'),1500); }
+  catch(e){ toast('Trigger failed: '+e.message,'err'); }
 }
+async function drainBacklog(){
+  try{ const r=await api('/internal/backlog/drain', {method:'POST', body:{}}); toast('Drain done','ok'); loadPage('logs'); }
+  catch(e){ toast('Drain failed: '+e.message,'err'); }
+}
+let TRACKER_STATUS = 'ai_rejected';
+function setTrackerStatus(s){ TRACKER_STATUS = s; loadPage('tracker'); }
 
-async function wizardNext() {
-  // Save data for each step before proceeding
-  try {
-    if (wizStep === 1) await wizSaveCat();
-    if (wizStep === 2) await wizSaveCh();
-    if (wizStep === 3) await wizSaveApify();
-    if (wizStep === 4) await wizSaveSources();
-  } catch(e) { toast(e.message,'err'); return; }
-  if (wizStep === WIZARD_STEPS.length - 1) {
-    document.getElementById('wizard').classList.remove('open');
-    loadPage('overview'); loadPills();
-    return;
+/* =========================================================================
+   TOPBAR PILLS — control flags (read-only display)
+   ========================================================================= */
+async function loadPills(){
+  try{
+    const s = await api('/internal/admin/settings');
+    const get=(k)=> (s.settings? s.settings[k] : s[k]);
+    setPill('pill-curation','curation', truthy(get('APIFY_CURATION_ENABLED')));
+    setPill('pill-publish','publish', truthy(get('TELEGRAM_FINAL_PUBLISH_ENABLED')));
+    setPill('pill-scheduler','scheduler', truthy(get('TELEGRAM_PUBLISH_SCHEDULER_ENABLED')));
+  }catch(e){ /* pills are non-critical */ }
+}
+function truthy(v){ return v===true || v==='true' || v===1 || v==='1'; }
+function setPill(id,label,on){ const p=el(id); if(!p) return; p.textContent=label+' '+(on?'on':'off'); p.className='pill '+(on?'on':'off'); }
+
+/* =========================================================================
+   POLLING — refresh active page; pause when tab hidden
+   ========================================================================= */
+function startPolling(){
+  if(POLL_TIMER) clearInterval(POLL_TIMER);
+  POLL_TIMER = setInterval(()=>{
+    if(document.hidden) return;
+    loadPills();
+    // Don't auto-refresh heavy developer tabs (debug snapshot, raw logs) — only
+    // refresh lightweight management views on the timer.
+    if(!DEV_PAGE_IDS.includes(CURRENT_PAGE)) loadPage(CURRENT_PAGE);
+  }, 45000);
+}
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ loadPills(); } });
+
+function onWindowChange(){ WINDOW_HOURS = parseInt(el('window-select').value,10)||24; loadPage(CURRENT_PAGE); }
+
+/* =========================================================================
+   BOOT
+   ========================================================================= */
+async function boot(){
+  el('setup-screen').style.display='none';
+  el('app').style.display='block';
+  renderNav();
+  try{
+    const h = await api('/health');
+    el('env-pill').textContent = (h.environment || h.env || 'connected');
+  }catch(e){
+    el('env-pill').textContent='connection error';
+    toast('Cannot reach API. Check URL/secret.','err');
   }
-  wizStep++; renderWizard();
-}
-function wizardBack() { if(wizStep>0) { wizStep--; renderWizard(); } }
-
-async function wizSaveCat() {
-  const id = document.getElementById('wiz-cat-id')?.value.trim();
-  if (!id) return; // اختیاری — اگر skip کردند
-  const langs = [...document.querySelectorAll('#wiz-lang-checkboxes input:checked')].map(cb=>cb.value);
-  const body = {id, label:document.getElementById('wiz-cat-label').value.trim(), prompt_profile:CAT_PRESETS[document.getElementById('wiz-cat-preset')?.value]?.profile||'default_editorial', score_threshold:+document.getElementById('wiz-cat-score').value, freshness_hours:+document.getElementById('wiz-cat-fresh').value, media_mode:document.getElementById('wiz-cat-media').value, language_targets:JSON.stringify(langs)};
-  wizData.categoryId = id;
-  try { await api('/internal/categories', {method:'POST', body:JSON.stringify(body)}); } catch(e) { /* might already exist */ }
+  loadPills();
+  nav('monitoring');
+  startPolling();
 }
 
-async function wizSaveCh() {
-  const chat = document.getElementById('wiz-ch-chat')?.value.trim();
-  if (!chat || !wizData.categoryId) return;
-  const lang = document.getElementById('wiz-ch-lang').value;
-  const body = {id:`${wizData.categoryId}_${lang}`, category_id:wizData.categoryId, telegram_chat_id:chat, language:lang, timezone:document.getElementById('wiz-ch-tz').value, max_per_day:+document.getElementById('wiz-ch-day').value, max_per_hour:+document.getElementById('wiz-ch-hour').value, min_gap_minutes:+document.getElementById('wiz-ch-gap').value, allowed_windows:'["08:00-23:59"]', blocked_windows:'["00:00-08:00"]'};
-  try { await api('/internal/channels', {method:'POST', body:JSON.stringify(body)}); } catch(e) {}
-}
-
-async function wizSaveApify() {
-  const did = document.getElementById('wiz-ap-id')?.value.trim();
-  if (!did || !wizData.categoryId) return;
-  const body = {category_id:wizData.categoryId, platform:document.getElementById('wiz-ap-plat').value, apify_dataset_id:did, label:document.getElementById('wiz-ap-label').value.trim()};
-  try { await api('/internal/apify-sources', {method:'POST', body:JSON.stringify(body)}); } catch(e) {}
-}
-
-async function wizSaveSources() {
-  for (const s of wizSources) {
-    if (wizData.categoryId) {
-      try { await api('/internal/source-accounts', {method:'POST', body:JSON.stringify({...s, category_id:wizData.categoryId})}); } catch(e) {}
-    }
-  }
-  wizSources = [];
-}
-
-// ══ Helpers ════════════════════════════════════════════════════
-function setChecked(id, value) { const el = document.getElementById(id); if (el) el.checked = !!value; }
-function isChecked(id) { const el = document.getElementById(id); return !!(el && el.checked); }
-function safeHref(url) { try { const u = new URL(String(url||'')); return ['http:','https:'].includes(u.protocol) ? u.toString() : ''; } catch { return ''; } }
-function fillSelect(id, items, valKey, labelFn, selectedVal) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.innerHTML = items.map(i=>`<option value="${i[valKey]}" ${i[valKey]===selectedVal?'selected':''}>${labelFn(i)}</option>`).join('');
-}
-function statusTag(s) { return {completed:'tag-green',dry_run:'tag-blue',failed:'tag-red',processing:'tag-amber',publishing:'tag-amber',published:'tag-green',scheduled:'tag-blue',retry:'tag-amber',cancelled:'tag-dim'}[s]||'tag-dim'; }
-function fmtTime(ts) { if(!ts) return '—'; return new Date(Number(ts)*1000).toLocaleTimeString('fa',{hour:'2-digit',minute:'2-digit'}); }
-function fmtDate(s) { if(!s) return '—'; return new Date(typeof s==='number'?s*1000:s).toLocaleString('fa',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+(function init(){
+  const url=getApiUrl(), secret=getSecret();
+  if(url){ el('setup-url').value=url; }
+  if(url && secret){ boot(); }
+  else { el('setup-screen').style.display='flex'; }
+})();
 </script>
 </body>
 </html>
