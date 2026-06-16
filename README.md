@@ -39,10 +39,10 @@
 - [GitHub Actions](#github-actions)
 - [Validation & Quality Gates](#validation-quality-gates)
 - [Release Hardening & Production Checklist](#release-hardening-production-checklist)
-- [Current Limitations & Next Improvements](#current-limitations-next-improvements)
+- [Operational Limitations & Monitoring Notes](#operational-limitations-monitoring-notes)
 - [Troubleshooting](#troubleshooting)
 - [Monthly Cost Estimate](#monthly-cost-estimate)
-- [Documentation & Release Hygiene](#documentation-release-hygiene-1)
+- [Documentation & Release Hygiene](#documentation-release-hygiene)
 
 ---
 
@@ -608,7 +608,7 @@ curl -X POST https://your-worker.workers.dev/internal/categories \
   -d '{
     "id": "health",
     "label": "Health & Wellness",
-    "prompt_profile": "default_editorial",
+    "prompt_profile": "default",
     "custom_prompt": "Curate health content for a general audience. Focus on evidence-based medicine. NEVER provide medical advice. Risk flags: misinformation, pseudoscience, dangerous_advice, unverified_claims.",
     "score_threshold": 80,
     "freshness_hours": 48,
@@ -620,7 +620,7 @@ curl -X POST https://your-worker.workers.dev/internal/categories \
 **Via SQL migration:**
 ```sql
 INSERT INTO categories (id, label, prompt_profile, custom_prompt, score_threshold, freshness_hours, media_mode, language_targets, enabled)
-VALUES ('health', 'Health', 'default_editorial', 'Your custom prompt here...', 80, 48, 'preferred', '["en","fa"]', 1);
+VALUES ('health', 'Health', 'default', 'Your custom prompt here...', 80, 48, 'preferred', '["en","fa"]', 1);
 ```
 
 If `custom_prompt` is set, it overrides `prompt_profile` entirely. This lets you create any number of categories with precise AI behavior without touching the codebase.
@@ -629,14 +629,16 @@ If `custom_prompt` is set, it overrides `prompt_profile` entirely. This lets you
 
 | Profile | Use case |
 |---------|---------|
-| `default_editorial` | General audience content |
-| `crypto_editorial` | Crypto/blockchain — strict risk flags |
-| `design_editorial` | UX/design/product teams |
-| `marketing_editorial` | Growth/marketing strategy |
-| `product_editorial` | Product managers and founders |
-| `ai_news_editorial` | AI/ML practitioners |
-| `branding_editorial` | Brand strategy — trademark/attribution safety |
-| `finance_editorial` | Finance — investment advice detection, disclaimers |
+| `default` | General-audience fallback used when a category has no dedicated profile. |
+| `crypto` | Crypto/blockchain — strict risk flags, anti-pump policy, Whale Alert throttle (active pilot). |
+| `ai` | AI/ML news and practitioners. |
+| `gaming` | Gaming news and culture. |
+| `movie` | Film/TV news. |
+
+Each profile lives in `apps/worker-api/src/categories/<name>/` as `policy.ts`,
+`prompts.ts`, and `sources.ts`, and is registered in `categories/registry.ts`.
+A category row in D1 references a profile by id; if no dedicated profile exists,
+`default` is used.
 
 ### Adding a channel for a new language
 
@@ -684,62 +686,131 @@ The `custom_instructions` field is injected into the translation prompt, giving 
 content-curator/
 ├── apps/
 │   ├── worker-api/
-│   │   └── src/
-│   │       ├── index.ts                    # Worker entry — routing, cron, maintenance mode
-│   │       ├── types.ts                    # Shared TypeScript interfaces
-│   │       ├── routes/
-│   │       │   ├── admin.ts                # /internal/* endpoints
-│   │       │   ├── apify-webhook.ts        # POST /webhook/apify
-│   │       │   └── health.ts               # GET /health, /status
-│   │       └── services/
-│   │           ├── ai-gate.ts              # Claude scoring + Gemini/OpenAI translation
-│   │           ├── apify-client.ts         # Fetch + normalize (X, Instagram, LinkedIn, RSS)
-│   │           ├── curation-orchestrator.ts# Main pipeline + cron publisher
-│   │           ├── dedupe.ts               # 3-key deduplication, configurable window
-│   │           ├── media-processor.ts      # Download, validate, R2 store, FormData builder
-│   │           ├── media-resolver.ts       # Method selection (sendPhoto/sendVideo/sendMediaGroup)
-│   │           ├── rule-gate.ts            # Timezone-aware scheduling + window enforcement
-│   │           └── telegram-publisher.ts   # Telegram Bot API (JSON + binary multipart)
+│   │   ├── src/
+│   │   │   ├── index.ts                 # Worker entry: HTTP routing + cron scheduled() + maintenance gate
+│   │   │   ├── types.ts                 # Shared TypeScript interfaces (Env, rows, normalized items)
+│   │   │   ├── routes/
+│   │   │   │   ├── admin.ts             # All /internal/* endpoints (CRUD, control, reports)
+│   │   │   │   ├── apify-webhook.ts     # POST /webhook/apify (dataset ingestion)
+│   │   │   │   ├── health.ts            # GET /health, GET /status
+│   │   │   │   └── telegram-admin-bot.ts# POST /telegram/admin/webhook (scoped admin bot)
+│   │   │   ├── categories/              # Per-category policy/prompts/sources (see below)
+│   │   │   │   ├── registry.ts          # Maps category id → policy + source strategy
+│   │   │   │   ├── types.ts             # CategoryPolicy / CategorySourceStrategy interfaces
+│   │   │   │   ├── _template/           # Scaffolding for a new category
+│   │   │   │   ├── default/             # Fallback policy/prompts/sources
+│   │   │   │   ├── crypto/              # Active pilot category
+│   │   │   │   ├── ai/  gaming/  movie/ # Additional category profiles
+│   │   │   └── services/                # 30 services (see tables below)
+│   │   ├── package.json
+│   │   └── tsconfig.json
 │   └── dashboard/
-│       ├── index.html                      # Admin dashboard SPA
-│       └── config.js                       # Dashboard configuration
-├── migrations/
-│   ├── 0001_core.sql                       # Schema: all core tables
-│   ├── 0002_seed_categories.sql            # Seed: crypto, design, marketing, product, ai_news
-│   ├── 0003_branding_finance.sql           # Seed: branding, finance categories
-│   ├── 0004_media_processing.sql           # Alter: media lifecycle, category/channel extensions
-│   └── 0005_thumbnail_urls.sql             # Alter: thumbnail_urls in publish_queue
-├── wrangler.toml                           # Cloudflare config + all env vars
-├── package.json
-└── tsconfig.json
+│       ├── index.html                   # Standalone ops console (management + developer layers)
+│       └── config.js                    # Worker URL (secret is entered in-browser, not stored here)
+├── migrations/                          # 0001–0020 D1 SQL migrations (numbered, append-only)
+├── scripts/
+│   ├── configure-telegram-admin-bot.sh  # Registers the admin bot webhook + secret
+│   ├── phase11-validation.mjs           # Pre-release validation checks
+│   └── release-hardening-check.mjs      # Release hardening gate
+├── tests/                               # 65 Vitest files (gates, rotation, reports, bot, media)
+├── docs/                                # Phase design notes + implementation summaries
+├── cost-monitor.sql                     # Ad-hoc D1 cost queries
+├── source-health-check.sql              # Ad-hoc D1 source mock%/yield queries
+├── wrangler.toml                        # Cloudflare config + all env vars + cron
+├── package.json                         # Root workspace scripts (validate = typecheck+test+build)
+└── pnpm-workspace.yaml
 ```
 
-
-### Current important Worker services
-
-The original structure above is still accurate, but production now relies on several additional services that are important enough to call out explicitly.
+### Services — pipeline core
 
 | File | Purpose |
 |---|---|
-| `apps/worker-api/src/services/candidate-queue.ts` | Durable AI candidate backlog, status transitions, stale recovery, max attempts, backlog stats. |
-| `apps/worker-api/src/services/backlog-drain.ts` | Bounded backlog scoring, pre-AI policy filtering, translation, rule gate, queue creation. |
-| `apps/worker-api/src/services/fair-source-picker.ts` | Round-robin source-account candidate selection for AI scoring diversity. |
-| `apps/worker-api/src/services/apify-rotation-runner.ts` | Worker-side controlled Apify task rotation, cohort planning, query overrides, rotation bucket claiming. |
-| `apps/worker-api/src/services/content-policy.ts` | Editorial reject policy, crypto pre-AI filter, semantic/run-level duplicate rejection, Whale Alert rules. |
-| `apps/worker-api/src/services/story-dedupe.ts` | Recent story/topic dedupe for channels using topic fingerprints. |
-| `apps/worker-api/src/services/market-snapshot.ts` | Direct market snapshot publishing for configured slots. |
-| `apps/worker-api/src/services/operational-report.ts` | Read-only operational reporting. |
-| `apps/worker-api/src/services/observability-reports.ts` | Source yield, AI cost by source, queue quality, topic mix, cap/gap previews. |
-| `apps/worker-api/src/services/queue-health.ts` | Queue health state (healthy/lean/starving) and starving-refill logic. |
-| `apps/worker-api/src/services/source-reputation.ts` | Per-source reputation scoring (accept rate, dominance, 0–100). |
-| `apps/worker-api/src/services/source-performance.ts` | Source performance report + per-bucket published breakdown. |
-| `apps/worker-api/src/routes/telegram-admin-bot.ts` | Telegram admin bot webhook route, protected separately from public health endpoints. |
+| `curation-orchestrator.ts` | Main pipeline coordinator + cron publisher; ties ingestion → scoring → gates → queue. |
+| `apify-client.ts` | Fetch + defensive normalization of Apify actor output (X, Instagram, LinkedIn, RSS); mock detection. |
+| `apify-rotation-runner.ts` | Worker-side controlled Apify task rotation: cohort planning, `searchTerms` query overrides, bucket claiming, adaptive attempts. |
+| `ai-gate.ts` | Two stages: Claude scoring (0–100) and Gemini/OpenAI translation, with budgets and batching. |
+| `dedupe.ts` | Three-key deduplication (post ID, URL hash, text hash) over a configurable window. |
+| `candidate-queue.ts` | Durable AI candidate backlog: status transitions, stale recovery, max attempts, backlog stats. |
+| `backlog-drain.ts` | Bounded backlog scoring: pre-AI policy filter → score → translate → rule gate → queue creation. |
+| `fair-source-picker.ts` | Round-robin source/account candidate selection so AI scoring stays diverse. |
+| `rule-gate.ts` | Deterministic gate: timezone-aware windows, daily/hourly quota, min gap, computes `scheduled_at`. |
 
-### Current migration line
+### Services — editorial, story & quality gates
 
-The early migration list above documents the initial schema. The current repository has later migrations (through `0020`) for media observability, Apify extraction diagnostics, AI usage, formatting/editorial controls, Apify task binding, AI candidate backlog (`0014`/`0015`), market-trending sources (`0016`/`0017`), future-disabled category seeds (`0018`), story intelligence and AI cost attribution (`0019`), and crypto discovery source seeds (`0020`).
+| File | Purpose |
+|---|---|
+| `content-policy.ts` | Editorial reject policy, crypto pre-AI filter, semantic/run-level duplicate rejection, Whale Alert rules. |
+| `story-dedupe.ts` | Recent story/topic dedupe per channel via topic fingerprints. |
+| `story-intelligence.ts` | Story clustering and stability scoring (observe/reject unstable follow-ups). |
+| `story-quality-guard.ts` | Caption quality decisions + source/audience reject reasons. |
+| `audience-profile.ts` | Locale/audience-aware selection guidance for the AI. |
 
-Do not edit already-applied migrations. Add a new numbered migration for future schema changes and verify remote D1 before applying it.
+### Services — media
+
+| File | Purpose |
+|---|---|
+| `media-processor.ts` | Download, validate, optionally R2-store media; builds multipart FormData for binary upload. |
+| `media-resolver.ts` | Picks the send method (sendPhoto / sendVideo / sendMediaGroup). |
+| `video-transcoder.ts` | Optional Cloudflare Stream fallback for video compatibility. |
+| `stream-config.ts` | Centralized Cloudflare Stream safety gate. |
+
+### Services — publishing & formatting
+
+| File | Purpose |
+|---|---|
+| `telegram-publisher.ts` | Telegram Bot API client with a full fallback chain (JSON + binary multipart). |
+| `telegram-message-formatter.ts` | Builds Telegram-safe HTML bodies, source links, signatures. |
+| `market-snapshot.ts` | Direct market-snapshot composition + publishing for configured slots. |
+
+### Services — controllers, observability & reporting
+
+| File | Purpose |
+|---|---|
+| `queue-health.ts` | Read-only queue-health telemetry + pure decision helpers (healthy/lean/starving). |
+| `source-reputation.ts` | Per-source reputation (accept rate, dominance, 0–100) + pure weighting helper. |
+| `runtime-config.ts` | Centralized effective runtime switches (reads settings + env). |
+| `run-events.ts` | Run-level and per-item event logging. |
+| `operational-report.ts` | Operational report consumed by the dashboard and admin bot. |
+| `observability-reports.ts` | Source yield, AI cost by source, queue quality, topic mix, cap/gap previews. |
+| `pipeline-health-report.ts` | Single consolidated pipeline-health report (replaces ad-hoc debug queries). |
+| `rejection-funnel.ts` | "Where are candidates lost?" rejection funnel. |
+| `report-message-formatter.ts` | Formats operational report sections for Telegram. |
+
+### Categories
+
+Each category folder provides three files — `policy.ts` (scoring thresholds and
+reject rules), `prompts.ts` (AI scoring/translation prompts), and `sources.ts`
+(source cohorts and rotation strategy) — wired in `categories/registry.ts`. The
+shipped profiles are `default` (fallback), `crypto` (active pilot), and `ai`,
+`gaming`, `movie`. Copy `_template/` to add a new one. See
+[Category & Language System](#category-language-system).
+
+### D1 tables
+
+`categories`, `channels`, `source_accounts`, `apify_sources`, `discovery_runs`,
+`discovery_items`, `discovery_media`, `publish_queue`, `dedupe_keys`,
+`ai_usage`, `ai_usage_attribution`, `ai_candidate_queue`, `run_events`,
+`run_item_events`, `story_intelligence_events`, `settings`.
+
+### Migrations (append-only, `0001`–`0020`)
+
+| Range | Adds |
+|---|---|
+| `0001`–`0003` | Core schema (categories, channels, sources, runs, items, media, queue, dedupe) + category/channel seeds. |
+| `0004`–`0006` | Media processing lifecycle, thumbnail URLs, media observability. |
+| `0007` | Apify extraction diagnostics on `discovery_items`. |
+| `0008` | `ai_usage` table. |
+| `0009`–`0011` | Message-format controls (channels), editorial controls (categories), content-filter controls (items). |
+| `0012` | Apify source ↔ task binding. |
+| `0013` | `run_events` + `run_item_events`. |
+| `0014`–`0015` | AI candidate backlog (`ai_candidate_queue`) + `publish_queue.candidate_id`. |
+| `0016`–`0017` | Market-trending source seeds (text + media). |
+| `0018` | Future-disabled category seeds. |
+| `0019` | Story intelligence + AI cost attribution (`story_intelligence_events`, `ai_usage_attribution`). |
+| `0020` | Crypto discovery source seeds. |
+
+> Migrations are append-only. Never edit an already-applied migration — add a new
+> numbered file and verify remote D1 before applying.
 
 ---
 
@@ -1237,17 +1308,18 @@ Not used for: translation (3× more expensive per output token).
 **Approximate cost:** ~$0.25 per 1M input tokens, ~$1.25 per 1M output tokens.
 Per run (50 items): ~$0.005–$0.02.
 
-**Score threshold by category:**
+**Score threshold by category** (guidance — actual values live on each category row in D1):
 
-| Category | Recommended threshold | Freshness |
-|----------|-----------------------|-----------|
+| Category | Suggested threshold | Freshness |
+|----------|---------------------|-----------|
 | crypto | 80 | 24h |
-| finance | 80 | 24h |
-| ai_news | 75 | 48h |
-| marketing | 75 | 72h |
-| product | 75 | 72h |
-| branding | 75 | 72h |
-| design | 70 | 168h (7 days) |
+| ai | 75 | 48h |
+| gaming | 70 | 72h |
+| movie | 70 | 72h |
+| (default) | 75 | 48h |
+
+Stricter, faster-moving topics (crypto) use a higher threshold and shorter
+freshness window; slower topics tolerate a lower threshold and longer window.
 
 ### Translation — Gemini Flash-Lite (recommended)
 
@@ -1483,29 +1555,6 @@ Do not paste secrets into chat or logs. For local checks, load `.dev.vars.produc
 
 ---
 
-## Documentation & Release Hygiene
-
-The README is the durable source of truth for architecture, setup, configuration, API usage, operations, and troubleshooting.
-
-`RELEASE_CHECKLIST.md` should remain separate because it is an operational deployment gate, not general product documentation.
-
-Historical planning documents can be useful while a feature is still being designed, but they should not remain as competing architecture references after the implementation has landed. If a planning document is fully represented in the README and no longer matches production, archive or delete it in a separate documentation-cleanup commit.
-
-Recommended cleanup policy:
-
-```text
-Keep:
-  README.md
-  RELEASE_CHECKLIST.md
-
-Review separately before deleting:
-  docs/ai-candidate-backlog-and-fair-source-distribution.md
-  docs/market-trending-source-rollout.md
-  RELEASE_NOTES_NEXT.md
-```
-
-Do not mix documentation deletion with runtime code changes. Keep those commits separate so review does not become archaeology with syntax highlighting.
-
 ## Dashboard
 
 The static dashboard in `apps/dashboard/` (a standalone `index.html` + `config.js`,
@@ -1592,10 +1641,8 @@ Settings / Help. It reads the operational report and renders text + keyboards.
   as multiple messages), `sendChatAction: typing` precedes heavy report builds,
   and Telegram 429 responses are retried honoring `retry_after`.
 
-> The bot is multi-category and multi-channel aware via the scope picker. Per the
-> roadmap, planned UX upgrades include inline-keyboard navigation with
-> edit-in-place, a manager "Glance" screen, a clearly separated developer
-> segment, and per-channel language/timezone-aware rendering.
+The bot is multi-category and multi-channel aware via the scope picker: the same
+console serves every category and channel, rendering each in its own scope.
 
 ---
 
@@ -1902,9 +1949,9 @@ Dashboard styling and structure are intentionally not changed by release hardeni
 
 <!-- README-PRODUCTION-OPS-ADDENDUM:START -->
 
-## Current Limitations & Next Improvements
+## Operational Limitations & Monitoring Notes
 
-The current production system is stable enough to run the crypto pilot, but the following areas still need measurement or future tuning:
+The current production system is stable enough to run the crypto pilot, but the following operational areas need ongoing measurement:
 
 - Natural Apify runs must be measured over several rotation windows to confirm whether they can supply enough fresh candidates for 72 posts/day.
 - Duplicate rate can still make scrape volume look healthy while producing too few new candidates.
