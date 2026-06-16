@@ -329,6 +329,16 @@ function buildProfileSearchTerms(
   });
 }
 
+function simplifyKaitoDiagnosticInput(input: Record<string, unknown>, searchTerms: string[]): Record<string, unknown> {
+  const next = { ...input };
+  delete next.card_name;
+  next.searchTerms = searchTerms
+    .map(term => String(term ?? '').trim())
+    .filter(Boolean);
+  next.since_time = '';
+  return next;
+}
+
 function buildCoreNewsTopicGate(): string {
   return withGenericLowQualityExclusions([
     '(',
@@ -357,14 +367,19 @@ function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, m
   const index = positiveModulo(bucket, cohorts.length);
   const accounts = cohorts[index] ?? cohorts[0]!;
 
-  const searchTerms = buildCleanProfileSearchTerms(accounts, mode);
+  const isDiagnosticMarketMedia = source.id === 'src_market_trending_x_media';
+  const searchTerms = isDiagnosticMarketMedia
+    ? buildProfileSearchTerms(accounts, mode)
+    : buildCleanProfileSearchTerms(accounts, mode);
 
   return {
     source,
     cohortName: `market_impact_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(searchTerms, maxItems),
+    inputOverride: isDiagnosticMarketMedia
+      ? simplifyKaitoDiagnosticInput(buildSearchInputOverride(searchTerms, maxItems), searchTerms)
+      : buildSearchInputOverride(searchTerms, maxItems),
   };
 }
 
