@@ -19,26 +19,22 @@ export const CRYPTO_ROTATION_SOURCE_IDS = new Set([
 ]);
 
 const NEWS_COHORTS = [
-  ['CoinDesk', 'Cointelegraph'],
-  ['TheBlock__', 'WuBlockchain'],
-  ['decryptmedia', 'BitcoinMagazine'],
-  ['DefiantNews', 'DLNewsInfo'],
-  ['WatcherGuru', 'News_Of_Alpha'],
+  ['WatcherGuru', 'tier10k', 'WuBlockchain'],
+  ['CoinDesk', 'TheBlock__', 'Cointelegraph'],
+  ['decryptmedia', 'BitcoinMagazine', 'News_Of_Alpha'],
 ];
 
 const VOICES_COHORTS = [
-  ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
-  ['lookonchain', 'glassnode', 'cryptoquant_com'],
-  ['Pentosh1', 'CryptoCred', 'CryptoHayes', 'RaoulGMI'],
-  ['DefiLlama', 'BanklessHQ', 'TheDefiantNews'],
-  ['VitalikButerin', 'ethereum'],
-  ['solana', 'base', 'chainlink'],
-  ['lookonchain', 'glassnode', 'cryptoquant_com'],
-  ['WatcherGuru', 'Tree_of_Alpha', 'News_Of_Alpha'],
+  ['EricBalchunas', 'JSeyff', 'FarsideUK', 'BitMEXResearch'],
+  ['lookonchain', 'spotonchain', 'arkham'],
+  ['glassnode', 'cryptoquant_com', 'DefiLlama'],
+  ['coinglass_com', 'GreeksLive'],
+  ['zachxbt', 'PeckShieldAlert', 'CertiKAlert', 'SlowMist_Team'],
 ];
 
 const SECURITY_ALERT_COHORTS = [
-  ['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts'],
+  ['zachxbt', 'PeckShieldAlert', 'CertiKAlert'],
+  ['SlowMist_Team', 'CyversAlerts'],
 ];
 
 const TOKEN_PROJECT_COHORTS = [
@@ -48,17 +44,18 @@ const TOKEN_PROJECT_COHORTS = [
 ];
 
 const MARKET_IMPACT_TEXT_COHORTS = [
-  ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
+  ['FarsideUK', 'BitMEXResearch', 'EricBalchunas', 'JSeyff'],
+  ['lookonchain', 'spotonchain', 'arkham'],
+  ['coinglass_com', 'GreeksLive'],
+  ['PeckShieldAlert', 'CertiKAlert', 'zachxbt', 'SlowMist_Team'],
   ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
-  ['RektCapital', 'WClementeIII', 'Pentosh1'],
-  ['CryptoHayes', 'RaoulGMI', 'CryptoCred'],
 ];
 
 const MARKET_IMPACT_MEDIA_COHORTS = [
-  ['lookonchain', 'glassnode', 'cryptoquant_com'],
-  ['RektCapital', 'WClementeIII', 'glassnode', 'lookonchain'],
-  ['CoinDesk', 'TheBlock__', 'WuBlockchain', 'WatcherGuru'],
-  ['EricBalchunas', 'JSeyff', 'NateGeraci', 'EleanorTerrett'],
+  ['glassnode', 'cryptoquant_com', 'DefiLlama'],
+  ['lookonchain', 'spotonchain', 'arkham'],
+  ['coinglass_com', 'FarsideUK'],
+  ['EricBalchunas', 'JSeyff', 'BitMEXResearch'],
 ];
 
 const GENERIC_LOW_QUALITY_QUERY_EXCLUSIONS = [
@@ -158,7 +155,7 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
 interface DiscoveryTopic { topic: string; exclude: string }
 
 // Common junk exclusions safe for EVERY topic (none of these are positive terms).
-const DISCOVERY_COMMON_EXCLUDES = '-giveaway -presale -"claim now" -referral -"mint now" -lottery -casino -100x -x100 -"recovery advice" -"claim recovery" -"victim recovery" -"dm me" -"telegram:" -telegram -"vip signals" -"signal group" -"trading signals" -"exact entries" -"join my" -moonshot -"top100 leaderboard" -pumpradar -pumpfun -wagmi -lfg -qfs -"web3 account" -filter:replies';
+const DISCOVERY_COMMON_EXCLUDES = '-giveaway -presale -"claim now" -referral -"mint now" -lottery -casino -100x -x100 -"recovery advice" -"claim recovery" -"victim recovery" -"dm me" -"telegram:" -telegram -"vip signals" -"signal group" -"trading signals" -"exact entries" -"join my" -moonshot -"top100 leaderboard" -pumpradar -pumpfun -wagmi -lfg -qfs -"web3 account" -filter:replies -filter:retweets';
 
 const DISCOVERY_TOPICS: DiscoveryTopic[] = [
   {
@@ -311,6 +308,7 @@ function buildCleanProfileSearchTerms(
     return withGenericLowQualityExclusions([
       ...parts,
       '-filter:replies',
+      '-filter:retweets',
       'lang:en',
       '-presale',
       '-airdrop',
@@ -328,7 +326,7 @@ function buildProfileSearchTerms(
     if (topicGate) parts.push(topicGate);
     if (mode === 'media') parts.push('filter:media');
     if (mode === 'text') parts.push('-filter:media');
-    parts.push('-filter:replies', 'lang:en');
+    parts.push('-filter:replies', '-filter:retweets', 'lang:en');
     return parts.join(' ');
   });
 }
@@ -577,10 +575,11 @@ function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): s
     case 'src_crypto_x_news_text':
       return [
         'WatcherGuru',
+        'tier10k',
         'WuBlockchain',
         'CoinDesk',
-        'Cointelegraph',
         'TheBlock__',
+        'Cointelegraph',
         'decryptmedia',
         'BitcoinMagazine',
         'News_Of_Alpha',
@@ -591,29 +590,41 @@ function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): s
       return [
         'EricBalchunas',
         'JSeyff',
-        'NateGeraci',
-        'EleanorTerrett',
+        'FarsideUK',
+        'BitMEXResearch',
         'zachxbt',
         'PeckShieldAlert',
+        'CertiKAlert',
         'SlowMist_Team',
         'lookonchain',
+        'spotonchain',
+        'arkham',
         'glassnode',
         'cryptoquant_com',
+        'DefiLlama',
+        'coinglass_com',
+        'GreeksLive',
       ];
 
     case 'src_market_trending_x_media':
     case 'src_market_trending_x_text':
       return [
-        'DefiLlama',
-        'BanklessHQ',
-        'TheDefiantNews',
-        'Tree_of_Alpha',
+        'FarsideUK',
+        'BitMEXResearch',
+        'EricBalchunas',
+        'JSeyff',
         'lookonchain',
+        'spotonchain',
+        'arkham',
         'glassnode',
         'cryptoquant_com',
-        'solana',
-        'base',
-        'chainlink',
+        'DefiLlama',
+        'coinglass_com',
+        'GreeksLive',
+        'PeckShieldAlert',
+        'CertiKAlert',
+        'zachxbt',
+        'SlowMist_Team',
       ];
 
     default:
