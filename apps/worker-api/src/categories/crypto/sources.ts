@@ -33,7 +33,7 @@ const VOICES_COHORTS = [
   ['DefiLlama', 'BanklessHQ', 'TheDefiantNews'],
   ['VitalikButerin', 'ethereum'],
   ['solana', 'base', 'chainlink'],
-  ['CoinbaseAssets', 'binance'],
+  ['lookonchain', 'glassnode', 'cryptoquant_com'],
   ['WatcherGuru', 'Tree_of_Alpha', 'News_Of_Alpha'],
 ];
 
@@ -107,37 +107,37 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
   // short time window meant Twitter found 0 matching tweets and the actor
   // returned mock data. Primary now uses clean profile queries.
   if (id === 'src_crypto_x_news_media') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 18);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket + 3, 'core_news', 'media', 30, undefined, undefined, 6);
   }
 
   if (id === 'src_crypto_x_news_text') {
-    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 18);
+    return buildCohortPlan(source, NEWS_COHORTS, bucket, 'core_news', 'text', 30, undefined, undefined, 6);
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    // Security alerts keep their topic gate — these accounts post non-crypto
-    // security content too and the gate is actually useful here.
-    return buildSecurityAlertPlan(source, bucket + 4, 8);
+    // Real media lane from trusted crypto voices. Security-alert accounts were
+    // too sparse here and caused mock/no-result actor output.
+    return buildCohortPlan(source, VOICES_COHORTS, bucket + 4, 'expert_signals', 'media', 24);
   }
 
   if (id === 'src_crypto_x_voices_text') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 16);
+    return buildCohortPlan(source, VOICES_COHORTS, bucket, 'expert_signals', 'text', 24);
   }
 
   if (id === 'src_market_trending_x_media') {
-    return buildMarketImpactPlan(source, bucket + 5, 'media', 10);
+    return buildMarketImpactPlan(source, bucket + 5, 'media', 20);
   }
 
   if (id === 'src_market_trending_x_text') {
-    return buildMarketImpactPlan(source, bucket + 6, 'text', 10);
+    return buildMarketImpactPlan(source, bucket + 6, 'text', 20);
   }
 
   // IMPROVEMENT #2: discovery lanes — top/trending across the whole timeline.
   if (id === 'src_crypto_x_discovery_latest') {
-    return buildDiscoveryPlan(source, bucket, 'Latest', 4, 20);
+    return buildDiscoveryPlan(source, bucket, 'Latest', 4, 18);
   }
   if (id === 'src_crypto_x_discovery_top') {
-    return buildDiscoveryPlan(source, bucket, 'Top', 8, 20);
+    return buildDiscoveryPlan(source, bucket + 1, 'Latest', 12, 18);
   }
 
   return null;
@@ -158,7 +158,7 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
 interface DiscoveryTopic { topic: string; exclude: string }
 
 // Common junk exclusions safe for EVERY topic (none of these are positive terms).
-const DISCOVERY_COMMON_EXCLUDES = '-giveaway -presale -"claim now" -referral -"mint now" -lottery -casino -100x -filter:replies';
+const DISCOVERY_COMMON_EXCLUDES = '-giveaway -presale -"claim now" -referral -"mint now" -lottery -casino -100x -x100 -"recovery advice" -"claim recovery" -"victim recovery" -"dm me" -"telegram:" -telegram -"vip signals" -"signal group" -"trading signals" -"exact entries" -"join my" -moonshot -"top100 leaderboard" -pumpradar -pumpfun -wagmi -lfg -qfs -"web3 account" -filter:replies';
 
 const DISCOVERY_TOPICS: DiscoveryTopic[] = [
   {
@@ -167,14 +167,14 @@ const DISCOVERY_TOPICS: DiscoveryTopic[] = [
   },
   {
     // security lane: do NOT exclude -phishing here (it IS a positive term).
-    topic: 'crypto hack OR exploit OR drained OR "stolen funds" OR phishing OR "private key"',
+    topic: '"crypto hack" OR "DeFi hack" OR "protocol exploit" OR "smart contract exploit" OR "bridge exploit" OR "wallet drained" OR "stolen crypto" OR "stolen funds" OR "Tornado Cash" OR "crypto phishing"',
     exclude: DISCOVERY_COMMON_EXCLUDES,
   },
   {
-    // memecoin lane: do NOT exclude -airdrop here (airdrop is a positive term);
-    // keep -scam/-fake since those never overlap the positives.
-    topic: 'XRP OR TON OR DOGE OR SHIB OR memecoin OR "exchange listing" OR airdrop',
-    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake`,
+    // Token listing lane. Avoid bare TON/DOGE/memecoin/airdrop globally:
+    // they pull jokes, vote campaigns, shills, and scammy Moonshot/PumpFun spam.
+    topic: '"exchange listing" OR "token listing" OR "Coinbase listing" OR "Binance listing" OR "Upbit listing" OR "OKX listing" OR "Bybit listing"',
+    exclude: `${DISCOVERY_COMMON_EXCLUDES} -scam -fake -vote -votes -shill -pump`,
   },
   {
     topic: 'onchain OR "exchange outflow" OR "exchange inflow" OR liquidation OR "open interest"',
@@ -204,9 +204,10 @@ function buildDiscoveryPlan(
   const idx = positiveModulo(bucket, DISCOVERY_TOPICS.length);
   const { topic, exclude } = DISCOVERY_TOPICS[idx]!;
   const query = `(${topic}) lang:en ${exclude}`.trim();
+  const laneName = source.id === 'src_crypto_x_discovery_top' ? 'top' : queryType.toLowerCase();
   return {
     source,
-    cohortName: `discovery_${queryType.toLowerCase()}_${idx}`,
+    cohortName: `discovery_${laneName}_${idx}`,
     cohortIndex: idx,
     accounts: [],
     inputOverride: buildTopicSearchInputOverride(
@@ -214,7 +215,7 @@ function buildDiscoveryPlan(
       maxItems,
       hoursBack,
       queryType,
-      { minFaves: 50, minRetweets: 5 },
+      { minFaves: 10, minRetweets: 1 },
     ),
   };
 }
@@ -278,6 +279,7 @@ function buildCohortPlan(
   maxItems: number,
   topicGate?: string,
   minFaves?: number,
+  hoursBack = 12,
 ): ApifyRotationPlan {
   const index = positiveModulo(bucket, cohorts.length);
   const accounts = cohorts[index] ?? cohorts[0]!;
@@ -294,7 +296,7 @@ function buildCohortPlan(
     cohortName: `${family}_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: buildSearchInputOverride(searchTerms, maxItems, 12, { minFaves }),
+    inputOverride: buildSearchInputOverride(searchTerms, maxItems, hoursBack, { minFaves }),
   };
 }
 
@@ -594,8 +596,9 @@ function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): s
         'zachxbt',
         'PeckShieldAlert',
         'SlowMist_Team',
-        'CoinbaseAssets',
-        'binance',
+        'lookonchain',
+        'glassnode',
+        'cryptoquant_com',
       ];
 
     case 'src_market_trending_x_media':

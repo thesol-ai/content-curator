@@ -224,6 +224,16 @@ const DIRECT_CRYPTO_ANCHORS = [
   'marathon digital',
   'bitcoin treasury',
   'btc treasury',
+
+  // Hyperliquid ecosystem. Keep these explicit; bare "hype" is too ambiguous.
+  'hyperliquid',
+  'hyperliquidx',
+  'hyperliquid:native',
+  '$hype',
+  'hype deposits',
+  '$purr',
+  'purr burn',
+  'purr burns',
 ];
 
 
@@ -310,6 +320,12 @@ function isWeakCryptoAdjacentPrivateAssetStory(body: string): boolean {
     'ethereum',
     'base',
     'blockchain',
+    'hyperliquid',
+    'hyperliquidx',
+    'hyperliquid:native',
+    '$hype',
+    'hype deposits',
+    '$purr',
   ])) {
     return false;
   }
