@@ -99,8 +99,8 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
         expect(query).not.toContain('since:');
         expect(query).not.toContain('until:');
       } else {
-        expect(query).toContain('since:');
-        expect(query).toContain('until:');
+        expect(query).not.toContain('since:');
+        expect(query).not.toContain('until:');
       }
       expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
       expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
@@ -134,14 +134,20 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     expect(voicesTextQuery).not.toContain('USDT');
     expect(voicesTextQuery).not.toContain('from:whale_alert');
 
-    const voicesMedia = bySource(result, 'src_crypto_x_voices_media');
-    const voicesMediaQuery = combinedSearch(voicesMedia);
-    expect(voicesMedia.cohortName).toContain('expert_signals_media');
-    expect(voicesMediaQuery).toContain('from:');
-    expect(voicesMediaQuery).toContain('filter:media');
-    expect(voicesMediaQuery).not.toContain('-filter:media');
-    expect(voicesMediaQuery).not.toContain('"crypto hack"');
-    expect(voicesMediaQuery).not.toContain('-pypi');
+    const security = bySource(result, 'src_crypto_x_voices_media');
+    const securityQuery = combinedSearch(security);
+    expect(security.cohortName).toContain('security_alert_text');
+    expect(security.accounts).toEqual(['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts']);
+    expect(securityQuery).toContain('"crypto hack"');
+    expect(securityQuery).toContain('"DeFi hack"');
+    expect(securityQuery).toContain('"protocol exploit"');
+    expect(securityQuery).toContain('"smart contract exploit"');
+    expect(securityQuery).toContain('crypto OR DeFi OR protocol');
+    expect(securityQuery).toContain('-filter:media');
+    expect(securityQuery).toContain('-pypi');
+    expect(securityQuery).toContain('-npm');
+    expect(securityQuery).toContain('-python');
+    expect(securityQuery).toContain('-bun');
 
     const market = bySource(result, 'src_market_trending_x_text');
     const marketQuery = combinedSearch(market);

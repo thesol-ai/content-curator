@@ -115,7 +115,9 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
   }
 
   if (id === 'src_crypto_x_voices_media') {
-    return buildCohortPlan(source, VOICES_COHORTS, bucket + 4, 'expert_signals', 'media', 8);
+    // Security alerts keep their topic gate — these accounts post non-crypto
+    // security content too and the gate is actually useful here.
+    return buildSecurityAlertPlan(source, bucket + 4, 8);
   }
 
   if (id === 'src_crypto_x_voices_text') {
@@ -329,15 +331,6 @@ function buildProfileSearchTerms(
   });
 }
 
-function simplifyKaitoDiagnosticInput(input: Record<string, unknown>, searchTerms: string[]): Record<string, unknown> {
-  const next = { ...input };
-  delete next.card_name;
-  next.searchTerms = searchTerms
-    .map(term => String(term ?? '').trim())
-    .filter(Boolean);
-  return next;
-}
-
 function buildCoreNewsTopicGate(): string {
   return withGenericLowQualityExclusions([
     '(',
@@ -366,7 +359,6 @@ function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, m
   const index = positiveModulo(bucket, cohorts.length);
   const accounts = cohorts[index] ?? cohorts[0]!;
 
-  const isDiagnosticMarketMedia = source.id === 'src_market_trending_x_media';
   const searchTerms = buildCleanProfileSearchTerms(accounts, mode);
 
   return {
@@ -374,9 +366,7 @@ function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, m
     cohortName: `market_impact_${mode}_${index}`,
     cohortIndex: index,
     accounts,
-    inputOverride: isDiagnosticMarketMedia
-      ? simplifyKaitoDiagnosticInput(buildSearchInputOverride(searchTerms, maxItems), searchTerms)
-      : buildSearchInputOverride(searchTerms, maxItems),
+    inputOverride: buildSearchInputOverride(searchTerms, maxItems),
   };
 }
 
@@ -518,14 +508,16 @@ function buildSearchInputOverride(
   engagement?: { minFaves?: number; minRetweets?: number },
   queryType: 'Latest' | 'Top' = 'Latest',
 ): Record<string, unknown> {
-  const windowedSearchTerms = appendUtcSearchWindow(searchTerms, hoursBack);
+  const normalizedSearchTerms = searchTerms
+    .map(term => String(term ?? '').trim())
+    .filter(Boolean);
   const minFaves = Math.max(0, Math.floor(Number(engagement?.minFaves ?? 0)));
   const minRetweets = Math.max(0, Math.floor(Number(engagement?.minRetweets ?? 0)));
 
   return {
     tweetIDs: [],
     twitterContent: '',
-    searchTerms: windowedSearchTerms,
+    searchTerms: normalizedSearchTerms,
     maxItems,
     queryType,
     lang: 'en',
@@ -575,23 +567,6 @@ function buildSearchInputOverride(
 
 function currentSinceTimeSeconds(hoursBack = 24): string {
   return String(Math.floor(Date.now() / 1000) - hoursBack * 60 * 60);
-}
-
-function appendUtcSearchWindow(searchTerms: string[], hoursBack: number): string[] {
-  const until = new Date();
-  const since = new Date(until.getTime() - hoursBack * 60 * 60 * 1000);
-  const sinceTerm = `since:${formatXSearchUtc(since)}`;
-  const untilTerm = `until:${formatXSearchUtc(until)}`;
-
-  return searchTerms.map(term => {
-    const cleaned = String(term ?? '').trim();
-    if (!cleaned) return `${sinceTerm} ${untilTerm}`;
-    return `${cleaned} ${sinceTerm} ${untilTerm}`;
-  });
-}
-
-function formatXSearchUtc(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, '_UTC').replace('T', '_');
 }
 
 function rescueAccountsForSource(sourceId: string, currentAccounts: string[]): string[] {

@@ -86,13 +86,8 @@ describe('Apify rotation source isolation regression safety net', () => {
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
 
       expect(query).toContain('from:');
-      if (plan.sourceId === 'src_market_trending_x_media') {
-        expect(query).not.toContain('since:');
-        expect(query).not.toContain('until:');
-      } else {
-        expect(query).toContain('since:');
-        expect(query).toContain('until:');
-      }
+      expect(query).not.toContain('since:');
+      expect(query).not.toContain('until:');
       expect((query.match(/-filter:replies/g) ?? []).length).toBe(1);
       expect((query.match(/\blang:en\b/g) ?? []).length).toBe(1);
     }

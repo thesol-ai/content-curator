@@ -138,13 +138,8 @@ describe('category source strategy registry', () => {
       expect(String(input.since_time)).toMatch(/^\d{10}$/);
       expect(firstTerm).toContain('-filter:replies');
       expect(firstTerm).toContain('lang:en');
-      if (plan.sourceId === 'src_market_trending_x_media') {
-        expect(firstTerm).not.toContain('since:');
-        expect(firstTerm).not.toContain('until:');
-      } else {
-        expect(firstTerm).toContain('since:');
-        expect(firstTerm).toContain('until:');
-      }
+      expect(firstTerm).not.toContain('since:');
+      expect(firstTerm).not.toContain('until:');
     }
 
     expect(attempts[1]?.inputOverride.maxItems).toBe(30);
@@ -180,13 +175,8 @@ describe('category source strategy registry', () => {
       expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
       expect((firstTerm.match(/-filter:replies/g) ?? []).length).toBe(1);
       expect((firstTerm.match(/\blang:en\b/g) ?? []).length).toBe(1);
-      if (plan.sourceId === 'src_market_trending_x_media') {
-        expect(firstTerm).not.toContain('since:');
-        expect(firstTerm).not.toContain('until:');
-      } else {
-        expect(firstTerm).toContain('since:');
-        expect(firstTerm).toContain('until:');
-      }
+      expect(firstTerm).not.toContain('since:');
+      expect(firstTerm).not.toContain('until:');
     }
   });
 });
