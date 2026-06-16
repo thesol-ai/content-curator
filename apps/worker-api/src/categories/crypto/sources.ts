@@ -335,7 +335,6 @@ function simplifyKaitoDiagnosticInput(input: Record<string, unknown>, searchTerm
   next.searchTerms = searchTerms
     .map(term => String(term ?? '').trim())
     .filter(Boolean);
-  next.since_time = '';
   return next;
 }
 
@@ -368,9 +367,7 @@ function buildMarketImpactPlan(source: ApifyRotationSourceRow, bucket: number, m
   const accounts = cohorts[index] ?? cohorts[0]!;
 
   const isDiagnosticMarketMedia = source.id === 'src_market_trending_x_media';
-  const searchTerms = isDiagnosticMarketMedia
-    ? buildProfileSearchTerms(accounts, mode)
-    : buildCleanProfileSearchTerms(accounts, mode);
+  const searchTerms = buildCleanProfileSearchTerms(accounts, mode);
 
   return {
     source,

@@ -89,7 +89,7 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
       expect(plan.inputOverride.twitterContent).toBe('');
 
       if (plan.sourceId === 'src_market_trending_x_media') {
-        expect(plan.inputOverride.since_time).toBe('');
+        expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
       } else {
         expect(String(plan.inputOverride.since_time)).toMatch(/^\d{10}$/);
       }
