@@ -714,8 +714,9 @@ content-curator/
 │   └── release-hardening-check.mjs      # Release hardening gate
 ├── tests/                               # 65 Vitest files (gates, rotation, reports, bot, media)
 ├── docs/                                # Phase design notes + implementation summaries
-├── cost-monitor.sql                     # Ad-hoc D1 cost queries
-├── source-health-check.sql              # Ad-hoc D1 source mock%/yield queries
+│   └── ops/sql/
+│       ├── cost-monitor.sql             # Ad-hoc D1 cost queries (Apify + AI spend)
+│       └── source-health-check.sql      # Ad-hoc D1 source mock%/yield queries
 ├── wrangler.toml                        # Cloudflare config + all env vars + cron
 ├── package.json                         # Root workspace scripts (validate = typecheck+test+build)
 └── pnpm-workspace.yaml
@@ -2241,5 +2242,3 @@ Review separately before deleting:
   docs/market-trending-source-rollout.md
   RELEASE_NOTES_NEXT.md
 ```
-
-Do not mix documentation deletion with runtime code changes. Keep those commits separate so review does not become archaeology with syntax highlighting.
