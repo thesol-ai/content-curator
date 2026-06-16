@@ -32,7 +32,7 @@ WHERE created_at >= datetime('now','-1 day')
 
 -- ══════════════════════════════════════════════════════════════
 -- ۳. هزینه‌ی AI: چند call و چند توکن در ۲۴ ساعت (در برابر سقف)
---    سقف فعلی: AI_MAX_CALLS_PER_DAY=100, AI_DAILY_TOKEN_BUDGET=200000
+--    سقف فعلی production: AI_MAX_CALLS_PER_DAY=100, AI_DAILY_TOKEN_BUDGET=350000
 -- ══════════════════════════════════════════════════════════════
 SELECT
   provider,
