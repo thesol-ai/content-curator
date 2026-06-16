@@ -14,6 +14,7 @@
 - [AI Candidate Backlog & Fair Source Distribution](#ai-candidate-backlog-fair-source-distribution)
 - [Apify Controlled Rotation](#apify-controlled-rotation)
 - [Crypto Quality Gate & Whale Alert Throttle](#crypto-quality-gate-whale-alert-throttle)
+- [Intelligent Controllers (Queue Health, Queue Quality, Source Reputation)](#intelligent-controllers)
 - [Pipeline Flow](#pipeline-flow)
 - [Media Processing](#media-processing)
 - [Category & Language System](#category-language-system)
@@ -30,6 +31,8 @@
 - [Operational Runbook](#operational-runbook)
 - [Documentation & Release Hygiene](#documentation-release-hygiene)
 - [Dashboard](#dashboard)
+- [Observability & Reporting](#observability-reporting)
+- [Telegram Admin Bot](#telegram-admin-bot)
 - [API Reference](#api-reference)
 - [Safety Switches](#safety-switches)
 - [Security](#security)
@@ -68,7 +71,9 @@ Content Curator is a zero-touch content pipeline that discovers posts from socia
 - Enforces per-channel rules: timezone-aware time windows, daily quota, hourly rate, minimum gap
 - Publishes to Telegram channels with full media support: photos, videos (with thumbnails), carousels
 - Supports binary media upload to avoid CDN expiry issues on Instagram and LinkedIn
-- Manages everything through a built-in admin API and web dashboard
+- Self-regulates with intelligent controllers: keeps the queue full (queue health), diverse (queue quality), and fairly sourced (source reputation + fair picker)
+- Attributes AI token cost per source and exposes a full read-only reporting layer
+- Manages everything through a built-in admin API, a two-layer web dashboard (management + developer), and a scoped Telegram admin bot
 
 **What it does not do:**
 
@@ -371,6 +376,87 @@ This keeps the channel from becoming mostly wallet-transfer posts.
 
 ---
 
+## Intelligent Controllers
+
+Beyond the static gates, the pipeline runs several self-regulating controllers
+that keep the queue full, diverse, and fairly sourced without manual tuning.
+Each is independently toggleable and observable through the reporting endpoints.
+
+### Queue Health Controller
+
+`QUEUE_HEALTH_CONTROLLER_ENABLED` (default `true`). Watches how many posts are
+scheduled in the near window and, when the channel is *starving* (too few posts
+scheduled for the next 6h), grants extra AI scoring batches so the queue refills
+before it runs dry.
+
+Key variables:
+
+- `QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H` — target floor of scheduled posts.
+- `QUEUE_HEALTH_STARVING_MAX_BATCHES` — extra scoring batches when starving.
+- `QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS` — extra AI call allowance when starving.
+- `QUEUE_HEALTH_CHANNEL_ID` — the channel the controller watches.
+
+Surfaced by `GET /internal/report/queue-health` (state: `healthy` / `lean` /
+`starving`, plus `scheduledNext6h`, `scheduledNext24h`, `pendingCandidates`,
+last-publish age, rotation age).
+
+### Queue Quality Controller
+
+`QUEUE_QUALITY_CONTROLLER_ENABLED` (default `true`). Guards *diversity* so the
+queue is not dominated by one source or one story.
+
+Key variables:
+
+- `QUEUE_QUALITY_MIN_UNIQUE_SOURCES_NEXT_6H` — minimum distinct sources upcoming.
+- `QUEUE_QUALITY_MAX_SOURCE_SHARE_NEXT_24H` — cap on a single source's share (e.g. `0.4`).
+- `QUEUE_QUALITY_MIN_UNIQUE_STORIES_NEXT_6H` — minimum distinct story fingerprints.
+
+Surfaced by `GET /internal/report/queue-quality`.
+
+### Source Reputation Weighting
+
+`SOURCE_REPUTATION_WEIGHTING_ENABLED` (default `false`, i.e. observe-only).
+Scores each source 0–100 from its accept rate and publish history and can bias
+rotation toward higher-yield sources, with an exploration percentage so weak
+sources still get sampled.
+
+Key variables:
+
+- `SOURCE_REPUTATION_EXPLORATION_PCT` — % of slots reserved for exploration.
+- `SOURCE_REPUTATION_MIN_SAMPLE` — minimum runs before weighting applies.
+- `SOURCE_REPUTATION_MAX_WEIGHT` / `SOURCE_REPUTATION_MIN_WEIGHT` — weight clamp.
+- `SOURCE_REPUTATION_RECENT_RUN_COOLDOWN_SLOTS` — cooldown to avoid hammering one source.
+
+Preview the effect without enabling it via
+`GET /internal/report/source-reputation-preview` (dry-run) and see live numbers
+in `GET /internal/report/source-performance`.
+
+### Adaptive Apify Attempts
+
+`APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED` (default `true`). Uses recent
+per-source yield history to decide whether a second scrape attempt in a slot is
+worth the cost, bounded by `APIFY_SECOND_ATTEMPT_DAILY_BUDGET`.
+
+Key variables:
+
+- `APIFY_MAX_ATTEMPTS_PER_SLOT`, `APIFY_SECOND_ATTEMPT_DAILY_BUDGET`,
+  `APIFY_ATTEMPT_YIELD_HISTORY_DAYS`, `APIFY_ATTEMPT_YIELD_MIN_SAMPLE`.
+
+### Caption Quality Gate
+
+`CAPTION_QUALITY_REPAIR_ENABLED` (default `true`) repairs low-quality captions;
+`CAPTION_QUALITY_REJECT_ENABLED` (default `false`) can reject below
+`CAPTION_QUALITY_MIN_SCORE` instead of repairing.
+
+### Story Intelligence & Audience Profile
+
+`STORY_INTELLIGENCE_ENABLED` (default `true`) clusters items into stories and can
+reject unstable/duplicative follow-ups; `AUDIENCE_PROFILE_SCORING_ENABLED`
+(default `true`) scores items against the channel's audience profile. Story
+stability is visible at `GET /internal/report/story-intelligence`.
+
+---
+
 ## Pipeline Flow
 
 ```
@@ -643,11 +729,15 @@ The original structure above is still accurate, but production now relies on sev
 | `apps/worker-api/src/services/story-dedupe.ts` | Recent story/topic dedupe for channels using topic fingerprints. |
 | `apps/worker-api/src/services/market-snapshot.ts` | Direct market snapshot publishing for configured slots. |
 | `apps/worker-api/src/services/operational-report.ts` | Read-only operational reporting. |
+| `apps/worker-api/src/services/observability-reports.ts` | Source yield, AI cost by source, queue quality, topic mix, cap/gap previews. |
+| `apps/worker-api/src/services/queue-health.ts` | Queue health state (healthy/lean/starving) and starving-refill logic. |
+| `apps/worker-api/src/services/source-reputation.ts` | Per-source reputation scoring (accept rate, dominance, 0–100). |
+| `apps/worker-api/src/services/source-performance.ts` | Source performance report + per-bucket published breakdown. |
 | `apps/worker-api/src/routes/telegram-admin-bot.ts` | Telegram admin bot webhook route, protected separately from public health endpoints. |
 
 ### Current migration line
 
-The early migration list above documents the initial schema. The current repository has later migrations for media observability, Apify extraction diagnostics, AI usage, formatting/editorial controls, Apify task binding, AI candidate backlog, market-trending sources, and production hardening.
+The early migration list above documents the initial schema. The current repository has later migrations (through `0020`) for media observability, Apify extraction diagnostics, AI usage, formatting/editorial controls, Apify task binding, AI candidate backlog (`0014`/`0015`), market-trending sources (`0016`/`0017`), future-disabled category seeds (`0018`), story intelligence and AI cost attribution (`0019`), and crypto discovery source seeds (`0020`).
 
 Do not edit already-applied migrations. Add a new numbered migration for future schema changes and verify remote D1 before applying it.
 
@@ -849,6 +939,8 @@ curl -X POST $BASE/internal/channels/crypto_fa/publish -H "$AUTH" -d '{"enabled"
 | `AI_MAX_RETRIES` | `1` | Retry count for AI API calls |
 | `TRANSLATION_PROVIDER` | `gemini` | `gemini` \| `openai` \| `claude` |
 | `TRANSLATION_MODEL` | `gemini-2.5-flash-lite` | Translation model |
+| `TRANSLATION_BATCH_SIZE` | `3` | Items translated per batch call. |
+| `TRANSLATION_DEBUG_ENABLED` | `false` | Verbose translation logging. |
 | `TELEGRAM_FINAL_PUBLISH_ENABLED` | `false` | Actually send messages to Telegram |
 | `TELEGRAM_PUBLISH_SCHEDULER_ENABLED` | `false` | Cron-based publish (must also be true in settings table) |
 | `TELEGRAM_PUBLISH_DUE_LIMIT` | `5` | Items to attempt per cron run |
@@ -860,6 +952,77 @@ curl -X POST $BASE/internal/channels/crypto_fa/publish -H "$AUTH" -d '{"enabled"
 | `MARKET_SNAPSHOT_INTERVAL_HOURS` | `1` | Snapshot cadence guard. |
 | `MARKET_SNAPSHOT_SLOTS` | unset | Local-time snapshot slots, e.g. `09:05,12:35,15:35,18:35,21:35`. |
 | `MARKET_SNAPSHOT_CHANNEL_ID` | unset | Channel receiving snapshot posts. |
+
+#### Intelligent controllers & rotation (added since initial release)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `APIFY_ROTATION_CONTINUOUS_ENABLED` | `true` | Continuous slot-based rotation (vs legacy interval batches). |
+| `APIFY_ROTATION_SLOT_MINUTES` | `30` | Minutes per rotation slot. |
+| `APIFY_MAX_ATTEMPTS_PER_SLOT` | `1` | Max scrape attempts per source per slot. |
+| `APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED` | `true` | Use yield history to decide a 2nd attempt. |
+| `APIFY_SECOND_ATTEMPT_DAILY_BUDGET` | `0` | Daily budget for extra attempts. |
+| `APIFY_ATTEMPT_YIELD_HISTORY_DAYS` | `7` | Window for attempt-yield stats. |
+| `APIFY_ATTEMPT_YIELD_MIN_SAMPLE` | `3` | Min runs before adaptive logic applies. |
+| `QUEUE_HEALTH_CONTROLLER_ENABLED` | `true` | Refill scoring when the queue is starving. |
+| `QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H` | `3` | Target floor of scheduled posts (6h). |
+| `QUEUE_HEALTH_STARVING_MAX_BATCHES` | `3` | Extra scoring batches when starving. |
+| `QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS` | `50` | Extra AI call allowance when starving. |
+| `QUEUE_HEALTH_CHANNEL_ID` | unset | Channel the health controller watches. |
+| `QUEUE_QUALITY_CONTROLLER_ENABLED` | `true` | Enforce source/story diversity in the queue. |
+| `QUEUE_QUALITY_MIN_UNIQUE_SOURCES_NEXT_6H` | `2` | Min distinct sources upcoming (6h). |
+| `QUEUE_QUALITY_MAX_SOURCE_SHARE_NEXT_24H` | `0.4` | Max single-source share (24h). |
+| `QUEUE_QUALITY_MIN_UNIQUE_STORIES_NEXT_6H` | `2` | Min distinct story fingerprints (6h). |
+| `SOURCE_REPUTATION_WEIGHTING_ENABLED` | `false` | Bias rotation by source reputation (observe-only by default). |
+| `SOURCE_REPUTATION_EXPLORATION_PCT` | `20` | % of slots reserved for exploration. |
+| `SOURCE_REPUTATION_MIN_SAMPLE` | `20` | Min runs before weighting applies. |
+| `SOURCE_REPUTATION_MAX_WEIGHT` | `2.0` | Upper weight clamp. |
+| `SOURCE_REPUTATION_MIN_WEIGHT` | `0.3` | Lower weight clamp. |
+| `SOURCE_REPUTATION_RECENT_RUN_COOLDOWN_SLOTS` | `6` | Cooldown slots to avoid hammering a source. |
+
+#### Editorial quality, story & audience
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CAPTION_QUALITY_REPAIR_ENABLED` | `true` | Repair low-quality captions. |
+| `CAPTION_QUALITY_REJECT_ENABLED` | `false` | Reject (instead of repair) below min score. |
+| `CAPTION_QUALITY_MIN_SCORE` | `70` | Caption quality threshold. |
+| `STORY_INTELLIGENCE_ENABLED` | `true` | Cluster items into stories. |
+| `STORY_INTELLIGENCE_OBSERVE_ONLY` | `false` | Observe without rejecting. |
+| `STORY_INTELLIGENCE_REJECT_ENABLED` | `true` | Reject unstable/duplicative follow-ups. |
+| `STORY_INTELLIGENCE_WINDOW_HOURS` | `48` | Story clustering window. |
+| `STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED` | `true` | Allow genuine follow-ups. |
+| `STORY_INTELLIGENCE_RETENTION_DAYS` | `30` | Story data retention. |
+| `AUDIENCE_PROFILE_SCORING_ENABLED` | `true` | Score items vs the channel audience profile. |
+
+#### AI cost attribution & backlog
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `AI_COST_ATTRIBUTION_ENABLED` | `true` | Attribute AI tokens/cost per source. |
+| `AI_USAGE_ATTRIBUTION_RETENTION_DAYS` | `45` | Retention for attribution rows. |
+| `AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER` | `6` | Candidate pool size multiplier for fair picking. |
+| `AI_BACKLOG_INLINE_DRAIN_ENABLED` | `true` | Drain backlog inline during runs. |
+| `AI_MAX_OUTPUT_TOKENS` | `4096` | Max output tokens per AI call. |
+| `AI_TRANSLATION_MAX_TEXT_CHARS` | `400` | Max chars sent to the translator per item. |
+| `BACKLOG_TRANSLATE_AFTER_GATES_ENABLED` | `true` | Translate only after gates pass (saves cost). |
+
+#### Publishing cadence & gap-fill
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PUBLISH_SCHEDULER_GAP_FILL_ENABLED` | `true` | Pull posts earlier to fill schedule gaps. |
+| `PUBLISH_ENFORCE_SOURCE_DAILY_CAP_ENABLED` | `false` | Enforce per-source daily caps at publish. |
+| `PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES` | `90` | Min gap between posts from the same account. |
+| `PUBLISH_DELAY_BREAKING_MINUTES` | `5` | Delay for breaking-priority posts. |
+| `PUBLISH_DELAY_HIGH_MINUTES` | `10` | Delay for high-priority posts. |
+| `PUBLISH_DELAY_NORMAL_MINUTES` | `20` | Delay for normal posts. |
+| `PUBLISH_DELAY_LOW_MINUTES` | `45` | Delay for low-priority posts. |
+| `PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES` | `20` | Cap delay for expiring media. |
+| `PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES` | `10` | Tighter cap for high-priority expiring media. |
+| `MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED` | `true` | Publish available media if part of a group fails. |
+| `ENVIRONMENT` | `production` | Deployment environment label. |
+| `LOG_LEVEL` | `info` | Log verbosity. |
 
 ### Secrets (set with `wrangler secret put`)
 
@@ -1345,17 +1508,94 @@ Do not mix documentation deletion with runtime code changes. Keep those commits 
 
 ## Dashboard
 
-The built-in dashboard at `/dashboard/index.html` provides:
+The static dashboard in `apps/dashboard/` (a standalone `index.html` + `config.js`,
+not served by the Worker) is an English, LTR operations console with a two-layer
+architecture so managers and developers each get the surface they need.
 
-- **Setup Wizard:** Step-by-step guided configuration
-- **Live stats:** Runs, items, queue status, published count
-- **Category management:** Edit thresholds, languages, media mode
-- **Channel management:** Toggle publish, edit rate limits and windows
-- **Source management:** Add/remove Apify dataset sources
-- **Queue inspection:** View scheduled, failed, retry items. Cancel or retry individual items.
-- **Settings toggles:** Flip maintenance mode, dry run, publish enable in one click
+**Management layer** (clean, glance-oriented):
 
-Access: open `apps/dashboard/index.html` in a browser and enter your worker URL and secret.
+- **Monitoring:** daily/weekly/monthly trend charts (publishing, scraping,
+  selected vs rejected, AI usage) plus executive KPIs. Uses the timeseries
+  report.
+- **Overview:** queue depth, published 24h, AI budget usage, runtime flags.
+- **Pipeline Health:** the rejection funnel (why items don't reach the channel).
+- **Sources:** per-account yield, reputation, mock indicators, enable/disable.
+- **Queue:** health state, diversity guardrails, cap/gap previews.
+- **Content:** topic mix, story stability, recent items.
+- **Cost:** AI tokens/$ by source, wasted-spend signals.
+- **Settings:** the runtime-toggleable flags (guarded for high-impact toggles).
+
+**Developer layer** (separated, behind a banner): Rotation Runs, Logs & Events,
+Raw Item Tracker, Debug Tools — verbose views kept out of the management flow.
+
+Technical notes: vanilla single file (no build step), Chart.js via CDN, resilient
+`api()` helper with per-card error isolation, polling that pauses on hidden tabs
+and skips heavy developer tabs. Auth is unchanged: `x-internal-api-secret` stored
+in browser localStorage.
+
+Access: open `apps/dashboard/index.html` in a browser and enter your worker URL
+and secret. (If opened from a different origin and calls are blocked, serve it
+from the Worker origin or add CORS headers.)
+
+---
+
+## Observability & Reporting
+
+The Worker exposes a family of read-only reporting endpoints under
+`/internal/report/*`. They power the dashboard and the Telegram admin bot, and
+can be queried directly with the internal secret. All take optional `?hours=`
+(and some `?category=` / `?channel=`) and never write.
+
+| Endpoint | What it answers |
+|----------|-----------------|
+| `/internal/report/daily` | Daily rollup: funnel counts + conversion rates, per-source select rates. |
+| `/internal/report/funnel` | Rejection funnel: fetched → new → queued → published, with drop reasons per stage. |
+| `/internal/report/source-yield` | Per-account candidates → AI-rejected → published, with publish yield. |
+| `/internal/report/apify-query-yield` | Per-query yield and mock% (wasted Apify spend signal). |
+| `/internal/report/source-performance` | Source reputation (accept rate, dominance, 0–100 score) + per-bucket breakdown. |
+| `/internal/report/source-reputation-preview` | Dry-run: what reputation weighting *would* do. |
+| `/internal/report/source-cap-preview` | Dry-run: what per-source daily caps *would* cap. |
+| `/internal/report/gap-fill-preview` | Dry-run: which posts gap-fill *would* move earlier. |
+| `/internal/report/queue-health` | Queue state (healthy/lean/starving), scheduled next 6h/24h, pending candidates. |
+| `/internal/report/queue-quality` | Diversity: unique sources/stories upcoming, max single-source share. |
+| `/internal/report/ai-cost-by-source` | AI scoring/translation calls, tokens, and tokens-per-published per source. |
+| `/internal/report/topic-mix` | Topic/theme distribution of published output. |
+| `/internal/report/story-intelligence` | Story-cluster stability (unstable %, repeated fingerprints). |
+| `/internal/report/market-trending` | Market-impact cohort view for a source. |
+| `/internal/report/ops` (+ `/internal/report/ops/telegram-preview`) | Operational summary used by the admin bot. |
+
+> Trend charts (daily/weekly/monthly) require a time-series endpoint that groups
+> by day/week/month over `discovery_items`, `publish_queue`, and `ai_usage`. If
+> your deployment includes `GET /internal/report/timeseries?bucket=day|week|month&days=N`,
+> the dashboard's Monitoring tab uses it directly; it is a pure read-only
+> aggregation and writes nothing.
+
+Some reports need a flag or migration to return data (e.g. AI cost attribution
+needs `AI_COST_ATTRIBUTION_ENABLED` + the story-intelligence/cost migration); the
+dashboard shows a clear "disabled" banner when so.
+
+---
+
+## Telegram Admin Bot
+
+`apps/worker-api/src/routes/telegram-admin-bot.ts` is a scoped admin console over
+Telegram, separate from the publishing bot. Flow: `/start` → pick Category →
+Channel → Platform → Command Center, then Monitoring / Reporting / Costs /
+Settings / Help. It reads the operational report and renders text + keyboards.
+
+- **Auth:** allowed Telegram user IDs (`TELEGRAM_ADMIN_ALLOWED_USER_IDS`) plus a
+  webhook secret (`TELEGRAM_ADMIN_BOT_SECRET`); enabled by
+  `TELEGRAM_ADMIN_BOT_ENABLED`.
+- **Read-only by default:** it surfaces monitoring/reporting/cost views; it does
+  not mutate the pipeline.
+- **Hardening:** messages are split at Telegram's 4096-char limit (long logs send
+  as multiple messages), `sendChatAction: typing` precedes heavy report builds,
+  and Telegram 429 responses are retried honoring `retry_after`.
+
+> The bot is multi-category and multi-channel aware via the scope picker. Per the
+> roadmap, planned UX upgrades include inline-keyboard navigation with
+> edit-in-place, a manager "Glance" screen, a clearly separated developer
+> segment, and per-channel language/timezone-aware rendering.
 
 ---
 
@@ -1387,10 +1627,25 @@ GET /internal/report/ops?hours=24&category=crypto
 GET /internal/report/ops/telegram-preview?hours=24&category=crypto
 GET /internal/report/daily?hours=24&category=crypto
 GET /internal/report/market-trending?hours=24
+GET /internal/report/funnel?hours=24&category=crypto
+GET /internal/report/source-yield?hours=24&category=crypto
+GET /internal/report/apify-query-yield?hours=24
+GET /internal/report/source-performance?hours=24&category=crypto
+GET /internal/report/source-reputation-preview?hours=24
+GET /internal/report/source-cap-preview
+GET /internal/report/gap-fill-preview
+GET /internal/report/queue-health
+GET /internal/report/queue-quality
+GET /internal/report/ai-cost-by-source?hours=24
+GET /internal/report/topic-mix?hours=24
+GET /internal/report/story-intelligence?hours=24
 GET /internal/media?item=ITEM_ID
 GET /internal/debug/runs/:runId/events
 GET /internal/debug/runs/:runId/items
 ```
+
+See [Observability & Reporting](#observability-reporting) for what each report
+returns. All are read-only.
 
 **Item statuses:** `ai_selected`, `ai_rejected`, `queued`, `duplicate`, `error`
 **Queue statuses:** `scheduled`, `publishing`, `published`, `failed`, `retry`, `cancelled`
