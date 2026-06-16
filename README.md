@@ -1705,7 +1705,21 @@ DELETE /internal/queue/:id
 
 POST /internal/queue/:id/retry
 → Resets a failed/retry item back to scheduled (retry_count=0, scheduled_at=now+60s)
+
+GET /internal/queue/:id/preview
+→ Renders the exact Telegram message+media a queue item will publish (uses the
+   real formatter, so dashboard/publish previews can't diverge)
+
+POST /internal/queue/:id/publish-now
+→ Publishes a single queue item immediately (manual QA, bypasses the schedule)
+
+POST /internal/publish/due
+→ Publishes all currently-due queue items now (manual QA without waiting for cron)
 ```
+
+> The preview and manual-publish endpoints are useful for QA: keep
+> `telegram_publish_enabled=false` and publish only to an isolated test channel
+> while validating, then inspect with `preview` before enabling production.
 
 ### Control
 
