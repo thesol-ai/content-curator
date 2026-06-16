@@ -295,6 +295,13 @@ export async function handleAdmin(
       return getDailyReport(env, url);
     }
 
+    // ── Time-series monitoring (read-only; GROUP BY day/week/month) ───────
+    // Powers daily/weekly/monthly trend charts. Pure SELECT aggregation over
+    // existing tables; writes nothing, touches no pipeline path.
+    if (path === '/internal/report/timeseries' && m === 'GET') {
+      return getTimeseriesReport(env, url);
+    }
+
     // ── Market trending experiment report (read-only) ──────────
     if (path === '/internal/report/market-trending' && m === 'GET') {
       return getMarketTrendingReport(env, url);
@@ -1523,6 +1530,73 @@ async function triggerBacklogDrain(req: Request, env: Env): Promise<Response> {
   });
 }
 
+
+async function getTimeseriesReport(env: Env, url: URL): Promise<Response> {
+  // bucket granularity: day | week | month
+  const rawBucket = (url.searchParams.get('bucket') || 'day').toLowerCase();
+  const bucket = (['day', 'week', 'month'].includes(rawBucket) ? rawBucket : 'day') as 'day' | 'week' | 'month';
+  // how many days of history to include (clamped)
+  const days = Math.max(1, Math.min(num(url.searchParams.get('days'), 30), 365));
+  const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+
+  // SQLite strftime format string per bucket. Week uses ISO-ish year-week.
+  const fmt = bucket === 'month' ? '%Y-%m' : bucket === 'week' ? '%Y-W%W' : '%Y-%m-%d';
+  const sinceText = `-${days} days`;
+  const catItems = categoryId ? ' AND category_id = ?' : '';
+  const catParamsItems = categoryId ? [categoryId] : [];
+
+  // 1) discovery_items per bucket: total scraped + selected + rejected (created_at is TEXT ISO)
+  const itemsRows = await safeAll<{ b: string; total: number; selected: number; rejected: number }>(env,
+    `SELECT strftime('${fmt}', created_at) AS b,
+            COUNT(*) AS total,
+            SUM(CASE WHEN status='ai_selected' THEN 1 ELSE 0 END) AS selected,
+            SUM(CASE WHEN status='ai_rejected' THEN 1 ELSE 0 END) AS rejected
+     FROM discovery_items
+     WHERE created_at >= datetime('now', ?)${catItems}
+     GROUP BY b ORDER BY b`,
+    [sinceText, ...catParamsItems]);
+
+  // 2) publish_queue published per bucket (published_at is UNIX int → convert)
+  const pubRows = await safeAll<{ b: string; published: number }>(env,
+    `SELECT strftime('${fmt}', datetime(published_at, 'unixepoch')) AS b,
+            COUNT(*) AS published
+     FROM publish_queue
+     WHERE status='published' AND published_at IS NOT NULL
+       AND published_at >= unixepoch('now', ?)
+     GROUP BY b ORDER BY b`,
+    [sinceText]);
+
+  // 3) ai_usage tokens + calls per bucket (created_at is TEXT ISO)
+  const aiRows = await safeAll<{ b: string; calls: number; tokens: number }>(env,
+    `SELECT strftime('${fmt}', created_at) AS b,
+            COUNT(*) AS calls,
+            COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+     FROM ai_usage
+     WHERE status='success' AND created_at >= datetime('now', ?)
+     GROUP BY b ORDER BY b`,
+    [sinceText]);
+
+  // merge all buckets into a single sorted series
+  const map = new Map<string, { bucket: string; scraped: number; selected: number; rejected: number; published: number; ai_calls: number; ai_tokens: number }>();
+  const ensure = (b: string) => {
+    if (!map.has(b)) map.set(b, { bucket: b, scraped: 0, selected: 0, rejected: 0, published: 0, ai_calls: 0, ai_tokens: 0 });
+    return map.get(b)!;
+  };
+  for (const r of itemsRows) { const e = ensure(r.b); e.scraped = Number(r.total) || 0; e.selected = Number(r.selected) || 0; e.rejected = Number(r.rejected) || 0; }
+  for (const r of pubRows) { ensure(r.b).published = Number(r.published) || 0; }
+  for (const r of aiRows) { const e = ensure(r.b); e.ai_calls = Number(r.calls) || 0; e.ai_tokens = Number(r.tokens) || 0; }
+
+  const series = Array.from(map.values()).sort((a, b) => a.bucket < b.bucket ? -1 : 1);
+
+  return ok({
+    read_only: true,
+    generated_at: new Date().toISOString(),
+    bucket,
+    days,
+    category_id: categoryId ?? null,
+    series,
+  });
+}
 
 async function getDailyReport(env: Env, url: URL): Promise<Response> {
   const hours = clamp(num(url.searchParams.get('hours'), 24), 1, 168);
