@@ -131,13 +131,14 @@ describe('Phase 6 market-trending source experiment', () => {
     expect(sql).not.toMatch(/UPDATE\s+apify_sources\s+SET\s+enabled\s*=\s*1/i);
   });
 
-  it('documents the explicit source_id webhook and warns against generic webhooks', () => {
-    const doc = readFileSync(join(process.cwd(), 'docs/market-trending-source-rollout.md'), 'utf8');
+  it('documents the explicit source_id webhook safety in the migration', () => {
+    const sql = readFileSync(join(process.cwd(), 'migrations/0016_market_trending_source_seed.sql'), 'utf8');
 
-    expect(doc).toContain('source_id=src_market_trending_x');
-    expect(doc).toContain('https://content-curator.thesol-ai.workers.dev/webhook/apify?source_id=src_market_trending_x&secret=YOUR_SECRET');
-    expect(doc).toContain('Do not use a generic webhook without `source_id`');
-    expect(doc).toContain('{"enabled":false}');
+    expect(sql).toContain('source_id=src_market_trending_x');
+    expect(sql).toContain('"webhook_source_id":"src_market_trending_x"');
+    expect(sql).toContain('enabled=0');
+    expect(sql).toContain('placeholder');
+    expect(sql).toContain('avoid dataset ambiguity');
   });
 
   it('returns a read-only source-specific report', async () => {

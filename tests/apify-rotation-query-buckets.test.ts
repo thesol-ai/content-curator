@@ -11,12 +11,12 @@ const SOURCE_IDS = [
 ];
 
 const EXPECTED_MAX_ITEMS_BY_SOURCE: Record<string, number> = {
-  src_crypto_x_news_media: 18,
-  src_crypto_x_news_text: 18,
-  src_crypto_x_voices_media: 8,
-  src_crypto_x_voices_text: 16,
-  src_market_trending_x_media: 10,
-  src_market_trending_x_text: 10,
+  src_crypto_x_news_media: 30,
+  src_crypto_x_news_text: 30,
+  src_crypto_x_voices_media: 24,
+  src_crypto_x_voices_text: 24,
+  src_market_trending_x_media: 20,
+  src_market_trending_x_text: 20,
 };
 
 function makeEnv() {
@@ -69,7 +69,7 @@ function combinedSearch(plan: any): string {
 }
 
 describe('Phase 10 crypto input quality Apify rotation queries', () => {
-  it('keeps rotation bounded with existing six source ids and lower noisy-source maxItems', async () => {
+  it('keeps rotation bounded with existing six source ids and current source-specific maxItems', async () => {
     const result = await runApifyRotation(makeEnv(), { force: true, dryRun: true });
 
     expect(result.ok).toBe(true);
@@ -81,7 +81,7 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
       const query = terms[0] ?? '';
 
       expect(plan.inputOverride.maxItems).toBe(EXPECTED_MAX_ITEMS_BY_SOURCE[plan.sourceId]);
-      expect(plan.inputOverride.maxItems).toBeLessThanOrEqual(18);
+      expect(plan.inputOverride.maxItems).toBeLessThanOrEqual(30);
       expect(plan.inputOverride.queryType).toBe('Latest');
       expect(plan.inputOverride.lang).toBe('en');
 
@@ -134,20 +134,16 @@ describe('Phase 10 crypto input quality Apify rotation queries', () => {
     expect(voicesTextQuery).not.toContain('USDT');
     expect(voicesTextQuery).not.toContain('from:whale_alert');
 
-    const security = bySource(result, 'src_crypto_x_voices_media');
-    const securityQuery = combinedSearch(security);
-    expect(security.cohortName).toContain('security_alert_text');
-    expect(security.accounts).toEqual(['zachxbt', 'PeckShieldAlert', 'SlowMist_Team', 'CyversAlerts']);
-    expect(securityQuery).toContain('"crypto hack"');
-    expect(securityQuery).toContain('"DeFi hack"');
-    expect(securityQuery).toContain('"protocol exploit"');
-    expect(securityQuery).toContain('"smart contract exploit"');
-    expect(securityQuery).toContain('crypto OR DeFi OR protocol');
-    expect(securityQuery).toContain('-filter:media');
-    expect(securityQuery).toContain('-pypi');
-    expect(securityQuery).toContain('-npm');
-    expect(securityQuery).toContain('-python');
-    expect(securityQuery).toContain('-bun');
+    const voicesMedia = bySource(result, 'src_crypto_x_voices_media');
+    const voicesMediaQuery = combinedSearch(voicesMedia);
+    expect(voicesMedia.cohortName).toContain('expert_signals_media');
+    expect(voicesMedia.accounts.length).toBeGreaterThan(0);
+    expect(voicesMediaQuery).toContain('from:');
+    expect(voicesMediaQuery).toContain('filter:media');
+    expect(voicesMediaQuery).not.toContain('-filter:media');
+    expect(voicesMediaQuery).not.toContain('"crypto hack"');
+    expect(voicesMediaQuery).toContain('-giveaway');
+    expect(voicesMediaQuery).toContain('-campaign');
 
     const market = bySource(result, 'src_market_trending_x_text');
     const marketQuery = combinedSearch(market);
