@@ -359,7 +359,8 @@ describe('telegram admin bot scoped entry', () => {
     }), env);
 
     const body: any = await res.json();
-    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const sendCall = fetchMock.mock.calls.find((c: any) => String(c[0]).includes('/sendMessage'));
+    const payload = JSON.parse(sendCall[1].body);
     const buttons = payload.reply_markup.keyboard.flat().map((b: any) => b.text);
 
     expect(body.handled).toBe('report:costs_anthropic');
