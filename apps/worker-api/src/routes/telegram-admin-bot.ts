@@ -197,39 +197,23 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
   }
 
   if (text === '🟢 Monitoring') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'monitoring' });
-    await sendTelegramMessage(env, chatId, buildMonitoringText(scoped), monitoringKeyboard());
-    return Response.json({ ok: true, handled: 'monitoring' });
+    return Response.json(await routeScoped(env, chatId, 'monitoring', 'monitoring',
+      (scoped) => ({ text: buildMonitoringText(scoped), keyboard: monitoringKeyboard() })));
   }
 
   if (text === '📈 Reporting' || text === '/report' || text === '/ops' || text === '📊 Open Reports' || text === '📊 Reports') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'reports' });
-    await sendTelegramMessage(env, chatId, buildReportSectionsText(scoped), reportSectionKeyboard());
-    return Response.json({ ok: true, handled: 'reports' });
+    return Response.json(await routeScoped(env, chatId, 'reports', 'reports',
+      (scoped) => ({ text: buildReportSectionsText(scoped), keyboard: reportSectionKeyboard() })));
   }
 
   if (text === '⚙️ Settings') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'settings' });
-    await sendTelegramMessage(env, chatId, buildSettingsText(scoped), settingsKeyboard());
-    return Response.json({ ok: true, handled: 'settings' });
+    return Response.json(await routeScoped(env, chatId, 'settings', 'settings',
+      (scoped) => ({ text: buildSettingsText(scoped), keyboard: settingsKeyboard() })));
   }
 
   if (text === '❓ Help') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'help' });
-    await sendTelegramMessage(env, chatId, buildHelpText(scoped), helpKeyboard());
-    return Response.json({ ok: true, handled: 'help' });
+    return Response.json(await routeScoped(env, chatId, 'help', 'help',
+      (scoped) => ({ text: buildHelpText(scoped), keyboard: helpKeyboard() })));
   }
 
   const settingsDetailText = await buildSettingsDetailText(env, text, await loadSession(env, chatId));
@@ -274,50 +258,28 @@ export async function handleTelegramAdminBot(req: Request, env: Env): Promise<Re
   }
 
   if (text === '💸 Costs') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'costs' });
-    await sendTelegramMessage(env, chatId, buildCostMenuText(scoped), costMenuKeyboard());
-    return Response.json({ ok: true, handled: 'costs_menu' });
+    return Response.json(await routeScoped(env, chatId, 'costs', 'costs_menu',
+      (scoped) => ({ text: buildCostMenuText(scoped), keyboard: costMenuKeyboard() })));
   }
 
   if (text === '🤖 AI Providers') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'costs' });
-    await sendTelegramMessage(env, chatId, buildCostMenuText(scoped), costMenuKeyboard());
-    return Response.json({ ok: true, handled: 'costs_menu' });
+    return Response.json(await routeScoped(env, chatId, 'costs', 'costs_menu',
+      (scoped) => ({ text: buildCostMenuText(scoped), keyboard: costMenuKeyboard() })));
   }
 
   const costSection = parseCostSectionButton(text);
   if (costSection) {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'costs' });
-    await sendReportSection(env, chatId, costSection, scoped, costMenuKeyboard());
-    return Response.json({ ok: true, handled: `report:${costSection}` });
+    return Response.json(await routeReportSection(env, chatId, 'costs', costSection, costMenuKeyboard()));
   }
 
   if (text === '📬 Publishing') {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'reports' });
-    await sendTelegramMessage(env, chatId, await buildPublishingQueueText(env, scoped), reportSectionKeyboard());
-    return Response.json({ ok: true, handled: 'report:publish_queue' });
+    return Response.json(await routeScoped(env, chatId, 'reports', 'report:publish_queue',
+      async (scoped) => ({ text: await buildPublishingQueueText(env, scoped), keyboard: reportSectionKeyboard() })));
   }
 
   const section = parseSectionButton(text);
   if (section) {
-    const scoped = await requireScope(env, chatId);
-    if (!scoped) return Response.json({ ok: true, handled: 'scope_required' });
-
-    await saveSession(env, chatId, { ...scoped, screen: 'reports' });
-    await sendReportSection(env, chatId, section, scoped, reportSectionKeyboard());
-    return Response.json({ ok: true, handled: `report:${section}` });
+    return Response.json(await routeReportSection(env, chatId, 'reports', section, reportSectionKeyboard()));
   }
 
   const reportingDetail = parseReportingDetailButton(text);
@@ -462,6 +424,50 @@ async function requireScope(env: Env, chatId: string | number): Promise<ScopedSe
   return null;
 }
 
+/**
+ * Collapses the repeated "require scope → save screen → render" ritual that was
+ * duplicated ~15× in the router. Behavior is identical to the old inline blocks:
+ * if scope is missing it returns the scope_required marker; otherwise it saves
+ * the screen, sends the text+keyboard, and returns the handled id.
+ *
+ * `render` may be sync or async and returns { text, keyboard }.
+ */
+/**
+ * Variant for the "parse a section button → render a report section" branches.
+ * Preserves the old behavior: scope-guard, save screen, call sendReportSection
+ * with the given keyboard, return `report:<section>`.
+ */
+async function routeReportSection(
+  env: Env,
+  chatId: string | number,
+  screen: AdminScreen,
+  section: OperationalReportSection,
+  keyboard: object,
+): Promise<{ ok: true; handled: string }> {
+  const scoped = await requireScope(env, chatId);
+  if (!scoped) return { ok: true, handled: 'scope_required' };
+
+  await saveSession(env, chatId, { ...scoped, screen });
+  await sendReportSection(env, chatId, section, scoped, keyboard);
+  return { ok: true, handled: `report:${section}` };
+}
+
+async function routeScoped(
+  env: Env,
+  chatId: string | number,
+  screen: AdminScreen,
+  handledId: string,
+  render: (scoped: ScopedSession) => { text: string; keyboard: object } | Promise<{ text: string; keyboard: object }>,
+): Promise<{ ok: true; handled: string }> {
+  const scoped = await requireScope(env, chatId);
+  if (!scoped) return { ok: true, handled: 'scope_required' };
+
+  await saveSession(env, chatId, { ...scoped, screen });
+  const { text, keyboard } = await render(scoped);
+  await sendTelegramMessage(env, chatId, text, keyboard);
+  return { ok: true, handled: handledId };
+}
+
 async function sendReportSection(
   env: Env,
   chatId: string | number,
@@ -469,6 +475,7 @@ async function sendReportSection(
   scope: ScopedSession,
   keyboard: object = reportSectionKeyboard(),
 ): Promise<void> {
+  await sendTypingAction(env, chatId);
   const reportUrl = new URL('https://telegram-admin.local/internal/report/ops');
   reportUrl.searchParams.set('category_id', sanitizeCallbackId(scope.categoryId, 'crypto'));
   reportUrl.searchParams.set('channel_id', sanitizeCallbackId(scope.channelId, 'crypto_fa_pilot'));
@@ -2159,29 +2166,83 @@ function int(value: unknown): string {
   return Math.max(0, Math.floor(n)).toLocaleString('en-US');
 }
 
+const TELEGRAM_MAX_MESSAGE = 4096;
+
+/**
+ * Splits text into <=4096-char chunks on line boundaries (Telegram's hard cap).
+ * A single line longer than the cap is hard-split as a last resort.
+ */
+function splitForTelegram(text: string, max = TELEGRAM_MAX_MESSAGE): string[] {
+  if (text.length <= max) return [text];
+  const chunks: string[] = [];
+  let current = '';
+  for (const line of text.split('\n')) {
+    if (line.length > max) {
+      if (current) { chunks.push(current); current = ''; }
+      for (let i = 0; i < line.length; i += max) chunks.push(line.slice(i, i + max));
+      continue;
+    }
+    if ((current ? current.length + 1 : 0) + line.length > max) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = current ? current + '\n' + line : line;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+/** One POST to Telegram with a single 429 retry honoring retry_after. */
+async function telegramPost(token: string, method: string, payload: object): Promise<Response> {
+  const url = `https://api.telegram.org/bot${token}/${method}`;
+  let res = await fetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (res.status === 429) {
+    const info = await res.clone().json().catch(() => null) as any;
+    const retryAfter = Number(info?.parameters?.retry_after ?? 1);
+    await new Promise(r => setTimeout(r, Math.min(retryAfter, 5) * 1000));
+    res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  }
+  return res;
+}
+
 async function sendTelegramMessage(env: Env, chatId: string | number, text: string, replyMarkup?: object): Promise<void> {
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN not configured');
 
-  const payload: Record<string, unknown> = {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML',
-    disable_web_page_preview: true,
-  };
+  // Long messages (logs/audit) must be split at Telegram's 4096-char limit.
+  const chunks = splitForTelegram(text);
 
-  if (replyMarkup) payload.reply_markup = replyMarkup;
+  for (let i = 0; i < chunks.length; i++) {
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      text: chunks[i],
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    };
+    // Attach the keyboard only to the LAST chunk so controls stay at the bottom.
+    if (replyMarkup && i === chunks.length - 1) payload.reply_markup = replyMarkup;
 
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Telegram sendMessage failed ${res.status}: ${body.slice(0, 300)}`);
+    const res = await telegramPost(token, 'sendMessage', payload);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Telegram sendMessage failed ${res.status}: ${body.slice(0, 300)}`);
+    }
   }
+}
+
+/** Shows "typing…" so heavy report builds feel responsive. Best-effort. */
+async function sendTypingAction(env: Env, chatId: string | number): Promise<void> {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) return;
+  await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+  }).catch(() => undefined);
 }
 
 async function answerCallbackQuery(env: Env, callbackQueryId: string): Promise<void> {
