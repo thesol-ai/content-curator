@@ -18,12 +18,20 @@
   body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5}
   a{color:var(--blue);text-decoration:none}
   button{font-family:inherit;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
   code,.mono{font-family:var(--mono)}
 
-  /* ---------- App shell ---------- */
-  .app{display:none;min-height:100vh}
-  .layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
-  .sidebar{background:var(--surface);border-right:1px solid var(--dim);padding:18px 12px;display:flex;flex-direction:column;gap:6px}
+  /* ---------- App shell ----------
+     The layout is locked to the viewport height. The sidebar and the main
+     column are each their own independent scroll context, so the sidebar
+     stays fixed as a persistent navigation element while only the content
+     area scrolls. (Previously the whole grid grew with the page and carried
+     the sidebar away.) */
+  .app{display:none}
+  .layout{display:grid;grid-template-columns:230px 1fr;height:100vh;overflow:hidden}
+  .sidebar{background:var(--surface);border-right:1px solid var(--dim);padding:18px 12px;
+           display:flex;flex-direction:column;gap:6px;
+           height:100vh;position:sticky;top:0;overflow-y:auto}
   .brand{font-weight:700;font-size:15px;padding:6px 10px 2px}
   .brand small{display:block;font-weight:400;font-size:11px;color:var(--muted);margin-top:3px}
   .env-pill{font-family:var(--mono);font-size:11px;color:var(--cyan);padding:2px 10px 14px}
@@ -40,8 +48,8 @@
   .dev-zone .nav-group-label{color:var(--amber)}
 
   /* ---------- Main ---------- */
-  .main{display:flex;flex-direction:column;min-width:0}
-  .topbar{height:54px;border-bottom:1px solid var(--dim);display:flex;align-items:center;gap:14px;padding:0 22px;background:var(--surface)}
+  .main{display:flex;flex-direction:column;min-width:0;height:100vh;overflow:hidden}
+  .topbar{height:54px;flex:0 0 54px;border-bottom:1px solid var(--dim);display:flex;align-items:center;gap:14px;padding:0 22px;background:var(--surface)}
   .page-title{font-weight:600;font-size:15px}
   .topbar .spacer{flex:1}
   .pill{font-family:var(--mono);font-size:11px;padding:3px 10px;border-radius:20px;background:var(--surface-2);color:var(--muted);border:1px solid var(--dim)}
@@ -61,6 +69,9 @@
 
   .card{background:var(--surface);border:1px solid var(--dim);border-radius:var(--radius);padding:16px}
   .card h3{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+  .card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .card-head h3{margin:0}
+  .card-head .spacer{flex:1}
   .stat{background:var(--surface);border:1px solid var(--dim);border-radius:var(--radius);padding:14px 16px}
   .stat .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
   .stat .value{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:6px}
@@ -81,15 +92,37 @@
   .s-dim{background:var(--surface-2);color:var(--muted)}
 
   .btn{background:var(--surface-2);color:var(--text);border:1px solid var(--dim);border-radius:8px;padding:7px 13px;font-size:13px}
-  .btn:hover{border-color:var(--faint)}
+  .btn:hover:not(:disabled){border-color:var(--faint)}
   .btn-primary{background:var(--blue);color:#06121f;border-color:var(--blue);font-weight:600}
   .btn-danger{background:var(--red);color:#fff;border-color:var(--red)}
+  .btn-ghost{background:none}
   .btn-sm{padding:4px 9px;font-size:12px}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap}
 
   .empty{color:var(--faint);font-size:13px;padding:20px;text-align:center}
   .err-inline{color:var(--red);font-size:12px;padding:10px;border:1px dashed rgba(239,68,68,.4);border-radius:8px}
   .muted{color:var(--muted)} .faint{color:var(--faint)}
   .dev-banner{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:var(--amber);padding:8px 14px;border-radius:8px;font-size:12px;margin-bottom:16px}
+
+  /* ---------- Pagination ---------- */
+  .pager{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .pager .range{font-size:12px;color:var(--faint);font-family:var(--mono)}
+  .pager .spacer{flex:1}
+  .pager button{background:var(--surface-2);color:var(--text);border:1px solid var(--dim);border-radius:7px;padding:3px 9px;font-size:12px;font-family:var(--mono);min-width:30px}
+  .pager button.cur{background:var(--blue);color:#06121f;border-color:var(--blue);font-weight:600}
+  .pager button:disabled{opacity:.4;cursor:not-allowed}
+  .pager select{background:var(--surface-2);color:var(--text);border:1px solid var(--dim);border-radius:7px;padding:3px 6px;font-size:12px;font-family:var(--mono)}
+
+  /* ---------- Hierarchy (categories → channels) ---------- */
+  .cat-card{background:var(--surface);border:1px solid var(--dim);border-radius:var(--radius);margin-bottom:16px;overflow:hidden}
+  .cat-head{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--surface-2);border-bottom:1px solid var(--dim);flex-wrap:wrap}
+  .cat-head .title{font-weight:600;font-size:14px}
+  .cat-head .meta{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  .cat-head .spacer{flex:1}
+  .cat-body{padding:14px 16px}
+  .chip{display:inline-block;font-size:11px;font-family:var(--mono);padding:2px 8px;border-radius:6px;background:var(--surface-2);border:1px solid var(--dim);color:var(--muted);margin:0 4px 4px 0}
+  .chan-sub{margin-top:10px}
+  .tree-line{color:var(--faint);font-family:var(--mono)}
 
   /* ---------- Setup / toast ---------- */
   .center-screen{display:flex;align-items:center;justify-content:center;height:100vh;padding:20px}
@@ -99,10 +132,43 @@
   .form-group{margin-bottom:14px}
   .form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
   .form-input{width:100%;background:var(--surface-2);border:1px solid var(--dim);border-radius:8px;padding:9px 11px;color:var(--text);font-size:13px;font-family:var(--mono)}
+  textarea.form-input{resize:vertical;min-height:64px;line-height:1.5}
+  select.form-input{font-family:var(--font)}
+  .form-help{font-size:11px;color:var(--faint);margin-top:4px}
   .toast-wrap{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:9999}
   .toast{background:var(--surface-2);border:1px solid var(--dim);border-radius:8px;padding:10px 16px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.4)}
   .toast.ok{border-color:rgba(34,197,94,.5)} .toast.err{border-color:rgba(239,68,68,.5)}
   .spinner{color:var(--muted);font-size:13px;padding:30px;text-align:center}
+
+  /* ---------- Modal / forms ---------- */
+  .modal-root{position:fixed;inset:0;z-index:9000;display:none}
+  .modal-root.open{display:block}
+  .modal-overlay{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+  .modal{position:absolute;top:0;right:0;height:100vh;width:560px;max-width:100%;background:var(--surface);
+         border-left:1px solid var(--dim);display:flex;flex-direction:column;box-shadow:-8px 0 40px rgba(0,0,0,.5)}
+  .modal.wide{width:720px}
+  .modal-header{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--dim)}
+  .modal-header h2{margin:0;font-size:15px}
+  .modal-header .sub{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  .modal-header .x{margin-left:auto;background:none;border:none;color:var(--muted);font-size:20px;line-height:1;padding:4px 8px}
+  .modal-body{flex:1;overflow:auto;padding:18px 20px}
+  .modal-footer{flex:0 0 auto;display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--dim)}
+  .fsection{margin-bottom:18px}
+  .fsection-title{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--blue);margin:0 0 10px;border-bottom:1px solid var(--surface-2);padding-bottom:6px}
+  .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:560px){.fgrid{grid-template-columns:1fr}}
+  .ffull{grid-column:1 / -1}
+  .ftoggle{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface-2);border:1px solid var(--dim);border-radius:8px;padding:9px 11px}
+  .ftoggle .fl{font-size:13px}
+  .ro-value{background:var(--surface-2);border:1px solid var(--dim);border-radius:8px;padding:9px 11px;color:var(--muted);font-size:13px;font-family:var(--mono);word-break:break-all}
+  /* switch */
+  .switch{position:relative;display:inline-block;width:42px;height:23px;flex:0 0 auto}
+  .switch input{opacity:0;width:0;height:0}
+  .switch .track{position:absolute;inset:0;background:var(--dim);border-radius:20px;transition:.15s}
+  .switch .track:before{content:'';position:absolute;height:17px;width:17px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s}
+  .switch input:checked + .track{background:var(--green)}
+  .switch input:checked + .track:before{transform:translateX(19px)}
+  .switch input:disabled + .track{opacity:.45;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -128,7 +194,7 @@
 <!-- ============ APP ============ -->
 <div class="app" id="app">
   <div class="layout">
-    <!-- Sidebar -->
+    <!-- Sidebar (independently fixed) -->
     <nav class="sidebar">
       <div>
         <div class="brand">Content Curator<small>Operations Console</small></div>
@@ -150,6 +216,8 @@
       <div class="topbar">
         <span class="page-title" id="page-title">Overview</span>
         <span class="spacer"></span>
+        <select class="win-select" id="scope-category" title="Category scope" onchange="onScopeCategoryChange()"></select>
+        <select class="win-select" id="scope-channel" title="Channel (language) scope" onchange="onScopeChannelChange()"></select>
         <select class="win-select" id="window-select" onchange="onWindowChange()">
           <option value="24">24h</option>
           <option value="48">48h</option>
@@ -164,6 +232,9 @@
   </div>
 </div>
 
+<!-- Modal host (edit/create forms) -->
+<div class="modal-root" id="modal-root"></div>
+
 <div class="toast-wrap" id="toast-wrap"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -176,15 +247,22 @@ const T = {
   overview:'Overview', pipeline:'Pipeline Health', sources:'Sources',
   queue:'Queue', content:'Content', cost:'Cost', settings:'Settings',
   logs:'Logs & Events', runs:'Rotation Runs', rawTracker:'Raw Item Tracker',
-  debug:'Debug Tools',
+  debug:'Debug Tools', structure:'Categories & Channels', changelog:'Change Log',
 };
 
 /* =========================================================================
-   NAV MODEL — two layers: ADMIN (management) vs DEV (logs/tracking/debug).
-   Admin sees management, edits, access. Dev zone holds noisy logs/tracking,
-   hidden from the main flow.
+   NAV MODEL — the dashboard is organised around the core hierarchy:
+   a CATEGORY is the parent entity; its CHANNELS are the children, and in
+   practice each channel is a language version of that category (e.g. the
+   Crypto category with Persian, Arabic, English… channels).
+
+   • "Structure" group  → the live category→channel tree (primary navigation).
+   • "Analytics" group   → cross-cutting views, all scoped by the category /
+                            channel selected in the top bar.
+   • "Developer" group   → verbose logs / raw tracking / debug.
    ========================================================================= */
 const ADMIN_PAGES = [
+  { id:'structure', label:T.structure, ico:'⌂' },
   { id:'monitoring', label:'Monitoring', ico:'📈' },
   { id:'overview', label:T.overview, ico:'◎' },
   { id:'pipeline', label:T.pipeline, ico:'⚗' },
@@ -193,6 +271,7 @@ const ADMIN_PAGES = [
   { id:'content',  label:T.content,  ico:'▦' },
   { id:'cost',     label:T.cost,     ico:'$' },
   { id:'settings', label:T.settings, ico:'⚙' },
+  { id:'changelog',label:T.changelog,ico:'⟳' },
 ];
 const DEV_PAGES = [
   { id:'runs',       label:T.runs,       ico:'↻' },
@@ -201,16 +280,28 @@ const DEV_PAGES = [
   { id:'debug',      label:T.debug,      ico:'⌗' },
 ];
 
-let CURRENT_PAGE = 'monitoring';
+/* Which analytics pages honour the category / channel scope. */
+const CATEGORY_SCOPED_PAGES = ['pipeline','sources','queue','content','cost'];
+const CHANNEL_SCOPED_PAGES  = ['queue'];
+
+/* Human-readable language names — channels are language versions of a category. */
+const LANG_NAMES = { fa:'Persian', ar:'Arabic', en:'English', ru:'Russian', tr:'Turkish',
+  fr:'French', de:'German', es:'Spanish', hi:'Hindi', ur:'Urdu', zh:'Chinese', ja:'Japanese' };
+function langName(code){ return LANG_NAMES[String(code||'').toLowerCase()] || (code||'—'); }
+
+let CURRENT_PAGE = 'structure';
 let WINDOW_HOURS = 24;
 let MONITOR_BUCKET = 'day';
 let POLL_TIMER = null;
 
+/* Global scope: which category and (optionally) which channel/language the
+   analytics views are looking at. Empty = all. */
+const SCOPE = { categoryId:'', channelId:'' };
+/* Live structure used by the sidebar tree + scope selectors. */
+const STRUCT = { categories:[], channelsByCat:{}, expanded:{} };
+
 /* =========================================================================
    API LAYER — single resilient fetch helper.
-   - secret + url from localStorage (unchanged auth model)
-   - 401 → re-prompt; other errors throw with context
-   - never crashes the page; callers wrap in try/catch per card
    ========================================================================= */
 function getApiUrl(){ return localStorage.getItem('curator_api_url') || window.CURATOR_API_URL || ''; }
 function getSecret(){ return localStorage.getItem('curator_secret') || ''; }
@@ -223,7 +314,12 @@ async function api(path, opts = {}){
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401){ logout(); throw new Error('unauthorized'); }
-  if (!res.ok) throw new Error(path + ' → HTTP ' + res.status);
+  if (!res.ok){
+    // Surface backend validation messages where present.
+    let detail = '';
+    try { const j = await res.clone().json(); detail = j && (j.error || j.message) ? (' — '+(j.error||j.message)) : ''; } catch(_){}
+    throw new Error(path + ' → HTTP ' + res.status + detail);
+  }
   const ct = res.headers.get('content-type') || '';
   return ct.includes('application/json') ? res.json() : res.text();
 }
@@ -234,6 +330,13 @@ async function safeCard(el, loader){
   catch(e){ el.innerHTML = '<div class="err-inline">Failed to load: '+escapeHtml(e.message)+'</div>'; }
 }
 
+/* Authoritative runtime state (single source for pills + toggles, so the
+   visual state always matches the real system state). */
+async function fetchRuntime(){
+  const s = await api('/internal/stats');
+  return s.runtime_config || {};
+}
+
 /* =========================================================================
    UTIL
    ========================================================================= */
@@ -242,7 +345,19 @@ function fmtNum(n){ return (n==null||isNaN(n))?'—':new Intl.NumberFormat('en-U
 function fmtPct(n){ return (n==null||isNaN(n))?'—':n.toFixed(1)+'%'; }
 function fmtUtc(iso){ if(!iso) return '—'; try{ return new Intl.DateTimeFormat('en-US',{dateStyle:'short',timeStyle:'short',timeZone:'UTC'}).format(new Date(iso))+' UTC'; }catch{ return String(iso);} }
 function el(id){ return document.getElementById(id); }
-function toast(msg,type='ok'){ const w=el('toast-wrap'); const t=document.createElement('div'); t.className='toast '+type; t.textContent=msg; w.appendChild(t); setTimeout(()=>t.remove(),3200); }
+function toast(msg,type='ok'){ const w=el('toast-wrap'); const t=document.createElement('div'); t.className='toast '+type; t.textContent=msg; w.appendChild(t); setTimeout(()=>t.remove(),3600); }
+function isOn(v){ return v===true || v==='true' || v===1 || v==='1'; }
+function enc(s){ return encodeURIComponent(s); }
+
+/* In-flight guard: disable a button while its async action runs, so the same
+   action can't be fired twice and the UI reflects that it is working. */
+async function withBtn(btn, fn){
+  if(!btn) return fn();
+  const label = btn.textContent, wasDisabled = btn.disabled;
+  btn.disabled = true; btn.textContent = '…';
+  try { return await fn(); }
+  finally { btn.disabled = wasDisabled; btn.textContent = label; }
+}
 
 function statCard(label,value,opts={}){
   const cls = opts.tone? ' '+opts.tone : '';
@@ -252,19 +367,154 @@ function statCard(label,value,opts={}){
 }
 function pill(text,status){ return '<span class="status-pill s-'+status+'">'+escapeHtml(text)+'</span>'; }
 
-/* ---------- Chart helpers (Chart.js, distribution charts from real data) ---------- */
+/* =========================================================================
+   PAGINATION — generic, reusable. Tables register their full row set and we
+   render only the current page slice plus a pager. State is module-level so
+   it survives the 45s poll re-render. Pager interaction is handled via event
+   delegation on #content (attached once), so it keeps working after innerHTML
+   is replaced.
+   ========================================================================= */
+const TABLE_REG = {};               // key -> { head, rows[], empty, note, title }
+const PAGER = {};                   // key -> { page, pageSize }
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+function registerTable(key, cfg){
+  TABLE_REG[key] = cfg;
+  if(!PAGER[key]) PAGER[key] = { page:1, pageSize: cfg.pageSize || 10 };
+}
+function tableCard(key, cfg){
+  registerTable(key, cfg);
+  return '<div class="card" data-table="'+escapeHtml(key)+'">'+tableInner(key)+'</div>';
+}
+function tableInner(key){
+  const cfg = TABLE_REG[key], st = PAGER[key];
+  const cols = cfg.head.length;
+  const total = cfg.rows.length;
+  const pages = Math.max(1, Math.ceil(total / st.pageSize));
+  if(st.page > pages) st.page = pages;
+  if(st.page < 1) st.page = 1;
+  const start = (st.page - 1) * st.pageSize;
+  const slice = cfg.rows.slice(start, start + st.pageSize);
+  const bodyRows = slice.length
+    ? slice.join('')
+    : '<tr><td colspan="'+cols+'" class="empty">'+escapeHtml(cfg.empty||'No data.')+'</td></tr>';
+  const thead = '<thead><tr>'+cfg.head.map(h=>'<th'+(h.cls?' class="'+h.cls+'"':'')+'>'+escapeHtml(h.label)+'</th>').join('')+'</tr></thead>';
+  return (cfg.title ? '<h3>'+cfg.title+'</h3>' : '') +
+    '<table>'+thead+'<tbody>'+bodyRows+'</tbody></table>' +
+    pagerHtml(key, total, pages, start, slice.length) +
+    (cfg.note ? '<p class="faint" style="margin-top:8px">'+cfg.note+'</p>' : '');
+}
+function pagerHtml(key, total, pages, start, shown){
+  const st = PAGER[key];
+  if(total === 0) return '';
+  const from = total ? start + 1 : 0;
+  const to = start + shown;
+  // Compact numeric window around the current page.
+  const win = [];
+  const span = 2;
+  let lo = Math.max(1, st.page - span), hi = Math.min(pages, st.page + span);
+  if(st.page <= span) hi = Math.min(pages, 1 + span*2);
+  if(st.page > pages - span) lo = Math.max(1, pages - span*2);
+  for(let p=lo; p<=hi; p++) win.push(p);
+  const btn = (label, page, opts={}) =>
+    '<button data-pager data-key="'+escapeHtml(key)+'" data-page="'+page+'"'+
+    (opts.disabled?' disabled':'')+(opts.cur?' class="cur"':'')+'>'+label+'</button>';
+  const sizeSel = '<select data-size data-key="'+escapeHtml(key)+'" title="Rows per page">'+
+    PAGE_SIZE_OPTIONS.map(n=>'<option value="'+n+'"'+(n===st.pageSize?' selected':'')+'>'+n+' / page</option>').join('')+
+    '</select>';
+  const nums = win.map(p=>btn(String(p), p, {cur:p===st.page})).join('');
+  return '<div class="pager">'+
+    '<span class="range">'+from+'–'+to+' of '+fmtNum(total)+'</span>'+
+    '<span class="spacer"></span>'+sizeSel+
+    btn('‹', Math.max(1, st.page-1), {disabled: st.page<=1})+
+    nums+
+    btn('›', Math.min(pages, st.page+1), {disabled: st.page>=pages})+
+  '</div>';
+}
+function rerenderTable(key){
+  // Search the whole document so paginated tables work inside the content
+  // area AND inside the modal/drawer.
+  const card = document.querySelector('[data-table="'+CSS.escape(key)+'"]');
+  if(card) card.innerHTML = tableInner(key);
+}
+function wireTableDelegation(root){
+  root.addEventListener('click', e=>{
+    const b = e.target.closest('button[data-pager]');
+    if(!b || b.disabled) return;
+    const key = b.getAttribute('data-key');
+    if(!PAGER[key]) return;
+    PAGER[key].page = parseInt(b.getAttribute('data-page'),10) || 1;
+    rerenderTable(key);
+  });
+  root.addEventListener('change', e=>{
+    const s = e.target.closest('select[data-size]');
+    if(!s) return;
+    const key = s.getAttribute('data-key');
+    if(!PAGER[key]) return;
+    PAGER[key].pageSize = parseInt(s.value,10) || 10;
+    PAGER[key].page = 1;
+    rerenderTable(key);
+  });
+}
+
+/* =========================================================================
+   CHANGE LOG — client-side traceability of every create/update/toggle made
+   through the dashboard, persisted in localStorage. Gives observability and
+   an audit trail of modifications at category & channel level over time.
+   ========================================================================= */
+const CHANGELOG_KEY = 'curator_changelog';
+const CHANGELOG_MAX = 300;
+function loadChangelog(){ try{ return JSON.parse(localStorage.getItem(CHANGELOG_KEY) || '[]'); }catch{ return []; } }
+function saveChangelog(list){ try{ localStorage.setItem(CHANGELOG_KEY, JSON.stringify(list.slice(0, CHANGELOG_MAX))); }catch(_){} }
+function getOperator(){ return localStorage.getItem('curator_operator') || ''; }
+function setOperator(){
+  const cur = getOperator();
+  const v = prompt('Operator name (recorded as "who" on each change you make):', cur);
+  if(v===null) return;
+  localStorage.setItem('curator_operator', v.trim());
+  toast('Operator set to '+(v.trim()||'(none)'));
+  if(CURRENT_PAGE==='changelog') loadPage('changelog');
+}
+function logChange(entity, id, action, changes){
+  const list = loadChangelog();
+  list.unshift({ ts:new Date().toISOString(), who:getOperator()||'—', entity, id, action, changes: changes||[] });
+  saveChangelog(list);
+}
+function clearChangelog(){
+  if(!confirm('Clear the entire local change log? This cannot be undone.')) return;
+  saveChangelog([]); if(CURRENT_PAGE==='changelog') loadPage('changelog'); toast('Change log cleared');
+}
+/* Build a field-level diff between the original row and the submitted body. */
+function diffFields(original, body, fields){
+  const out = [];
+  fields.forEach(f=>{
+    if(!(f.key in body)) return;
+    const oldRaw = original ? original[f.key] : undefined;
+    const nv = body[f.key];
+    const a = normForDiff(oldRaw, f), b = normForDiff(nv, f);
+    if(a !== b) out.push({ field:f.key, from:a, to:b });
+  });
+  return out;
+}
+function normForDiff(v, f){
+  if(v===undefined || v===null) return '∅';
+  if(f && f.type==='toggle') return isOn(v) ? 'on' : 'off';
+  if(Array.isArray(v)) return v.join(', ');
+  return String(v).slice(0, 120);
+}
+
+/* ---------- Chart helpers ---------- */
 let CHART_REGISTRY = [];
 function destroyCharts(){ CHART_REGISTRY.forEach(c=>{ try{c.destroy();}catch(e){} }); CHART_REGISTRY=[]; }
 const CHART_COLORS = ['#60a5fa','#22c55e','#f59e0b','#a78bfa','#22d3ee','#ef4444','#f472b6','#84cc16','#fb923c','#38bdf8'];
 function chartReady(){ return typeof Chart !== 'undefined'; }
-
 function makeCanvas(id,height){ return '<div style="position:relative;height:'+(height||220)+'px"><canvas id="'+id+'"></canvas></div>'; }
 
 function drawBar(canvasId, labels, values, opts={}){
   if(!chartReady()) return;
   const ctx = el(canvasId); if(!ctx) return;
   const c = new Chart(ctx, {
-    type: opts.horizontal?'bar':'bar',
+    type: 'bar',
     data:{ labels, datasets:[{ label:opts.label||'', data:values,
       backgroundColor: opts.color || CHART_COLORS[0], borderRadius:4, maxBarThickness:34 }] },
     options:{ indexAxis: opts.horizontal?'y':'x', responsive:true, maintainAspectRatio:false,
@@ -285,13 +535,11 @@ function drawDonut(canvasId, labels, values){
   });
   CHART_REGISTRY.push(c);
 }
-/* Funnel as a horizontal stacked-ish bar (descending stages) */
-function drawFunnel(canvasId, stages){ // stages: [{label,value}]
+function drawFunnel(canvasId, stages){
   if(!chartReady()) return;
   drawBar(canvasId, stages.map(s=>s.label), stages.map(s=>s.value), {horizontal:true, color:'#60a5fa', label:'count'});
 }
-/* Multi-series line chart for trends (daily/weekly/monthly) */
-function drawLine(canvasId, labels, datasets){ // datasets: [{label,data,color}]
+function drawLine(canvasId, labels, datasets){
   if(!chartReady()) return;
   const ctx = el(canvasId); if(!ctx) return;
   const c = new Chart(ctx, {
@@ -327,15 +575,48 @@ function logout(){
 }
 
 /* =========================================================================
-   NAV RENDER
+   NAV RENDER — category→channel tree first, then scoped analytics.
    ========================================================================= */
 function renderNav(){
+  // Pull the first analytics page out as "structure" stays in the tree group.
+  const analytics = ADMIN_PAGES.filter(p=>p.id!=='structure');
   el('nav-admin').innerHTML =
-    '<div class="nav-group-label">Management</div>' +
-    ADMIN_PAGES.map(p=>navItemHtml(p)).join('');
+    '<div class="nav-group-label">Structure</div>' +
+    navItemHtml(ADMIN_PAGES.find(p=>p.id==='structure')) +
+    renderStructureTree() +
+    '<div class="nav-group-label" style="margin-top:12px">Analytics</div>' +
+    analytics.map(p=>navItemHtml(p)).join('');
   el('nav-dev').innerHTML =
     '<div class="nav-group-label">Developer</div>' +
     DEV_PAGES.map(p=>navItemHtml(p)).join('');
+}
+function renderStructureTree(){
+  if(!STRUCT.categories.length) return '<div class="faint" style="padding:4px 10px;font-size:11px">No categories loaded.</div>';
+  return STRUCT.categories.map(cat=>{
+    const open = !!STRUCT.expanded[cat.id];
+    const catActive = (SCOPE.categoryId===cat.id) ? ' active':'';
+    const enDot = isOn(cat.enabled) ? 'var(--green)' : 'var(--faint)';
+    const channels = STRUCT.channelsByCat[cat.id] || [];
+    const caret = channels.length
+      ? '<span class="ico" style="cursor:pointer" onclick="event.stopPropagation();toggleTreeCat(\''+escapeHtml(cat.id)+'\')">'+(open?'▾':'▸')+'</span>'
+      : '<span class="ico"> </span>';
+    let html = '<button class="nav-item'+catActive+'" title="'+escapeHtml(cat.id)+'" onclick="navCategory(\''+escapeHtml(cat.id)+'\')">'+
+      caret+'<span style="width:7px;height:7px;border-radius:50%;background:'+enDot+';display:inline-block;flex:0 0 auto"></span>'+
+      '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(cat.label||cat.id)+'</span>'+
+      '<span class="badge">'+channels.length+'</span></button>';
+    if(open){
+      html += channels.map(ch=>{
+        const chActive = (SCOPE.channelId===ch.id) ? ' active':'';
+        const en = isOn(ch.enabled), pub = isOn(ch.publish_enabled);
+        const dot = (en&&pub)?'var(--green)':(en?'var(--amber)':'var(--faint)');
+        return '<button class="nav-item'+chActive+'" style="padding-left:30px" title="'+escapeHtml(ch.id)+'" onclick="navChannel(\''+escapeHtml(cat.id)+'\',\''+escapeHtml(ch.id)+'\')">'+
+          '<span style="width:6px;height:6px;border-radius:50%;background:'+dot+';display:inline-block;flex:0 0 auto"></span>'+
+          '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(langName(ch.language))+'</span>'+
+          '<span class="badge" style="font-size:10px">'+escapeHtml(ch.language||'?')+'</span></button>';
+      }).join('');
+    }
+    return html;
+  }).join('');
 }
 function navItemHtml(p){
   const active = p.id===CURRENT_PAGE ? ' active':'';
@@ -343,18 +624,117 @@ function navItemHtml(p){
   return '<button class="nav-item'+active+'" onclick="nav(\''+p.id+'\')">'+
     '<span class="ico">'+p.ico+'</span><span>'+escapeHtml(p.label)+'</span>'+badge+'</button>';
 }
-
+function toggleTreeCat(catId){ STRUCT.expanded[catId] = !STRUCT.expanded[catId]; renderNav(); }
+/* Clicking a category in the tree scopes everything to it and shows its detail. */
+function navCategory(catId){
+  setScope(catId, '');
+  STRUCT.expanded[catId] = true;
+  CURRENT_PAGE = 'structure';
+  el('page-title').textContent = scopedTitle('Categories & Channels');
+  renderNav();
+  loadPage('structure');
+  if(STRUCT_CACHE.categories[catId]) openCategoryDetail(catId);
+}
+/* Clicking a channel scopes to it (and its category) and shows its detail. */
+function navChannel(catId, chId){
+  setScope(catId, chId);
+  renderNav();
+  if(STRUCT_CACHE.channels[chId]) openChannelDetail(chId);
+}
 function nav(page){
   CURRENT_PAGE = page;
   const all=[...ADMIN_PAGES,...DEV_PAGES];
   const p = all.find(x=>x.id===page) || all[0];
-  el('page-title').textContent = p.label;
+  el('page-title').textContent = scopedTitle(p.label);
   renderNav();
   loadPage(page);
 }
 
 /* =========================================================================
-   PAGE ROUTER — Stage 1 stubs; real renderers arrive in later stages.
+   SCOPE & STRUCTURE — category→channel hierarchy that drives navigation and
+   scopes every category/channel-aware analytics view.
+   ========================================================================= */
+async function loadStructure(){
+  try{
+    const [catRes, chanRes] = await Promise.all([
+      api('/internal/categories').catch(()=>({categories:[]})),
+      api('/internal/channels').catch(()=>({channels:[]})),
+    ]);
+    STRUCT.categories = catRes.categories || [];
+    STRUCT.channelsByCat = {};
+    CATEGORIES_CACHE = STRUCT.categories;
+    STRUCT_CACHE.categories = {}; STRUCT_CACHE.channels = {};
+    STRUCT.categories.forEach(c=>{ STRUCT_CACHE.categories[c.id]=c; });
+    (chanRes.channels||[]).forEach(ch=>{
+      (STRUCT.channelsByCat[ch.category_id] = STRUCT.channelsByCat[ch.category_id] || []).push(ch);
+      STRUCT_CACHE.channels[ch.id]=ch;
+    });
+    // sort channels by language for stable, readable ordering
+    Object.values(STRUCT.channelsByCat).forEach(arr=>arr.sort((a,b)=>String(a.language).localeCompare(String(b.language))));
+    // keep the scoped category expanded by default
+    if(SCOPE.categoryId) STRUCT.expanded[SCOPE.categoryId] = true;
+    else if(STRUCT.categories.length===1) STRUCT.expanded[STRUCT.categories[0].id] = true;
+    // drop scope that no longer exists
+    if(SCOPE.categoryId && !STRUCT_CACHE.categories[SCOPE.categoryId]) SCOPE.categoryId='';
+    if(SCOPE.channelId && !STRUCT_CACHE.channels[SCOPE.channelId]) SCOPE.channelId='';
+  }catch(e){ /* non-fatal */ }
+  renderScopeSelectors();
+}
+function setScope(catId, chId){
+  SCOPE.categoryId = catId || '';
+  SCOPE.channelId = chId || '';
+  if(SCOPE.channelId){
+    const ch = STRUCT_CACHE.channels[SCOPE.channelId];
+    if(ch) SCOPE.categoryId = ch.category_id; // channel implies its category
+  }
+  renderScopeSelectors();
+}
+function scopeLabel(){
+  if(SCOPE.channelId){ const ch=STRUCT_CACHE.channels[SCOPE.channelId]; return (STRUCT_CACHE.categories[SCOPE.categoryId]?.label||SCOPE.categoryId)+' › '+langName(ch?.language); }
+  if(SCOPE.categoryId){ return STRUCT_CACHE.categories[SCOPE.categoryId]?.label || SCOPE.categoryId; }
+  return 'All categories';
+}
+function scopedTitle(base){
+  const onScoped = CATEGORY_SCOPED_PAGES.includes(CURRENT_PAGE);
+  return onScoped ? base+'  ·  '+scopeLabel() : base;
+}
+function renderScopeSelectors(){
+  const cSel = el('scope-category'); if(!cSel) return;
+  cSel.innerHTML = '<option value="">All categories</option>' +
+    STRUCT.categories.map(c=>'<option value="'+escapeHtml(c.id)+'"'+(c.id===SCOPE.categoryId?' selected':'')+'>'+escapeHtml(c.label||c.id)+'</option>').join('');
+  const chSel = el('scope-channel');
+  const chans = SCOPE.categoryId ? (STRUCT.channelsByCat[SCOPE.categoryId]||[]) : [];
+  chSel.innerHTML = '<option value="">'+(SCOPE.categoryId?'All channels':'—')+'</option>' +
+    chans.map(ch=>'<option value="'+escapeHtml(ch.id)+'"'+(ch.id===SCOPE.channelId?' selected':'')+'>'+escapeHtml(langName(ch.language))+' ('+escapeHtml(ch.language)+')</option>').join('');
+  chSel.disabled = !SCOPE.categoryId;
+  chSel.style.opacity = SCOPE.categoryId ? '1' : '.5';
+}
+function onScopeCategoryChange(){
+  setScope(el('scope-category').value, '');
+  renderNav();
+  el('page-title').textContent = scopedTitle(currentPageLabel());
+  loadPage(CURRENT_PAGE);
+}
+function onScopeChannelChange(){
+  SCOPE.channelId = el('scope-channel').value || '';
+  renderNav();
+  el('page-title').textContent = scopedTitle(currentPageLabel());
+  loadPage(CURRENT_PAGE);
+}
+function currentPageLabel(){ const all=[...ADMIN_PAGES,...DEV_PAGES]; return (all.find(p=>p.id===CURRENT_PAGE)||{label:''}).label; }
+/* Query-string helpers so analytics endpoints honour the active scope. */
+function catParam(joiner){ return SCOPE.categoryId ? (joiner+'category='+enc(SCOPE.categoryId)) : ''; }
+/* Resolve the channel(s) the channel-scoped reports should use. If a channel
+   is selected use it; otherwise fall back to the first channel of the scoped
+   category (these reports are inherently single-channel). */
+function scopedChannelId(){
+  if(SCOPE.channelId) return SCOPE.channelId;
+  if(SCOPE.categoryId){ const list=STRUCT.channelsByCat[SCOPE.categoryId]||[]; return list.length?list[0].id:''; }
+  return '';
+}
+
+/* =========================================================================
+   PAGE ROUTER
    ========================================================================= */
 const DEV_PAGE_IDS = DEV_PAGES.map(p=>p.id);
 
@@ -380,32 +760,234 @@ async function loadPage(page){
 }
 
 /* =========================================================================
-   PAGE RENDERERS — field names verified against backend builders.
+   FIELD SCHEMAS — mirror the backend's accepted fields, bounds and enums
+   exactly (verified against admin.ts create/update handlers). Forms and the
+   change-log diff are both generated from these, so they stay in sync.
+   ========================================================================= */
+const PROMPT_PROFILES = ['default_editorial','crypto_editorial','design_editorial','marketing_editorial','product_editorial','ai_news_editorial','branding_editorial','finance_editorial'];
+
+const CATEGORY_FIELDS = [
+  { section:'Identity' },
+  { key:'id', label:'Category ID', type:'text', createOnly:true, help:'Lowercase id, [A-Za-z0-9_-], 1–64 chars.' },
+  { key:'label', label:'Label', type:'text', required:true },
+  { key:'enabled', label:'Enabled', type:'toggle', def:true },
+
+  { section:'Curation' },
+  { key:'prompt_profile', label:'Prompt profile', type:'select', options:PROMPT_PROFILES, required:true },
+  { key:'score_threshold', label:'Score threshold', type:'number', min:0, max:100, def:75 },
+  { key:'freshness_hours', label:'Freshness (hours)', type:'number', min:1, def:48 },
+  { key:'media_mode', label:'Media mode', type:'select', options:['optional','preferred','disabled'], def:'optional' },
+  { key:'language_targets', label:'Language targets', type:'csv', help:'2-letter codes, comma separated (e.g. fa, en).' },
+
+  { section:'Editorial policy' },
+  { key:'custom_prompt', label:'Custom prompt (overrides profile)', type:'textarea', max:4000, full:true },
+  { key:'editorial_guidelines', label:'Editorial guidelines', type:'textarea', max:3000, full:true },
+  { key:'selection_criteria', label:'Selection criteria', type:'textarea', max:2000, full:true },
+  { key:'rejection_criteria', label:'Rejection criteria', type:'textarea', max:2000, full:true },
+  { key:'required_context', label:'Required context', type:'textarea', max:2000, full:true },
+
+  { section:'Content rules' },
+  { key:'avoid_duplicate_people_stories', label:'Avoid duplicate people/stories', type:'toggle', def:true },
+  { key:'allow_replies', label:'Allow replies', type:'toggle', def:false },
+  { key:'allow_retweets', label:'Allow retweets', type:'toggle', def:true },
+  { key:'allow_quotes', label:'Allow quotes', type:'toggle', def:true },
+  { key:'text_only_policy', label:'Text-only policy', type:'select', options:['allow','penalize','reject'], def:'allow' },
+  { key:'min_score_for_text_only', label:'Min score (text-only)', type:'number', min:0, max:100, nullable:true, help:'Blank = no minimum.' },
+  { key:'min_score_for_media', label:'Min score (media)', type:'number', min:0, max:100, nullable:true, help:'Blank = no minimum.' },
+];
+
+const CHANNEL_FIELDS = [
+  { section:'Identity' },
+  { key:'id', label:'Channel ID', type:'text', createOnly:true, help:'[A-Za-z0-9_-], 1–64 chars.' },
+  { key:'category_id', label:'Category', type:'catselect', createOnly:true, help:'Parent category (cannot change after creation).' },
+  { key:'language', label:'Language', type:'text', required:true, help:'2-letter code (e.g. fa).' },
+  { key:'telegram_chat_id', label:'Telegram chat ID', type:'text', required:true, help:'@channel, -100… id, or numeric id.' },
+  { key:'channel_label', label:'Channel label', type:'text', max:120 },
+  { key:'enabled', label:'Channel enabled (master switch)', type:'toggle', def:true, help:'When off, the channel is fully inactive and cannot publish.' },
+
+  { section:'Scheduling' },
+  { key:'timezone', label:'Timezone', type:'text', def:'Asia/Tehran' },
+  { key:'max_per_day', label:'Max per day', type:'number', min:1, max:100, def:10 },
+  { key:'max_per_hour', label:'Max per hour', type:'number', min:1, max:20, def:2 },
+  { key:'min_gap_minutes', label:'Min gap (minutes)', type:'number', min:1, max:1440, def:30 },
+  { key:'allowed_windows', label:'Allowed windows', type:'windows', full:true, help:'Comma separated HH:MM-HH:MM (e.g. 08:00-23:59).' },
+  { key:'blocked_windows', label:'Blocked windows', type:'windows', full:true, help:'Comma separated HH:MM-HH:MM.' },
+
+  { section:'Formatting' },
+  { key:'source_enabled', label:'Show source attribution', type:'toggle', def:true },
+  { key:'source_label_override', label:'Source label override', type:'text', max:32 },
+  { key:'signature_enabled', label:'Append signature', type:'toggle', def:false },
+  { key:'signature_text', label:'Signature text', type:'text', max:300 },
+  { key:'channel_id_footer_enabled', label:'Append channel footer', type:'toggle', def:false },
+  { key:'channel_id_footer_text', label:'Channel footer text', type:'text', max:80 },
+  { key:'disable_link_preview', label:'Disable link preview', type:'toggle', def:true },
+
+  { section:'Dedupe & caps' },
+  { key:'semantic_dedupe_enabled', label:'Semantic dedupe', type:'toggle', def:true },
+  { key:'semantic_dedupe_window_hours', label:'Dedupe window (hours)', type:'number', min:1, max:168, def:24 },
+  { key:'max_posts_per_source_per_day', label:'Max posts / source / day', type:'number', min:1, max:50, nullable:true, help:'Blank = no per-source cap.' },
+
+  { section:'Editorial & caption' },
+  { key:'editorial_mode', label:'Editorial mode', type:'select', options:['news','educational','analytical','brief','explainer'], def:'news' },
+  { key:'audience_level', label:'Audience level', type:'select', options:['beginner','intermediate','professional'], def:'intermediate' },
+  { key:'caption_style', label:'Caption style', type:'select', options:['contextual','straight_news','educational_summary','insight_first'], def:'contextual' },
+  { key:'creativity_level', label:'Creativity (0–1)', type:'number', min:0, max:1, step:0.05, def:0.2 },
+  { key:'caption_max_chars', label:'Caption max chars', type:'number', min:280, max:3500, def:1200 },
+  { key:'caption_short_max_chars', label:'Short caption max chars', type:'number', min:80, max:900, def:280 },
+  { key:'tone_profile', label:'Tone profile', type:'text', max:40, def:'neutral' },
+  { key:'custom_instructions', label:'Custom instructions', type:'textarea', max:2000, full:true },
+  { key:'language_prompt', label:'Language prompt', type:'textarea', max:2000, full:true },
+  { key:'terminology_notes', label:'Terminology notes', type:'textarea', max:2000, full:true },
+  { key:'forbidden_phrases', label:'Forbidden phrases', type:'csv', full:true, help:'One per line or comma separated (max 30).' },
+];
+
+/* Structural elements that feed a channel's category. Verified against
+   createSourceAccount / createApifySource / updateApifySource. */
+const SOURCE_ACCOUNT_FIELDS = [
+  { key:'category_id', label:'Category', type:'catselect', createOnly:true },
+  { key:'platform', label:'Platform', type:'select', options:['x','instagram','linkedin','rss'], required:true },
+  { key:'account_handle', label:'Account handle', type:'text', required:true, help:'Without @ (e.g. example_user).' },
+  { key:'display_name', label:'Display name', type:'text', max:100 },
+  { key:'trust_level', label:'Trust level', type:'select', options:['high','medium','low'], def:'medium' },
+];
+const APIFY_SOURCE_FIELDS = [
+  { key:'id', label:'Source ID', type:'text', createOnly:true, help:'[A-Za-z0-9_-], 1–64 chars.' },
+  { key:'category_id', label:'Category', type:'catselect' },
+  { key:'platform', label:'Platform', type:'select', options:['x','instagram','linkedin','rss'], required:true },
+  { key:'label', label:'Label', type:'text', max:100 },
+  { key:'apify_dataset_id', label:'Apify dataset ID', type:'text', required:true },
+  { key:'apify_actor_id', label:'Apify actor ID', type:'text', nullable:true },
+  { key:'apify_task_id', label:'Apify task ID', type:'text', nullable:true },
+  { key:'source_config', label:'Source config (JSON)', type:'json', full:true, help:'Optional JSON object passed to the actor/task.' },
+  { key:'enabled', label:'Enabled', type:'toggle', def:true },
+];
+
+/* ---------- Form rendering from schema ---------- */
+let CATEGORIES_CACHE = [];
+function fieldInputHtml(f, row, isCreate){
+  const v = row ? row[f.key] : undefined;
+  const readOnly = f.createOnly && !isCreate;
+  if(readOnly){
+    return labelWrap(f, '<div class="ro-value">'+escapeHtml(v==null?'—':String(v))+'</div>');
+  }
+  if(f.type==='toggle'){
+    const on = (v===undefined) ? !!f.def : isOn(v);
+    return '<div class="ftoggle"><span class="fl">'+escapeHtml(f.label)+
+      (f.help?'<div class="form-help">'+escapeHtml(f.help)+'</div>':'')+'</span>'+
+      '<label class="switch"><input type="checkbox" data-field="'+f.key+'" data-type="toggle"'+(on?' checked':'')+'>'+
+      '<span class="track"></span></label></div>';
+  }
+  let input='';
+  if(f.type==='textarea'){
+    input = '<textarea class="form-input" data-field="'+f.key+'" data-type="text"'+(f.max?' maxlength="'+f.max+'"':'')+'>'+escapeHtml(v==null?'':v)+'</textarea>';
+  } else if(f.type==='select'){
+    input = '<select class="form-input" data-field="'+f.key+'" data-type="text">'+
+      (f.options||[]).map(o=>'<option value="'+escapeHtml(o)+'"'+((v!=null?String(v):f.def)===o?' selected':'')+'>'+escapeHtml(o)+'</option>').join('')+'</select>';
+  } else if(f.type==='catselect'){
+    input = '<select class="form-input" data-field="'+f.key+'" data-type="text">'+
+      CATEGORIES_CACHE.map(c=>'<option value="'+escapeHtml(c.id)+'"'+((v!=null?String(v):'')===c.id?' selected':'')+'>'+escapeHtml(c.id)+' — '+escapeHtml(c.label||'')+'</option>').join('')+'</select>';
+  } else if(f.type==='csv'){
+    const text = Array.isArray(v) ? v.join(', ') : csvFromJson(v);
+    input = '<textarea class="form-input" data-field="'+f.key+'" data-type="csv" style="min-height:48px">'+escapeHtml(text)+'</textarea>';
+  } else if(f.type==='windows'){
+    const text = Array.isArray(v) ? v.join(', ') : csvFromJson(v);
+    input = '<input class="form-input" data-field="'+f.key+'" data-type="windows" value="'+escapeHtml(text)+'">';
+  } else if(f.type==='json'){
+    let text = '';
+    if(v!=null && v!==''){ try{ text = JSON.stringify(typeof v==='string'?JSON.parse(v):v, null, 2); }catch{ text = String(v); } }
+    input = '<textarea class="form-input mono" data-field="'+f.key+'" data-type="json" style="min-height:80px">'+escapeHtml(text)+'</textarea>';
+  } else if(f.type==='number'){
+    const val = (v===undefined||v===null) ? (f.nullable?'':(f.def!=null?f.def:'')) : v;
+    input = '<input class="form-input" type="number" data-field="'+f.key+'" data-type="number" value="'+escapeHtml(val)+'"'+
+      (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+(f.step!=null?' step="'+f.step+'"':'')+'>';
+  } else {
+    const val = (v==null) ? (f.def!=null && isCreate ? f.def : (v==null?'':v)) : v;
+    input = '<input class="form-input" type="text" data-field="'+f.key+'" data-type="text" value="'+escapeHtml(val)+'"'+(f.max?' maxlength="'+f.max+'"':'')+'>';
+  }
+  return labelWrap(f, input);
+}
+function labelWrap(f, inner){
+  return '<div class="'+(f.full?'ffull':'')+'"><label class="form-label">'+escapeHtml(f.label)+
+    (f.required?' <span style="color:var(--red)">*</span>':'')+'</label>'+inner+
+    (f.help && f.type!=='toggle'?'<div class="form-help">'+escapeHtml(f.help)+'</div>':'')+'</div>';
+}
+function csvFromJson(v){
+  if(v==null || v==='') return '';
+  if(Array.isArray(v)) return v.join(', ');
+  try{ const p=JSON.parse(v); return Array.isArray(p)? p.join(', ') : String(v); }catch{ return String(v); }
+}
+function renderForm(fields, row, isCreate){
+  let html=''; let open=false;
+  fields.forEach(f=>{
+    if(f.section){
+      if(open) html+='</div></div>';
+      html += '<div class="fsection"><div class="fsection-title">'+escapeHtml(f.section)+'</div><div class="fgrid">';
+      open=true; return;
+    }
+    html += fieldInputHtml(f, row, isCreate);
+  });
+  if(open) html+='</div></div>';
+  return html;
+}
+function collectForm(fields, isCreate){
+  const body = {};
+  document.querySelectorAll('#modal-root [data-field]').forEach(node=>{
+    const key = node.getAttribute('data-field');
+    const type = node.getAttribute('data-type');
+    let val;
+    if(type==='toggle'){ val = node.checked; }
+    else if(type==='number'){ const raw=String(node.value).trim(); val = raw===''? null : Number(raw); }
+    else if(type==='csv'){ val = String(node.value).split(/[\n,]/).map(s=>s.trim()).filter(Boolean); }
+    else if(type==='windows'){ val = String(node.value).split(',').map(s=>s.trim()).filter(Boolean); }
+    else if(type==='json'){ const raw=String(node.value).trim(); if(raw===''){ val=null; } else { try{ val=JSON.parse(raw); }catch{ val=raw; } } }
+    else { val = node.value; }
+    body[key] = val;
+  });
+  return body;
+}
+
+/* ---------- Modal plumbing ---------- */
+let MODAL_ONSAVE = null;
+function openModal(opts){
+  // opts: { title, sub, bodyHtml, saveLabel, onSave, wide }
+  MODAL_ONSAVE = opts.onSave || null;
+  const root = el('modal-root');
+  root.innerHTML =
+    '<div class="modal-overlay" onclick="closeModal()"></div>'+
+    '<div class="modal'+(opts.wide?' wide':'')+'">'+
+      '<div class="modal-header"><div><h2>'+escapeHtml(opts.title||'')+'</h2>'+
+        (opts.sub?'<div class="sub">'+escapeHtml(opts.sub)+'</div>':'')+'</div>'+
+        '<button class="x" onclick="closeModal()">×</button></div>'+
+      '<div class="modal-body">'+(opts.bodyHtml||'')+'</div>'+
+      (opts.onSave? '<div class="modal-footer">'+
+        '<button class="btn" onclick="closeModal()">Cancel</button>'+
+        '<button class="btn btn-primary" onclick="modalSave(this)">'+escapeHtml(opts.saveLabel||'Save')+'</button>'+
+      '</div>':'')+
+    '</div>';
+  root.classList.add('open');
+}
+function closeModal(){ const r=el('modal-root'); r.classList.remove('open'); r.innerHTML=''; MODAL_ONSAVE=null; }
+async function modalSave(btn){ if(MODAL_ONSAVE) await withBtn(btn, ()=>MODAL_ONSAVE()); }
+
+/* =========================================================================
+   PAGE RENDERERS
    ========================================================================= */
 const PAGE_RENDERERS = {
 
-  /* ---------- MONITORING (executive trends: daily/weekly/monthly) ---------- */
+  /* ---------- MONITORING ---------- */
   monitoring: async (host)=>{
     const bucket = MONITOR_BUCKET;
     const days = bucket==='month'? 365 : (bucket==='week'? 120 : 30);
     const ts = await api('/internal/report/timeseries?bucket='+bucket+'&days='+days).catch(()=>({series:[]}));
     const series = ts.series || [];
-
-    // headline KPIs = sums over the window
     const sum = (k)=> series.reduce((a,r)=>a+(r[k]||0),0);
-    const totalPub = sum('published');
-    const totalScraped = sum('scraped');
-    const totalSelected = sum('selected');
-    const totalTokens = sum('ai_tokens');
+    const totalPub = sum('published'), totalScraped = sum('scraped'), totalSelected = sum('selected'), totalTokens = sum('ai_tokens');
     const selectRate = totalScraped? (totalSelected/totalScraped*100):0;
     const pubPerActiveBucket = series.length? (totalPub/series.length):0;
-
     const bucketBtns = ['day','week','month'].map(b=>
       '<button class="btn btn-sm'+(b===bucket?' btn-primary':'')+'" onclick="setMonitorBucket(\''+b+'\')">'+
       (b==='day'?'Daily':b==='week'?'Weekly':'Monthly')+'</button>').join(' ');
-
     const labels = series.map(r=>r.bucket);
-
     host.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">'+
         '<span class="muted">Granularity:</span>'+bucketBtns+
@@ -422,20 +1004,16 @@ const PAGE_RENDERERS = {
         '<div class="card"><h3>AI usage (calls & tokens)</h3>'+makeCanvas('chart-trend-ai',230)+'</div>'+
       '</div>'+
       (series.length? '' : '<div class="empty" style="margin-top:16px">No time-series data yet. Once the pipeline runs for a few '+bucket+'s, trends appear here.</div>');
-
     if(series.length){
       queueChart(()=>drawLine('chart-trend-vol', labels, [
         {label:'Published', data:series.map(r=>r.published), color:'#22c55e', fill:true},
-        {label:'Scraped', data:series.map(r=>r.scraped), color:'#60a5fa'},
-      ]));
+        {label:'Scraped', data:series.map(r=>r.scraped), color:'#60a5fa'} ]));
       queueChart(()=>drawLine('chart-trend-quality', labels, [
         {label:'Selected', data:series.map(r=>r.selected), color:'#22c55e'},
-        {label:'Rejected', data:series.map(r=>r.rejected), color:'#ef4444'},
-      ]));
+        {label:'Rejected', data:series.map(r=>r.rejected), color:'#ef4444'} ]));
       queueChart(()=>drawLine('chart-trend-ai', labels, [
         {label:'AI calls', data:series.map(r=>r.ai_calls), color:'#a78bfa'},
-        {label:'Tokens (÷100)', data:series.map(r=>Math.round((r.ai_tokens||0)/100)), color:'#f59e0b'},
-      ]));
+        {label:'Tokens (÷100)', data:series.map(r=>Math.round((r.ai_tokens||0)/100)), color:'#f59e0b'} ]));
     }
   },
 
@@ -452,7 +1030,6 @@ const PAGE_RENDERERS = {
     const tokenBudget = rc.ai_daily_token_budget || 0;
     const callTone = aiBudget && aiCalls >= aiBudget*0.9 ? 'bad' : (aiBudget && aiCalls >= aiBudget*0.7 ? 'warn':'good');
     const tokTone  = tokenBudget && aiTokens >= tokenBudget*0.9 ? 'bad' : (tokenBudget && aiTokens >= tokenBudget*0.7 ? 'warn':'good');
-
     const fn = daily?.funnel || {};
     const kpiRow = daily ? '<div class="grid cols-4" style="margin-bottom:16px">'+
         statCard('Duplicate rate', fn.duplicate_rate_pct!=null?fn.duplicate_rate_pct+'%':'—', {tone: fn.duplicate_rate_pct>60?'bad':(fn.duplicate_rate_pct>30?'warn':'good'), sub:'of fetched'})+
@@ -460,15 +1037,13 @@ const PAGE_RENDERERS = {
         statCard('AI select rate', fn.ai_select_rate_pct!=null?fn.ai_select_rate_pct+'%':'—', {sub:'of scored'})+
         statCard('Queued rate', fn.queued_rate_of_fresh_pct!=null?fn.queued_rate_of_fresh_pct+'%':'—', {sub:'of fresh'})+
       '</div>' : '';
-
     host.innerHTML =
       '<div class="grid cols-4" style="margin-bottom:16px">'+
         statCard('Queue (scheduled)', fmtNum(s.queue_pending), {sub:'retry '+fmtNum(s.queue_retry)+' · failed '+fmtNum(s.queue_failed)})+
         statCard('Published 24h', fmtNum(s.published_24h), {tone:'good'})+
         statCard('Items scraped 24h', fmtNum(s.items_today))+
         statCard('Last rotation', fmtUtc(s.last_run?.created_at), {sub:s.last_run?.status||'—'})+
-      '</div>'+
-      kpiRow+
+      '</div>'+ kpiRow+
       '<div class="grid cols-4" style="margin-bottom:16px">'+
         statCard('AI calls 24h', fmtNum(aiCalls)+(aiBudget?(' / '+fmtNum(aiBudget)):''), {tone:callTone, sub:'scoring '+fmtNum(s.ai_scoring_calls_24h)+' · translation '+fmtNum(s.ai_translation_calls_24h)})+
         statCard('AI tokens 24h', fmtNum(aiTokens)+(tokenBudget?(' / '+fmtNum(tokenBudget)):''), {tone:tokTone})+
@@ -483,32 +1058,136 @@ const PAGE_RENDERERS = {
         flagRow('Scheduler', rc.telegram_scheduler_enabled)+
         flagRow('Maintenance mode', rc.maintenance_mode)+
       '</div>';
-
     const statuses = daily?.statuses?.discovery_items || {};
     const sKeys = Object.keys(statuses);
     if(sKeys.length) queueChart(()=>drawBar('chart-statuses', sKeys, sKeys.map(k=>statuses[k]), {label:'items', color:'#60a5fa'}));
+  },
+
+  /* ---------- CATEGORIES & CHANNELS (hierarchical management) ---------- */
+  structure: async (host)=>{
+    const [catRes, chanRes] = await Promise.all([
+      api('/internal/categories').catch(()=>({categories:[]})),
+      api('/internal/channels').catch(()=>({channels:[]})),
+    ]);
+    const cats = catRes.categories || [];
+    CATEGORIES_CACHE = cats;
+    const chans = chanRes.channels || [];
+    STRUCT_CACHE.categories = {}; STRUCT_CACHE.channels = {};
+    cats.forEach(c=>{ STRUCT_CACHE.categories[c.id]=c; });
+    chans.forEach(c=>{ STRUCT_CACHE.channels[c.id]=c; });
+
+    const byCat = {};
+    chans.forEach(ch=>{ (byCat[ch.category_id] = byCat[ch.category_id] || []).push(ch); });
+
+    // Keep the sidebar tree + scope selectors in sync with the latest data.
+    STRUCT.categories = cats;
+    STRUCT.channelsByCat = byCat;
+    Object.values(STRUCT.channelsByCat).forEach(arr=>arr.sort((a,b)=>String(a.language).localeCompare(String(b.language))));
+    renderScopeSelectors();
+    renderNav();
+
+    const recent = loadChangelog().slice(0,5).map(e=>
+      '<div style="padding:6px 0;border-bottom:1px solid var(--surface-2);font-size:12px">'+
+        '<span class="faint mono">'+fmtUtc(e.ts)+'</span> · '+
+        pill(e.action, e.action==='create'?'green':(e.action==='delete'?'red':'amber'))+' '+
+        escapeHtml(e.entity)+' <code>'+escapeHtml(e.id)+'</code>'+
+        (e.changes&&e.changes.length?' <span class="faint">('+e.changes.length+' field'+(e.changes.length>1?'s':'')+')</span>':'')+
+      '</div>').join('') || '<div class="empty">No changes recorded yet.</div>';
+
+    let html =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">'+
+        '<div><div style="font-weight:600">Categories &amp; Channels</div>'+
+          '<div class="faint" style="font-size:12px">Categories are the top-level structure. Channels are sub-entities (language / environment layers) under each category.</div></div>'+
+        '<span style="flex:1"></span>'+
+        '<button class="btn btn-primary btn-sm" onclick="openCategoryEditor(null)">+ New category</button>'+
+      '</div>';
+
+    if(cats.length===0){
+      html += '<div class="empty">No categories yet. Create one to begin.</div>';
+    }
+
+    cats.forEach(cat=>{
+      const catEnabled = isOn(cat.enabled);
+      const list = byCat[cat.id] || [];
+      const langs = (()=>{ try{ return JSON.parse(cat.language_targets||'[]'); }catch{ return []; } })();
+      const chanRows = list.map(ch=>{
+        const en = isOn(ch.enabled);
+        const pub = isOn(ch.publish_enabled);
+        // publish only matters when the master switch is on; reflect that.
+        const pubBtn = '<button class="btn btn-sm" '+(en?'':'disabled title="Enable the channel first"')+
+          ' onclick="toggleChannelPublish(event,\''+escapeHtml(ch.id)+'\','+(!pub)+','+en+')">'+(pub?'Unpublish':'Publish')+'</button>';
+        return '<tr>'+
+          '<td><span class="tree-line">└─</span> <code>'+escapeHtml(ch.language||'—')+'</code></td>'+
+          '<td><code>'+escapeHtml(ch.telegram_chat_id||'—')+'</code>'+(ch.channel_label?' <span class="faint">'+escapeHtml(ch.channel_label)+'</span>':'')+'</td>'+
+          '<td>'+pill(en?'enabled':'disabled', en?'green':'dim')+'</td>'+
+          '<td>'+pill(pub?'publishing':'paused', (pub&&en)?'green':'dim')+'</td>'+
+          '<td><div class="btn-row">'+
+            '<button class="btn btn-sm btn-primary" onclick="openChannelDetail(\''+escapeHtml(ch.id)+'\')">Manage</button>'+
+            '<button class="btn btn-sm" onclick="openChannelEditor(\''+escapeHtml(ch.id)+'\',null)">Edit</button>'+
+            '<button class="btn btn-sm" onclick="toggleChannelEnabled(event,\''+escapeHtml(ch.id)+'\','+(!en)+')">'+(en?'Disable':'Enable')+'</button>'+
+            pubBtn+
+          '</div></td>'+
+        '</tr>';
+      }).join('') || '<tr><td colspan="5" class="empty">No channels under this category yet.</td></tr>';
+
+      html +=
+        '<div class="cat-card">'+
+          '<div class="cat-head">'+
+            '<span class="title">'+escapeHtml(cat.label||cat.id)+'</span>'+
+            '<code class="meta">'+escapeHtml(cat.id)+'</code>'+
+            pill(catEnabled?'enabled':'disabled', catEnabled?'green':'dim')+
+            '<span class="spacer"></span>'+
+            '<div class="btn-row">'+
+              '<button class="btn btn-sm btn-primary" onclick="openCategoryDetail(\''+escapeHtml(cat.id)+'\')">Manage</button>'+
+              '<button class="btn btn-sm" onclick="openCategoryEditor(\''+escapeHtml(cat.id)+'\')">Edit</button>'+
+              '<button class="btn btn-sm" onclick="toggleCategoryEnabled(event,\''+escapeHtml(cat.id)+'\','+(!catEnabled)+')">'+(catEnabled?'Disable':'Enable')+'</button>'+
+              '<button class="btn btn-sm btn-primary" onclick="openChannelEditor(null,\''+escapeHtml(cat.id)+'\')">+ Channel</button>'+
+            '</div>'+
+          '</div>'+
+          '<div class="cat-body">'+
+            '<div>'+
+              '<span class="chip">profile: '+escapeHtml(cat.prompt_profile||'—')+'</span>'+
+              '<span class="chip">threshold: '+escapeHtml(cat.score_threshold)+'</span>'+
+              '<span class="chip">freshness: '+escapeHtml(cat.freshness_hours)+'h</span>'+
+              '<span class="chip">media: '+escapeHtml(cat.media_mode||'—')+'</span>'+
+              '<span class="chip">langs: '+escapeHtml(langs.join(', ')||'—')+'</span>'+
+              '<span class="chip">created: '+escapeHtml(fmtUtc(cat.created_at))+'</span>'+
+            '</div>'+
+            '<div class="chan-sub">'+
+              '<table><thead><tr><th>Language</th><th>Telegram chat</th><th>State</th><th>Publish</th><th>Actions</th></tr></thead>'+
+              '<tbody>'+chanRows+'</tbody></table>'+
+            '</div>'+
+          '</div>'+
+        '</div>';
+    });
+
+    html += '<div class="card"><div class="card-head"><h3>Recent changes</h3><span class="spacer"></span>'+
+      '<button class="btn btn-sm btn-ghost" onclick="nav(\'changelog\')">View all</button></div>'+recent+'</div>';
+
+    host.innerHTML = html;
   },
 
   /* ---------- SOURCES ---------- */
   sources: async (host)=>{
     const [srcRes, yieldRes, queryRes, perfRes] = await Promise.all([
       api('/internal/apify-sources').catch(()=>({sources:[]})),
-      api('/internal/report/source-yield?hours='+WINDOW_HOURS).catch(()=>({sources:[]})),
-      api('/internal/report/apify-query-yield?hours='+WINDOW_HOURS).catch(()=>({sources:[]})),
-      api('/internal/report/source-performance?hours='+WINDOW_HOURS).catch(()=>({sources:[],publishedByBucket:[]})),
+      api('/internal/report/source-yield?hours='+WINDOW_HOURS+catParam('&')).catch(()=>({sources:[]})),
+      api('/internal/report/apify-query-yield?hours='+WINDOW_HOURS+catParam('&')).catch(()=>({sources:[]})),
+      api('/internal/report/source-performance?hours='+WINDOW_HOURS+catParam('&')).catch(()=>({sources:[],publishedByBucket:[]})),
     ]);
-    const sources = srcRes.sources || [];
+    const sources = (srcRes.sources || []).filter(s=> !SCOPE.categoryId || s.category_id===SCOPE.categoryId);
     const queryByAcct = indexBy(queryRes.sources||[], 'sourceAccount');
 
-    let rows = sources.map(src=>{
-      const enabled = src.enabled===1 || src.enabled===true;
+    const srcRows = sources.map(src=>{
+      const enabled = isOn(src.enabled);
       return '<tr>'+
         '<td><code>'+escapeHtml(src.id)+'</code></td>'+
+        '<td>'+escapeHtml(src.category_id||'—')+'</td>'+
         '<td>'+escapeHtml(src.platform||'—')+'</td>'+
         '<td>'+pill(enabled?'enabled':'disabled', enabled?'green':'dim')+'</td>'+
-        '<td><button class="btn btn-sm" onclick="toggleSource(\''+escapeHtml(src.id)+'\','+(!enabled)+')">'+(enabled?'Disable':'Enable')+'</button></td>'+
+        '<td><button class="btn btn-sm" onclick="toggleSource(event,\''+escapeHtml(src.id)+'\','+(!enabled)+')">'+(enabled?'Disable':'Enable')+'</button></td>'+
       '</tr>';
-    }).join('') || '<tr><td colspan="4" class="empty">No sources configured.</td></tr>';
+    });
 
     const yieldSorted = (yieldRes.sources||[]).sort((a,b)=>b.candidates-a.candidates);
     const yieldRows = yieldSorted.map(y=>{
@@ -523,9 +1202,8 @@ const PAGE_RENDERERS = {
         '<td class="num">'+pill(yPct.toFixed(1)+'%', tone)+'</td>'+
         '<td class="num">'+fmtNum(q.duplicates||0)+'</td>'+
       '</tr>';
-    }).join('') || '<tr><td colspan="6" class="empty">No yield data in window.</td></tr>';
+    });
 
-    // source reputation (from source-performance)
     const repSorted = (perfRes.sources||[]).sort((a,b)=>(b.reputation||0)-(a.reputation||0));
     const repRows = repSorted.map(s=>{
       const rep = Math.round(s.reputation||0);
@@ -535,18 +1213,21 @@ const PAGE_RENDERERS = {
         '<td class="num">'+((s.acceptanceRate!=null)?(s.acceptanceRate*100).toFixed(0)+'%':'—')+'</td>'+
         '<td class="num">'+((s.dominanceShare!=null)?(s.dominanceShare*100).toFixed(0)+'%':'—')+'</td>'+
         '<td class="num">'+pill(String(rep), tone)+'</td></tr>';
-    }).join('') || '<tr><td colspan="5" class="empty">No reputation data.</td></tr>';
+    });
 
     host.innerHTML =
       '<div class="card" style="margin-bottom:16px"><h3>Published volume by account · last '+WINDOW_HOURS+'h</h3>'+makeCanvas('chart-srcyield',240)+'</div>'+
       '<div class="grid cols-2" style="margin-bottom:16px">'+
-        '<div class="card"><h3>Per-account yield <span class="faint">(candidates → published)</span></h3>'+
-          '<table><thead><tr><th>Account</th><th class="num">Cand.</th><th class="num">AI rej.</th><th class="num">Pub.</th><th class="num">Yield</th><th class="num">Dupes</th></tr></thead><tbody>'+yieldRows+'</tbody></table></div>'+
-        '<div class="card"><h3>Source reputation</h3>'+
-          '<table><thead><tr><th>Account</th><th class="num">Pub.</th><th class="num">Accept</th><th class="num">Dominance</th><th class="num">Score</th></tr></thead><tbody>'+repRows+'</tbody></table></div>'+
+        tableCard('src-yield', { title:'Per-account yield <span class="faint">(candidates → published)</span>',
+          head:[{label:'Account'},{label:'Cand.',cls:'num'},{label:'AI rej.',cls:'num'},{label:'Pub.',cls:'num'},{label:'Yield',cls:'num'},{label:'Dupes',cls:'num'}],
+          rows:yieldRows, empty:'No yield data in window.', pageSize:10 })+
+        tableCard('src-rep', { title:'Source reputation',
+          head:[{label:'Account'},{label:'Pub.',cls:'num'},{label:'Accept',cls:'num'},{label:'Dominance',cls:'num'},{label:'Score',cls:'num'}],
+          rows:repRows, empty:'No reputation data.', pageSize:10 })+
       '</div>'+
-      '<div class="card"><h3>Configured sources</h3>'+
-        '<table><thead><tr><th>ID</th><th>Platform</th><th>State</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      tableCard('src-configured', { title:'Configured sources'+(SCOPE.categoryId?' · '+escapeHtml(scopeLabel()):''),
+        head:[{label:'ID'},{label:'Category'},{label:'Platform'},{label:'State'},{label:''}],
+        rows:srcRows, empty:'No sources configured.', pageSize:25 });
 
     const top = yieldSorted.slice(0,10);
     if(top.length) queueChart(()=>drawBar('chart-srcyield', top.map(y=>y.sourceAccount), top.map(y=>y.published), {label:'published', color:'#22c55e'}));
@@ -554,9 +1235,8 @@ const PAGE_RENDERERS = {
 
   /* ---------- COST ---------- */
   cost: async (host)=>{
-    const [aiRes, queryRes] = await Promise.all([
-      api('/internal/report/ai-cost-by-source?hours='+WINDOW_HOURS).catch(()=>({sources:[],attributionEnabled:false})),
-      api('/internal/report/apify-query-yield?hours='+WINDOW_HOURS).catch(()=>({sources:[]})),
+    const [aiRes] = await Promise.all([
+      api('/internal/report/ai-cost-by-source?hours='+WINDOW_HOURS+catParam('&')).catch(()=>({sources:[],attributionEnabled:false})),
     ]);
     const aiRows = (aiRes.sources||[]).sort((a,b)=>b.totalTokens-a.totalTokens).map(r=>
       '<tr>'+
@@ -566,27 +1246,23 @@ const PAGE_RENDERERS = {
         '<td class="num">'+fmtNum(r.totalTokens)+'</td>'+
         '<td class="num">'+fmtNum(r.published)+'</td>'+
         '<td class="num">'+(r.tokensPerPublished!=null?fmtNum(Math.round(r.tokensPerPublished)):'—')+'</td>'+
-      '</tr>').join('') || '<tr><td colspan="6" class="empty">No AI cost data. '+(aiRes.attributionEnabled===false?'Attribution disabled (needs migration 0019 + flag).':'')+'</td></tr>';
-
+      '</tr>');
     host.innerHTML =
       (aiRes.attributionEnabled===false? '<div class="dev-banner" style="border-color:rgba(96,165,250,.35);color:var(--blue);background:rgba(96,165,250,.08)">AI cost attribution is OFF. Enable AI_COST_ATTRIBUTION_ENABLED + migration 0019 for per-source numbers.</div>':'')+
-      '<div class="card"><h3>AI token cost by source · last '+WINDOW_HOURS+'h</h3>'+
-        '<table><thead><tr><th>Account</th><th class="num">Scoring calls</th><th class="num">Translation calls</th><th class="num">Total tokens</th><th class="num">Published</th><th class="num">Tokens/post</th></tr></thead><tbody>'+aiRows+'</tbody></table>'+
-        '<p class="faint" style="margin-top:10px">High tokens/post with low published = wasted spend. Apify charges per run even on mock — cross-check the Sources tab mock indicators.</p></div>';
+      tableCard('cost-by-source', { title:'AI token cost by source · last '+WINDOW_HOURS+'h',
+        head:[{label:'Account'},{label:'Scoring calls',cls:'num'},{label:'Translation calls',cls:'num'},{label:'Total tokens',cls:'num'},{label:'Published',cls:'num'},{label:'Tokens/post',cls:'num'}],
+        rows:aiRows, empty:'No AI cost data. '+(aiRes.attributionEnabled===false?'Attribution disabled (needs migration 0019 + flag).':''), pageSize:25,
+        note:'High tokens/post with low published = wasted spend. Apify charges per run even on mock — cross-check the Sources tab.' });
   },
 
-  /* ---------- PIPELINE HEALTH (rejection funnel) ---------- */
+  /* ---------- PIPELINE HEALTH ---------- */
   pipeline: async (host)=>{
-    const f = await api('/internal/report/funnel?hours='+WINDOW_HOURS);
+    const f = await api('/internal/report/funnel?hours='+WINDOW_HOURS+catParam('&'));
     const t = f.totals || {};
     const stage = (label,val,tone)=>statCard(label, fmtNum(val), tone?{tone}:{});
-    const rejSection = (title, arr)=>{
-      const rows=(arr||[]).sort((a,b)=>b.count-a.count).map(r=>
-        '<tr><td>'+escapeHtml(r.reason||r.status||'—')+'</td><td class="num">'+fmtNum(r.count)+'</td></tr>').join('')
-        || '<tr><td colspan="2" class="empty">None</td></tr>';
-      return '<div class="card"><h3>'+escapeHtml(title)+'</h3><table><thead><tr><th>Reason</th><th class="num">Count</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
-    };
     const r = f.rejections || {};
+    const rejRows = (arr)=> (arr||[]).slice().sort((a,b)=>b.count-a.count).map(x=>
+      '<tr><td>'+escapeHtml(x.reason||x.status||'—')+'</td><td class="num">'+fmtNum(x.count)+'</td></tr>');
     host.innerHTML =
       '<div class="grid cols-3" style="margin-bottom:16px">'+
         stage('Fetched', t.fetched)+ stage('New', t.new)+ stage('Duplicate', t.duplicate,'warn')+
@@ -597,35 +1273,56 @@ const PAGE_RENDERERS = {
       '<div class="card" style="margin-bottom:16px"><h3>Funnel · fetched → published</h3>'+makeCanvas('chart-funnel',200)+'</div>'+
       '<p class="faint" style="margin-bottom:14px">Window '+WINDOW_HOURS+'h · this answers "why is the queue empty / why nothing good lands". Big drops below show where items die.</p>'+
       '<div class="grid cols-2">'+
-        rejSection('Pre-AI gate rejections', r.preAi)+
-        rejSection('AI score rejections', r.ai)+
-        rejSection('Story / theme rejections', r.storyTheme)+
-        rejSection('Rule-gate rejections', r.ruleGate)+
+        tableCard('rej-preai',{ title:'Pre-AI gate rejections', head:[{label:'Reason'},{label:'Count',cls:'num'}], rows:rejRows(r.preAi), empty:'None', pageSize:10 })+
+        tableCard('rej-ai',{ title:'AI score rejections', head:[{label:'Reason'},{label:'Count',cls:'num'}], rows:rejRows(r.ai), empty:'None', pageSize:10 })+
+        tableCard('rej-story',{ title:'Story / theme rejections', head:[{label:'Reason'},{label:'Count',cls:'num'}], rows:rejRows(r.storyTheme), empty:'None', pageSize:10 })+
+        tableCard('rej-rule',{ title:'Rule-gate rejections', head:[{label:'Reason'},{label:'Count',cls:'num'}], rows:rejRows(r.ruleGate), empty:'None', pageSize:10 })+
       '</div>';
     queueChart(()=>drawFunnel('chart-funnel',[
       {label:'Fetched',value:t.fetched||0},{label:'New',value:t.new||0},
-      {label:'Queued',value:t.queued||0},{label:'Published',value:t.published||0}
-    ]));
+      {label:'Queued',value:t.queued||0},{label:'Published',value:t.published||0} ]));
   },
 
   /* ---------- QUEUE ---------- */
   queue: async (host)=>{
+    const chanId = scopedChannelId();
     const [qhRes, qqRes, capRes, gapRes] = await Promise.all([
-      api('/internal/report/queue-health').catch(()=>({channels:[],thresholds:{}})),
-      api('/internal/report/queue-quality').catch(()=>({})),
-      api('/internal/report/source-cap-preview').catch(()=>({rows:[]})),
-      api('/internal/report/gap-fill-preview').catch(()=>({rows:[],movedEarlierCount:0})),
+      api('/internal/report/queue-health'+catParam('?')).catch(()=>({channels:[],thresholds:{}})),
+      api('/internal/report/queue-quality'+(chanId?('?channel='+enc(chanId)):'')).catch(()=>({})),
+      api('/internal/report/source-cap-preview'+(chanId?('?channel='+enc(chanId)):'')).catch(()=>({rows:[]})),
+      api('/internal/report/gap-fill-preview'+(chanId?('?channel='+enc(chanId)):'')).catch(()=>({rows:[],movedEarlierCount:0})),
     ]);
-    const ch = (qhRes.channels||[])[0] || {};
+    const allChannels = qhRes.channels || [];
+    // Per-channel (language) health overview — channels are language versions.
+    const healthRows = allChannels.map(c=>{
+      const meta = STRUCT_CACHE.channels[c.channelId] || {};
+      const tone = c.state==='healthy'?'green':(c.state==='lean'?'amber':'red');
+      return '<tr>'+
+        '<td>'+escapeHtml(langName(meta.language))+' <span class="faint mono">'+escapeHtml(meta.language||c.channelId)+'</span></td>'+
+        '<td>'+pill(c.state||'—', tone)+(c.backloaded?' '+pill('backloaded','amber'):'')+'</td>'+
+        '<td class="num">'+fmtNum(c.scheduledNext6h)+'</td>'+
+        '<td class="num">'+fmtNum(c.scheduledNext24h)+'</td>'+
+        '<td class="num">'+fmtNum(c.pendingCandidates)+'</td>'+
+        '<td class="num">'+(c.lastPublishedAgoMin!=null?fmtNum(c.lastPublishedAgoMin)+'m':'—')+'</td>'+
+        '<td><button class="btn btn-sm" onclick="openChannelDetail(\''+escapeHtml(c.channelId)+'\')">Open</button></td>'+
+      '</tr>';
+    });
+    // Detailed KPIs for the focused channel (selected, or first in category).
+    const ch = allChannels.find(c=>c.channelId===chanId) || allChannels[0] || {};
+    const focusMeta = STRUCT_CACHE.channels[ch.channelId] || {};
     const stateTone = ch.state==='healthy'?'good':(ch.state==='lean'?'warn':'bad');
     const qq = qqRes || {};
     const sharePct = qq.maxSourceShareNext24h!=null ? (qq.maxSourceShareNext24h*100):null;
-
     const capRows = (capRes.rows||[]).filter(r=>r.wouldCap>0).map(r=>
-      '<tr><td><code>'+escapeHtml(r.sourceAccount)+'</code></td><td class="num">'+fmtNum(r.published24h)+'</td><td class="num">'+fmtNum(r.cap)+'</td><td class="num">'+pill(fmtNum(r.wouldCap),'amber')+'</td></tr>'
-    ).join('') || '<tr><td colspan="4" class="empty">Nothing would be capped.</td></tr>';
-
+      '<tr><td><code>'+escapeHtml(r.sourceAccount)+'</code></td><td class="num">'+fmtNum(r.published24h)+'</td><td class="num">'+fmtNum(r.cap)+'</td><td class="num">'+pill(fmtNum(r.wouldCap),'amber')+'</td></tr>');
+    const focusName = ch.channelId ? (langName(focusMeta.language)+' channel') : 'channel';
     host.innerHTML =
+      (allChannels.length>1
+        ? tableCard('queue-health-by-channel',{ title:'Queue health by channel (language)'+(SCOPE.categoryId?' · '+escapeHtml(scopeLabel()):''),
+            head:[{label:'Channel'},{label:'State'},{label:'Next 6h',cls:'num'},{label:'Next 24h',cls:'num'},{label:'Pending',cls:'num'},{label:'Last pub',cls:'num'},{label:''}],
+            rows:healthRows, empty:'No channels.', pageSize:10 })+'<div style="height:16px"></div>'
+        : '')+
+      '<h3 style="color:var(--muted);font-size:13px;margin:0 0 10px">Focus: '+escapeHtml(focusName)+'</h3>'+
       '<div class="grid cols-4" style="margin-bottom:16px">'+
         statCard('Queue state', (ch.state||'—'), {tone:stateTone, sub:ch.backloaded?'backloaded':''})+
         statCard('Scheduled next 6h', fmtNum(ch.scheduledNext6h))+
@@ -643,36 +1340,34 @@ const PAGE_RENDERERS = {
           '<p class="muted">Unique stories (fingerprints) next 6h: <code>'+fmtNum(qq.uniqueFingerprintsNext6h)+'</code></p>'+
           '<p class="muted">Top source next 24h: <code>'+escapeHtml(qq.topSourceNext24h||'—')+'</code> ('+(sharePct!=null?sharePct.toFixed(0)+'%':'—')+')</p>'+
           '<p class="faint">High single-source share = low diversity. The fair picker + quality controller keep this in check.</p></div>'+
-        '<div class="card"><h3>Source cap preview <span class="faint">(what WOULD be capped)</span></h3>'+
-          '<table><thead><tr><th>Account</th><th class="num">Pub 24h</th><th class="num">Cap</th><th class="num">Over</th></tr></thead><tbody>'+capRows+'</tbody></table>'+
-          '<p class="faint" style="margin-top:8px">Gap-fill would move '+fmtNum(gapRes.movedEarlierCount||0)+' items earlier.</p></div>'+
+        tableCard('cap-preview',{ title:'Source cap preview <span class="faint">(what WOULD be capped)</span>',
+          head:[{label:'Account'},{label:'Pub 24h',cls:'num'},{label:'Cap',cls:'num'},{label:'Over',cls:'num'}],
+          rows:capRows, empty:'Nothing would be capped.', pageSize:10,
+          note:'Gap-fill would move '+fmtNum(gapRes.movedEarlierCount||0)+' items earlier.' })+
       '</div>';
   },
 
   /* ---------- CONTENT ---------- */
   content: async (host)=>{
     const [mix, recent, story] = await Promise.all([
-      api('/internal/report/topic-mix?hours='+WINDOW_HOURS).catch(()=>({byTheme:[],totalPublished:0})),
-      api('/internal/items?limit=25').catch(()=>({items:[]})),
-      api('/internal/report/story-intelligence?hours='+WINDOW_HOURS).catch(()=>null),
+      api('/internal/report/topic-mix?hours='+WINDOW_HOURS+catParam('&')).catch(()=>({byTheme:[],totalPublished:0})),
+      api('/internal/items?limit=100'+catParam('&')).catch(()=>({items:[]})),
+      api('/internal/report/story-intelligence?hours='+WINDOW_HOURS+catParam('&')).catch(()=>null),
     ]);
     const total = mix.totalPublished||0;
-    const themeRows = (mix.byTheme||[]).sort((a,b)=>b.count-a.count).map(t=>{
+    const themeRows = (mix.byTheme||[]).slice().sort((a,b)=>b.count-a.count).map(t=>{
       const pct = total? (t.count/total*100):0;
-      return '<tr><td>'+escapeHtml(t.theme||'—')+'</td><td class="num">'+fmtNum(t.count)+'</td>'+
-        '<td class="num">'+pct.toFixed(0)+'%</td></tr>';
-    }).join('') || '<tr><td colspan="3" class="empty">No published content in window.</td></tr>';
-
+      return '<tr><td>'+escapeHtml(t.theme||'—')+'</td><td class="num">'+fmtNum(t.count)+'</td><td class="num">'+pct.toFixed(0)+'%</td></tr>';
+    });
     const items = recent.items || [];
-    const itemRows = items.slice(0,25).map(it=>{
+    const itemRows = items.map(it=>{
       const st = it.status||'—';
       const tone = st==='published'?'s-green':((st==='ai_rejected'||String(st).includes('reject'))?'s-red':'s-dim');
       return '<tr><td>'+escapeHtml(String(it.text||'').slice(0,80))+'</td>'+
         '<td><code>'+escapeHtml(it.source_account||'—')+'</code></td>'+
         '<td class="num">'+fmtNum(it.ai_score)+'</td>'+
         '<td>'+pill(st,tone.replace('s-',''))+'</td></tr>';
-    }).join('') || '<tr><td colspan="4" class="empty">No recent items (status=ai_selected).</td></tr>';
-
+    });
     host.innerHTML =
       (story? '<div class="grid cols-3" style="margin-bottom:16px">'+
         statCard('Stories with fingerprint', fmtNum(story.totalWithFingerprint))+
@@ -681,52 +1376,80 @@ const PAGE_RENDERERS = {
       '</div>':'')+
       '<div class="grid cols-2" style="margin-bottom:16px">'+
         '<div class="card"><h3>Topic mix · last '+WINDOW_HOURS+'h ('+fmtNum(total)+' posts)</h3>'+makeCanvas('chart-topicmix',240)+'</div>'+
-        '<div class="card"><h3>Theme breakdown</h3>'+
-          '<table><thead><tr><th>Theme</th><th class="num">Count</th><th class="num">Share</th></tr></thead><tbody>'+themeRows+'</tbody></table></div>'+
+        tableCard('content-themes',{ title:'Theme breakdown', head:[{label:'Theme'},{label:'Count',cls:'num'},{label:'Share',cls:'num'}], rows:themeRows, empty:'No published content in window.', pageSize:10 })+
       '</div>'+
-      '<div class="card"><h3>Recent items</h3>'+
-        '<table><thead><tr><th>Text</th><th>Account</th><th class="num">Score</th><th>Status</th></tr></thead><tbody>'+itemRows+'</tbody></table></div>';
-    const themes = (mix.byTheme||[]).sort((a,b)=>b.count-a.count).slice(0,10);
+      tableCard('content-recent',{ title:'Recent items', head:[{label:'Text'},{label:'Account'},{label:'Score',cls:'num'},{label:'Status'}], rows:itemRows, empty:'No recent items.', pageSize:25 });
+    const themes = (mix.byTheme||[]).slice().sort((a,b)=>b.count-a.count).slice(0,10);
     if(themes.length) queueChart(()=>drawDonut('chart-topicmix', themes.map(t=>t.theme||'—'), themes.map(t=>t.count)));
   },
 
   /* ---------- SETTINGS (management) ---------- */
   settings: async (host)=>{
-    const [setRes] = await Promise.all([ api('/internal/admin/settings').catch(()=>({settings:[]})) ]);
+    const [setRes, rc] = await Promise.all([
+      api('/internal/admin/settings').catch(()=>({settings:[]})),
+      fetchRuntime().catch(()=>({})),
+    ]);
     const settings = setRes.settings || [];
-    // Only these keys are server-side toggleable (verified ALLOWED_KEYS).
-    const TOGGLEABLE = {
-      telegram_publish_enabled:'Telegram publish',
-      apify_curation_enabled:'Apify curation',
-      apify_curation_dry_run:'Curation dry-run',
-      maintenance_mode:'Maintenance mode',
-    };
-    const byKey={}; settings.forEach(s=>byKey[s.key]=s.value);
-    const toggles = Object.keys(TOGGLEABLE).map(k=>{
-      const on = truthy(byKey[k]);
+    const byKey = {}; settings.forEach(s=>byKey[s.key]=s.value);
+    // The four runtime-toggleable keys (verified ALLOWED_KEYS), each mapped to
+    // its authoritative effective state in runtime_config so the button's
+    // visual state always matches actual system behaviour.
+    const TOGGLEABLE = [
+      { key:'telegram_publish_enabled', label:'Telegram publish', rc:'telegram_publish_enabled' },
+      { key:'apify_curation_enabled',  label:'Apify curation',    rc:'curation_enabled' },
+      { key:'apify_curation_dry_run',  label:'Curation dry-run',  rc:'dry_run_enabled' },
+      { key:'maintenance_mode',        label:'Maintenance mode',  rc:'maintenance_mode' },
+    ];
+    const toggles = TOGGLEABLE.map(t=>{
+      const on = (rc[t.rc] !== undefined) ? isOn(rc[t.rc]) : isOn(byKey[t.key]);
       return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--surface-2)">'+
-        '<div><div>'+escapeHtml(TOGGLEABLE[k])+'</div><code class="faint" style="font-size:11px">'+escapeHtml(k)+'</code></div>'+
-        '<button class="btn btn-sm '+(on?'btn-danger':'btn-primary')+'" onclick="toggleSetting(\''+k+'\','+(!on)+')">'+(on?'Turn OFF':'Turn ON')+'</button></div>';
+        '<div><div>'+escapeHtml(t.label)+' '+pill(on?'on':'off', on?'green':'dim')+'</div>'+
+          '<code class="faint" style="font-size:11px">'+escapeHtml(t.key)+'</code></div>'+
+        '<button class="btn btn-sm '+(on?'btn-danger':'btn-primary')+'" onclick="toggleSetting(event,\''+t.key+'\','+(!on)+')">'+(on?'Turn OFF':'Turn ON')+'</button></div>';
     }).join('');
 
-    // read-only view of all other settings
-    const otherRows = settings.filter(s=>!TOGGLEABLE[s.key]).map(s=>
-      '<tr><td><code>'+escapeHtml(s.key)+'</code></td><td>'+escapeHtml(String(s.value).slice(0,60))+'</td><td class="faint">'+fmtUtc(s.updated_at)+'</td></tr>'
-    ).join('') || '<tr><td colspan="3" class="empty">No other settings.</td></tr>';
+    const otherRows = settings.filter(s=>!TOGGLEABLE.find(t=>t.key===s.key)).map(s=>
+      '<tr><td><code>'+escapeHtml(s.key)+'</code></td><td>'+escapeHtml(String(s.value).slice(0,60))+'</td><td class="faint">'+fmtUtc(s.updated_at)+'</td></tr>');
 
     host.innerHTML =
       '<div class="card" style="margin-bottom:16px"><h3>Operational toggles</h3>'+
-        '<p class="faint" style="margin-top:-6px;margin-bottom:10px">Only these four are runtime-toggleable. Other env flags are deploy-time.</p>'+
+        '<p class="faint" style="margin-top:-6px;margin-bottom:10px">Only these four are runtime-toggleable. State shown reflects the live runtime config, not just the stored row. Other env flags are deploy-time.</p>'+
         toggles+'</div>'+
-      '<div class="card"><h3>All settings (read-only)</h3>'+
-        '<table><thead><tr><th>Key</th><th>Value</th><th>Updated</th></tr></thead><tbody>'+otherRows+'</tbody></table></div>';
+      tableCard('settings-other',{ title:'All settings (read-only)', head:[{label:'Key'},{label:'Value'},{label:'Updated'}], rows:otherRows, empty:'No other settings.', pageSize:25 });
+  },
+
+  /* ---------- CHANGE LOG (traceability) ---------- */
+  changelog: async (host)=>{
+    const entries = loadChangelog();
+    const rows = entries.map(e=>{
+      const changeText = (e.changes&&e.changes.length)
+        ? e.changes.map(c=>escapeHtml(c.field)+': '+escapeHtml(c.from)+' → '+escapeHtml(c.to)).join('<br>')
+        : '<span class="faint">—</span>';
+      return '<tr>'+
+        '<td class="faint mono" style="white-space:nowrap">'+escapeHtml(fmtUtc(e.ts))+'</td>'+
+        '<td>'+escapeHtml(e.who||'—')+'</td>'+
+        '<td>'+pill(e.action, e.action==='create'?'green':(e.action==='delete'?'red':'amber'))+'</td>'+
+        '<td>'+escapeHtml(e.entity)+'</td>'+
+        '<td><code>'+escapeHtml(e.id)+'</code></td>'+
+        '<td style="font-size:12px">'+changeText+'</td>'+
+      '</tr>';
+    });
+    const op = getOperator();
+    host.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">'+
+        '<div class="faint" style="font-size:12px">Audit trail of changes made through this dashboard — who, what, and when. Stored in this browser.<br>'+
+          'Note: the API uses a single shared secret with no per-user identity, so "who" is the locally-set operator name; there is no server-side actor identity.</div>'+
+        '<span style="flex:1"></span>'+
+        '<span class="chip">operator: '+escapeHtml(op||'(not set)')+'</span>'+
+        '<button class="btn btn-sm" onclick="setOperator()">Set operator</button>'+
+        '<button class="btn btn-sm btn-danger" onclick="clearChangelog()">Clear log</button>'+
+      '</div>'+
+      tableCard('changelog-table',{ head:[{label:'Time'},{label:'Who'},{label:'Action'},{label:'Entity'},{label:'ID'},{label:'Changes'}], rows:rows, empty:'No changes recorded yet.', pageSize:25 });
   },
 
   /* ========== DEVELOPER ZONE ========== */
-
-  /* ---------- ROTATION RUNS (dev) ---------- */
   runs: async (host)=>{
-    const res = await api('/internal/runs?limit=30').catch(()=>({runs:[]}));
+    const res = await api('/internal/runs?limit=100').catch(()=>({runs:[]}));
     const runs = res.runs || res.results || [];
     const rows = runs.map(r=>
       '<tr><td><code>'+escapeHtml(String(r.id).slice(0,16))+'</code></td>'+
@@ -735,14 +1458,12 @@ const PAGE_RENDERERS = {
         '<td>'+pill(r.status||'—', r.status==='completed'?'green':(r.status==='failed'?'red':'dim'))+'</td>'+
         '<td class="num">'+fmtNum(r.items_new)+'</td>'+
         '<td class="num">'+fmtNum(r.items_queued)+'</td>'+
-        '<td class="faint">'+fmtUtc(r.created_at)+'</td></tr>'
-    ).join('') || '<tr><td colspan="7" class="empty">No runs.</td></tr>';
+        '<td class="faint">'+fmtUtc(r.created_at)+'</td></tr>');
     host.innerHTML =
-      '<div style="margin-bottom:14px"><button class="btn btn-primary btn-sm" onclick="triggerCuration()">Trigger curation run</button></div>'+
-      '<div class="card"><h3>Recent rotation runs</h3><table><thead><tr><th>ID</th><th>Category</th><th>Platform</th><th>Status</th><th class="num">New</th><th class="num">Queued</th><th>When</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      '<div style="margin-bottom:14px"><button class="btn btn-primary btn-sm" onclick="triggerCuration(event)">Trigger curation run</button></div>'+
+      tableCard('dev-runs',{ title:'Recent rotation runs', head:[{label:'ID'},{label:'Category'},{label:'Platform'},{label:'Status'},{label:'New',cls:'num'},{label:'Queued',cls:'num'},{label:'When'}], rows:rows, empty:'No runs.', pageSize:25 });
   },
 
-  /* ---------- LOGS & EVENTS (dev) ---------- */
   logs: async (host)=>{
     const res = await api('/internal/backlog/stats').catch(()=>({}));
     host.innerHTML =
@@ -750,29 +1471,26 @@ const PAGE_RENDERERS = {
         '<pre class="mono" style="font-size:11px;color:var(--muted);overflow:auto;max-height:300px">'+escapeHtml(JSON.stringify(res,null,2))+'</pre></div>'+
       '<div class="card"><h3>Manual backlog drain</h3>'+
         '<p class="faint">Force a scoring drain pass (developer action).</p>'+
-        '<button class="btn btn-sm" onclick="drainBacklog()">Run drain</button></div>';
+        '<button class="btn btn-sm" onclick="drainBacklog(event)">Run drain</button></div>';
   },
 
-  /* ---------- RAW ITEM TRACKER (dev) ---------- */
   tracker: async (host)=>{
     const statuses=['ai_selected','ai_rejected','pending','duplicate','error'];
     const sel = TRACKER_STATUS || 'ai_rejected';
-    const res = await api('/internal/items?status='+sel+'&limit=50').catch(()=>({items:[]}));
+    const res = await api('/internal/items?status='+sel+'&limit=200').catch(()=>({items:[]}));
     const items = res.items||[];
     const rows = items.map(it=>
       '<tr><td><code>'+escapeHtml(String(it.id).slice(0,14))+'</code></td>'+
         '<td>'+escapeHtml(String(it.text||'').slice(0,70))+'</td>'+
         '<td><code>'+escapeHtml(it.source_account||'—')+'</code></td>'+
         '<td class="num">'+fmtNum(it.ai_score)+'</td>'+
-        '<td class="faint">'+escapeHtml(it.reject_reason||'—')+'</td></tr>'
-    ).join('') || '<tr><td colspan="5" class="empty">No items with status='+sel+'.</td></tr>';
+        '<td class="faint">'+escapeHtml(it.reject_reason||'—')+'</td></tr>');
     const tabs = statuses.map(s=>'<button class="btn btn-sm'+(s===sel?' btn-primary':'')+'" onclick="setTrackerStatus(\''+s+'\')">'+s+'</button>').join(' ');
     host.innerHTML =
       '<div style="margin-bottom:14px;display:flex;gap:6px;flex-wrap:wrap">'+tabs+'</div>'+
-      '<div class="card"><h3>Raw items · status='+sel+'</h3><table><thead><tr><th>ID</th><th>Text</th><th>Account</th><th class="num">Score</th><th>Reject reason</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      tableCard('dev-tracker',{ title:'Raw items · status='+sel, head:[{label:'ID'},{label:'Text'},{label:'Account'},{label:'Score',cls:'num'},{label:'Reject reason'}], rows:rows, empty:'No items with status='+sel+'.', pageSize:25 });
   },
 
-  /* ---------- DEBUG TOOLS (dev) ---------- */
   debug: async (host)=>{
     const res = await api('/internal/debug/crypto-pipeline').catch(e=>({error:e.message}));
     host.innerHTML =
@@ -782,80 +1500,621 @@ const PAGE_RENDERERS = {
 
 };
 
+/* In-memory cache of the loaded category/channel rows, so editors can diff
+   against the original values for the change log. */
+const STRUCT_CACHE = { categories:{}, channels:{} };
+
 function flagRow(label,on){
   return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--surface-2)">'+
     '<span class="muted">'+escapeHtml(label)+'</span>'+pill(on?'on':'off', on?'green':'dim')+'</div>';
 }
 function indexBy(arr,key){ const m={}; (arr||[]).forEach(x=>{ m[x[key]]=x; }); return m; }
-
 function setMonitorBucket(b){ MONITOR_BUCKET=b; loadPage('monitoring'); }
 
-async function toggleSource(id,enable){
-  if(!enable && !confirm('Disable source '+id+'?\n\nIt will stop being scraped until re-enabled.')) return;
-  try{
-    await api('/internal/apify-sources/'+encodeURIComponent(id), {method:'PATCH', body:{enabled:enable}});
-    toast((enable?'Enabled ':'Disabled ')+id,'ok');
-    loadPage('sources');
-  }catch(e){ toast('Toggle failed: '+e.message,'err'); }
+/* =========================================================================
+   CATEGORY / CHANNEL EDITORS
+   ========================================================================= */
+function openCategoryEditor(id){
+  const isCreate = !id;
+  const row = id ? STRUCT_CACHE.categories[id] : null;
+  // Normalise language_targets to an array for the form.
+  const rowForForm = row ? Object.assign({}, row, { language_targets: parseJsonArray(row.language_targets) }) : null;
+  openModal({
+    title: isCreate ? 'New category' : 'Edit category',
+    sub: isCreate ? 'Top-level entity' : id,
+    wide:true,
+    bodyHtml: renderForm(CATEGORY_FIELDS, rowForForm, isCreate),
+    saveLabel: isCreate ? 'Create category' : 'Save changes',
+    onSave: async ()=>{
+      const body = collectForm(CATEGORY_FIELDS, isCreate);
+      if(isCreate){
+        if(!body.id || !body.label || !body.prompt_profile){ toast('id, label and prompt_profile are required','err'); return; }
+      } else {
+        delete body.id; // immutable
+      }
+      const path = isCreate ? '/internal/categories' : '/internal/categories/'+enc(id);
+      try{
+        await api(path, { method: isCreate?'POST':'PATCH', body });
+        const changes = diffFields(row, body, CATEGORY_FIELDS.filter(f=>f.key));
+        logChange('category', isCreate?body.id:id, isCreate?'create':'update', isCreate?summarizeCreate(body):changes);
+        toast('Category '+(isCreate?'created':'updated'),'ok');
+        closeModal();
+        if(CURRENT_PAGE==='structure') loadPage('structure');
+      }catch(e){ toast(e.message,'err'); }
+    },
+  });
 }
 
-/* Settings toggle — only ALLOWED_KEYS accepted server-side; value is bool string */
-async function toggleSetting(key,enable){
-  // Guard the high-impact flags with a confirmation.
+function openChannelEditor(id, presetCategoryId){
+  const isCreate = !id;
+  const row = id ? STRUCT_CACHE.channels[id] : (presetCategoryId ? { category_id:presetCategoryId } : null);
+  const rowForForm = row ? Object.assign({}, row, {
+    allowed_windows: parseJsonArray(row.allowed_windows),
+    blocked_windows: parseJsonArray(row.blocked_windows),
+    forbidden_phrases: parseJsonArray(row.forbidden_phrases),
+  }) : null;
+  openModal({
+    title: isCreate ? 'New channel' : 'Edit channel',
+    sub: isCreate ? (presetCategoryId? 'under '+presetCategoryId : 'sub-entity') : id,
+    wide:true,
+    bodyHtml: renderForm(CHANNEL_FIELDS, rowForForm, isCreate),
+    saveLabel: isCreate ? 'Create channel' : 'Save changes',
+    onSave: async ()=>{
+      const body = collectForm(CHANNEL_FIELDS, isCreate);
+      if(isCreate){
+        if(!body.id || !body.category_id || !body.telegram_chat_id || !body.language){ toast('id, category, language and telegram chat id are required','err'); return; }
+      } else {
+        delete body.id; delete body.category_id; // immutable on edit
+      }
+      const path = isCreate ? '/internal/channels' : '/internal/channels/'+enc(id);
+      try{
+        await api(path, { method: isCreate?'POST':'PATCH', body });
+        const changes = diffFields(id?STRUCT_CACHE.channels[id]:null, body, CHANNEL_FIELDS.filter(f=>f.key));
+        logChange('channel', isCreate?body.id:id, isCreate?'create':'update', isCreate?summarizeCreate(body):changes);
+        toast('Channel '+(isCreate?'created':'updated'),'ok');
+        closeModal();
+        if(CURRENT_PAGE==='structure') loadPage('structure');
+      }catch(e){ toast(e.message,'err'); }
+    },
+  });
+}
+function summarizeCreate(body){
+  return Object.keys(body).filter(k=>k!=='id').slice(0,8).map(k=>({field:k, from:'∅', to:normForDiff(body[k],{})}));
+}
+function parseJsonArray(v){ if(Array.isArray(v)) return v; if(v==null||v==='') return []; try{ const p=JSON.parse(v); return Array.isArray(p)?p:[]; }catch{ return []; } }
+
+/* =========================================================================
+   CHANNEL DETAIL DRAWER — the comprehensive, single place to view, edit and
+   manage every facet of a channel. It surfaces the full read/edit/display
+   surface the codebase exposes for a channel:
+     • all 35 stored attributes (grouped, read-only) + Edit / Enable / Publish
+     • runtime health: queue-health (category), queue-quality (channel),
+       source-cap-preview (channel), gap-fill-preview (channel)
+     • the channel's scheduled queue with the REAL Telegram preview, plus
+       publish-now / retry / cancel
+     • structural elements: source accounts + Apify sources for its category
+       (add / enable / disable / edit)
+   ========================================================================= */
+let DETAIL_CHANNEL_ID = null;
+let DETAIL_CTX = null; // { type:'channel'|'category', id, catId }
+function reopenDetail(){ if(!DETAIL_CTX) return; if(DETAIL_CTX.type==='channel') openChannelDetail(DETAIL_CTX.id); else openCategoryDetail(DETAIL_CTX.catId); }
+let DETAIL_QUEUE_STATUS = 'scheduled';
+
+function channelAttrHtml(ch){
+  // Render every stored attribute, grouped exactly like the editor sections.
+  let html=''; let open=false, rows='';
+  const flush=()=>{ if(open){ html+='<div class="fgrid">'+rows+'</div></div>'; rows=''; } };
+  CHANNEL_FIELDS.forEach(f=>{
+    if(f.section){ flush(); html+='<div class="fsection"><div class="fsection-title">'+escapeHtml(f.section)+'</div>'; open=true; return; }
+    let v = ch[f.key];
+    if(f.type==='toggle') v = isOn(v)?'on':'off';
+    else if(f.type==='windows'||f.type==='csv') v = parseJsonArray(v).join(', ') || '—';
+    else if(v==null||v==='') v='—';
+    rows += '<div><label class="form-label">'+escapeHtml(f.label)+'</label>'+
+            '<div class="ro-value">'+escapeHtml(String(v))+'</div></div>';
+  });
+  flush();
+  html += '<div class="fsection"><div class="fsection-title">Record</div><div class="fgrid">'+
+    '<div><label class="form-label">publish_enabled</label><div class="ro-value">'+(isOn(ch.publish_enabled)?'on':'off')+'</div></div>'+
+    '<div><label class="form-label">created_at</label><div class="ro-value">'+escapeHtml(fmtUtc(ch.created_at))+'</div></div>'+
+  '</div></div>';
+  return html;
+}
+
+function openChannelDetail(id){
+  const ch = STRUCT_CACHE.channels[id];
+  if(!ch){ toast('Channel not loaded; open from Categories & Channels.','err'); return; }
+  DETAIL_CHANNEL_ID = id;
+  DETAIL_CTX = { type:'channel', id, catId: ch.category_id };
+  DETAIL_QUEUE_STATUS = 'scheduled';
+  const en = isOn(ch.enabled), pub = isOn(ch.publish_enabled);
+  const headerActions =
+    '<div class="btn-row" style="margin-bottom:16px">'+
+      '<button class="btn btn-sm" onclick="openChannelEditor(\''+escapeHtml(id)+'\',null)">Edit attributes</button>'+
+      '<button class="btn btn-sm" onclick="detailToggleEnabled(event,'+(!en)+')">'+(en?'Disable channel':'Enable channel')+'</button>'+
+      '<button class="btn btn-sm" '+(en?'':'disabled title="Enable the channel first"')+' onclick="detailTogglePublish(event,'+(!pub)+','+en+')">'+(pub?'Pause publishing':'Start publishing')+'</button>'+
+      '<button class="btn btn-sm" onclick="detailSendSnapshot(event)">Send market snapshot</button>'+
+    '</div>';
+  const body =
+    headerActions+
+    '<div style="margin-bottom:10px">'+
+      pill(en?'enabled':'disabled', en?'green':'dim')+' '+
+      pill((pub&&en)?'publishing':'paused', (pub&&en)?'green':'dim')+' '+
+      '<span class="chip">category: '+escapeHtml(ch.category_id)+'</span>'+
+      '<span class="chip">language: '+escapeHtml(ch.language)+'</span>'+
+      '<span class="chip">'+escapeHtml(ch.telegram_chat_id)+'</span>'+
+    '</div>'+
+    '<div class="card" style="margin-bottom:16px"><h3>Runtime health</h3><div id="detail-runtime"><div class="spinner">Loading…</div></div></div>'+
+    '<div class="card" style="margin-bottom:16px"><div class="card-head"><h3>Publish queue</h3><span class="spacer"></span>'+
+      '<select class="win-select" onchange="detailSetQueueStatus(this.value)">'+
+        ['scheduled','retry','failed','published','cancelled'].map(s=>'<option value="'+s+'"'+(s===DETAIL_QUEUE_STATUS?' selected':'')+'>'+s+'</option>').join('')+
+      '</select></div><div id="detail-queue"><div class="spinner">Loading…</div></div>'+
+      '<div id="detail-preview"></div></div>'+
+    '<div class="card" style="margin-bottom:16px"><div class="card-head"><h3>Source accounts <span class="faint">(category '+escapeHtml(ch.category_id)+')</span></h3><span class="spacer"></span>'+
+      '<button class="btn btn-sm btn-primary" onclick="openSourceAccountEditor(\''+escapeHtml(ch.category_id)+'\')">+ Add</button></div>'+
+      '<div id="detail-srcacc"><div class="spinner">Loading…</div></div></div>'+
+    '<div class="card"><div class="card-head"><h3>Apify sources <span class="faint">(category '+escapeHtml(ch.category_id)+')</span></h3><span class="spacer"></span>'+
+      '<button class="btn btn-sm btn-primary" onclick="openApifySourceEditor(null,\''+escapeHtml(ch.category_id)+'\')">+ Add</button></div>'+
+      '<div id="detail-apify"><div class="spinner">Loading…</div></div></div>';
+  openModal({ title:'Channel — '+(ch.channel_label||id), sub:id, wide:true, bodyHtml:
+    '<div class="fsection"><div class="fsection-title">Attributes</div></div>'+channelAttrHtml(ch)+
+    '<div style="height:8px"></div>'+body });
+  // lazy-load the heavy sections
+  loadDetailRuntime(id, ch.category_id);
+  loadDetailQueue(id);
+  loadDetailSourceAccounts(ch.category_id);
+  loadDetailApify(ch.category_id);
+}
+function detailSetQueueStatus(s){ DETAIL_QUEUE_STATUS = s; loadDetailQueue(DETAIL_CHANNEL_ID); }
+
+async function loadDetailRuntime(id, catId){
+  const host = el('detail-runtime'); if(!host) return;
+  try{
+    const [qh, qq, cap, gap] = await Promise.all([
+      api('/internal/report/queue-health?category='+enc(catId)).catch(()=>({channels:[]})),
+      api('/internal/report/queue-quality?channel='+enc(id)).catch(()=>({})),
+      api('/internal/report/source-cap-preview?channel='+enc(id)).catch(()=>({rows:[]})),
+      api('/internal/report/gap-fill-preview?channel='+enc(id)).catch(()=>({rows:[],movedEarlierCount:0})),
+    ]);
+    const ch = (qh.channels||[]).find(c=>c.channelId===id) || (qh.channels||[])[0] || {};
+    const sharePct = qq.maxSourceShareNext24h!=null ? (qq.maxSourceShareNext24h*100):null;
+    const stateTone = ch.state==='healthy'?'good':(ch.state==='lean'?'warn':'bad');
+    const capRows = (cap.rows||[]).filter(r=>r.wouldCap>0).map(r=>
+      '<tr><td><code>'+escapeHtml(r.sourceAccount)+'</code></td><td class="num">'+fmtNum(r.published24h)+'</td><td class="num">'+fmtNum(r.cap)+'</td><td class="num">'+pill(fmtNum(r.wouldCap),'amber')+'</td></tr>');
+    host.innerHTML =
+      '<div class="grid cols-4" style="margin-bottom:14px">'+
+        statCard('Queue state', ch.state||'—', {tone:stateTone, sub:ch.backloaded?'backloaded':''})+
+        statCard('Scheduled 6h / 24h', fmtNum(ch.scheduledNext6h)+' / '+fmtNum(ch.scheduledNext24h))+
+        statCard('Pending candidates', fmtNum(ch.pendingCandidates))+
+        statCard('Last publish (min)', ch.lastPublishedAgoMin!=null?fmtNum(ch.lastPublishedAgoMin):'—', {sub:'rotation age '+(ch.rotationAgeMin!=null?fmtNum(ch.rotationAgeMin)+'m':'—')})+
+      '</div>'+
+      '<div class="grid cols-3" style="margin-bottom:14px">'+
+        statCard('Unique sources 6h', fmtNum(qq.uniqueSourcesNext6h))+
+        statCard('Unique stories 6h', fmtNum(qq.uniqueFingerprintsNext6h))+
+        statCard('Max source share 24h', sharePct!=null?sharePct.toFixed(0)+'%':'—', {tone: sharePct>40?'warn':'good', sub: qq.topSourceNext24h||''})+
+      '</div>'+
+      tableCard('detail-cap',{ title:'Source cap preview <span class="faint">(what would be capped)</span>',
+        head:[{label:'Account'},{label:'Pub 24h',cls:'num'},{label:'Cap',cls:'num'},{label:'Over',cls:'num'}],
+        rows:capRows, empty:'Nothing would be capped.', pageSize:10,
+        note:'Gap-fill would move '+fmtNum(gap.movedEarlierCount||0)+' items earlier.' });
+  }catch(e){ host.innerHTML='<div class="err-inline">'+escapeHtml(e.message)+'</div>'; }
+}
+
+async function loadDetailQueue(id){
+  const host = el('detail-queue'); if(!host) return;
+  try{
+    const res = await api('/internal/queue?channel='+enc(id)+'&status='+enc(DETAIL_QUEUE_STATUS)+'&limit=100').catch(()=>({queue:[]}));
+    const items = res.queue || [];
+    const rows = items.map(q=>{
+      const st = q.status||'—';
+      const tone = st==='published'?'green':(st==='failed'?'red':(st==='retry'?'amber':'dim'));
+      const acts = '<div class="btn-row">'+
+        '<button class="btn btn-sm" onclick="detailPreviewItem(event,\''+escapeHtml(q.id)+'\')">Preview</button>'+
+        ((st==='scheduled'||st==='retry'||st==='failed')?'<button class="btn btn-sm btn-primary" onclick="detailPublishNow(event,\''+escapeHtml(q.id)+'\')">Publish now</button>':'')+
+        ((st==='failed'||st==='retry')?'<button class="btn btn-sm" onclick="detailRetry(event,\''+escapeHtml(q.id)+'\')">Retry</button>':'')+
+        ((st==='scheduled'||st==='retry'||st==='failed')?'<button class="btn btn-sm btn-danger" onclick="detailCancel(event,\''+escapeHtml(q.id)+'\')">Cancel</button>':'')+
+      '</div>';
+      return '<tr>'+
+        '<td>'+escapeHtml(String(q.caption_short||'').slice(0,70))+'</td>'+
+        '<td><code>'+escapeHtml(q.telegram_method||'—')+'</code></td>'+
+        '<td class="faint">'+fmtUtc(q.scheduled_at)+'</td>'+
+        '<td>'+pill(st,tone)+(q.retry_count?' <span class="faint">×'+q.retry_count+'</span>':'')+'</td>'+
+        '<td>'+acts+'</td>'+
+      '</tr>';
+    });
+    host.innerHTML = tableCard('detail-queue-tbl',{
+      head:[{label:'Caption'},{label:'Method'},{label:'Scheduled'},{label:'Status'},{label:'Actions'}],
+      rows:rows, empty:'No '+DETAIL_QUEUE_STATUS+' items for this channel.', pageSize:10 });
+  }catch(e){ host.innerHTML='<div class="err-inline">'+escapeHtml(e.message)+'</div>'; }
+}
+
+async function detailPreviewItem(ev, qid){
+  const host = el('detail-preview'); if(!host) return;
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{
+      const p = await api('/internal/queue/'+enc(qid)+'/preview');
+      const ch = p.channel || {};
+      const cap = p.captions || {};
+      const warns = (p.warnings||[]).map(w=>pill(w,'amber')).join(' ') || '<span class="faint">none</span>';
+      host.innerHTML =
+        '<div class="card" style="margin-top:12px;border-color:var(--blue)"><div class="card-head"><h3>Telegram preview</h3>'+
+          '<span class="spacer"></span><button class="btn btn-sm btn-ghost" onclick="el(\'detail-preview\').innerHTML=\'\'">Close</button></div>'+
+          '<div class="muted" style="font-size:12px;margin-bottom:8px">method <code>'+escapeHtml(p.telegram_method||cap.telegram_method||'—')+'</code> · chat <code>'+escapeHtml(ch.telegram_chat_id||'—')+'</code> · status <code>'+escapeHtml(p.status||'—')+'</code></div>'+
+          '<div class="ro-value" style="white-space:pre-wrap">'+escapeHtml(cap.media_html||cap.text||cap.caption||'(no caption)')+'</div>'+
+          '<div style="margin-top:8px">warnings: '+warns+'</div>'+
+        '</div>';
+      host.scrollIntoView({behavior:'smooth', block:'nearest'});
+    }catch(e){ toast('Preview failed: '+e.message,'err'); }
+  });
+}
+async function detailPublishNow(ev, qid){
+  if(!confirm('Publish this item to the live channel now?')) return;
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ await api('/internal/queue/'+enc(qid)+'/publish-now', {method:'POST', body:{}});
+      logChange('queue', qid, 'update', [{field:'action', from:'scheduled', to:'published-now'}]);
+      toast('Publishing…','ok'); loadDetailQueue(DETAIL_CHANNEL_ID);
+    }catch(e){ toast('Publish failed: '+e.message,'err'); }
+  });
+}
+async function detailRetry(ev, qid){
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ await api('/internal/queue/'+enc(qid)+'/retry', {method:'POST', body:{}});
+      toast('Re-queued for retry','ok'); loadDetailQueue(DETAIL_CHANNEL_ID);
+    }catch(e){ toast('Retry failed: '+e.message,'err'); }
+  });
+}
+async function detailCancel(ev, qid){
+  if(!confirm('Cancel this queue item?')) return;
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ await api('/internal/queue/'+enc(qid), {method:'DELETE'});
+      logChange('queue', qid, 'delete', [{field:'status', from:DETAIL_QUEUE_STATUS, to:'cancelled'}]);
+      toast('Cancelled','ok'); loadDetailQueue(DETAIL_CHANNEL_ID);
+    }catch(e){ toast('Cancel failed: '+e.message,'err'); }
+  });
+}
+async function detailSendSnapshot(ev){
+  if(!confirm('Send a market snapshot to this channel now?')) return;
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ const r = await api('/internal/market-snapshot/send-now', {method:'POST', body:{channel_id:DETAIL_CHANNEL_ID}});
+      toast('Snapshot '+(r&&r.sent===false?'skipped':'sent'),'ok');
+    }catch(e){ toast('Snapshot failed: '+e.message,'err'); }
+  });
+}
+async function detailToggleEnabled(ev, enable){
+  await toggleChannelEnabled(ev, DETAIL_CHANNEL_ID, enable);
+  const ch = STRUCT_CACHE.channels[DETAIL_CHANNEL_ID]; if(ch) ch.enabled = enable?1:0;
+  openChannelDetail(DETAIL_CHANNEL_ID);
+}
+async function detailTogglePublish(ev, enable, channelEnabled){
+  await toggleChannelPublish(ev, DETAIL_CHANNEL_ID, enable, channelEnabled);
+  const ch = STRUCT_CACHE.channels[DETAIL_CHANNEL_ID]; if(ch) ch.publish_enabled = enable?1:0;
+  openChannelDetail(DETAIL_CHANNEL_ID);
+}
+
+/* =========================================================================
+   CATEGORY DETAIL DRAWER — dedicated view of a category with all of its
+   information and controls, its child channels, category-scoped analytics,
+   and the structural sources feeding it.
+   ========================================================================= */
+function categoryAttrHtml(cat){
+  let html=''; let open=false, rows='';
+  const flush=()=>{ if(open){ html+='<div class="fgrid">'+rows+'</div></div>'; rows=''; } };
+  CATEGORY_FIELDS.forEach(f=>{
+    if(f.section){ flush(); html+='<div class="fsection"><div class="fsection-title">'+escapeHtml(f.section)+'</div>'; open=true; return; }
+    let v = cat[f.key];
+    if(f.type==='toggle') v = isOn(v)?'on':'off';
+    else if(f.type==='csv') v = parseJsonArray(v).join(', ') || '—';
+    else if(v==null||v==='') v='—';
+    rows += '<div><label class="form-label">'+escapeHtml(f.label)+'</label>'+
+            '<div class="ro-value">'+escapeHtml(String(v))+'</div></div>';
+  });
+  flush();
+  return html;
+}
+function openCategoryDetail(catId){
+  const cat = STRUCT_CACHE.categories[catId];
+  if(!cat){ toast('Category not loaded; open from Categories & Channels.','err'); return; }
+  DETAIL_CTX = { type:'category', id:catId, catId };
+  const en = isOn(cat.enabled);
+  const headerActions =
+    '<div class="btn-row" style="margin-bottom:16px">'+
+      '<button class="btn btn-sm" onclick="openCategoryEditor(\''+escapeHtml(catId)+'\')">Edit attributes</button>'+
+      '<button class="btn btn-sm" onclick="catDetailToggleEnabled(event,'+(!en)+')">'+(en?'Disable category':'Enable category')+'</button>'+
+      '<button class="btn btn-sm btn-primary" onclick="openChannelEditor(null,\''+escapeHtml(catId)+'\')">+ New channel</button>'+
+    '</div>';
+  const body =
+    headerActions+
+    '<div style="margin-bottom:10px">'+pill(en?'enabled':'disabled', en?'green':'dim')+
+      ' <span class="chip">profile: '+escapeHtml(cat.prompt_profile||'—')+'</span>'+
+      '<span class="chip">threshold: '+escapeHtml(cat.score_threshold)+'</span>'+
+      '<span class="chip">freshness: '+escapeHtml(cat.freshness_hours)+'h</span></div>'+
+    '<div class="fsection"><div class="fsection-title">Attributes</div></div>'+categoryAttrHtml(cat)+
+    '<div class="card" style="margin-bottom:16px"><h3>Channels</h3><div id="detail-cat-channels"><div class="spinner">Loading…</div></div></div>'+
+    '<div class="card" style="margin-bottom:16px"><h3>Category analytics <span class="faint">(last '+WINDOW_HOURS+'h)</span></h3><div id="detail-cat-analytics"><div class="spinner">Loading…</div></div></div>'+
+    '<div class="card" style="margin-bottom:16px"><div class="card-head"><h3>Source accounts</h3><span class="spacer"></span>'+
+      '<button class="btn btn-sm btn-primary" onclick="openSourceAccountEditor(\''+escapeHtml(catId)+'\')">+ Add</button></div>'+
+      '<div id="detail-srcacc"><div class="spinner">Loading…</div></div></div>'+
+    '<div class="card"><div class="card-head"><h3>Apify sources</h3><span class="spacer"></span>'+
+      '<button class="btn btn-sm btn-primary" onclick="openApifySourceEditor(null,\''+escapeHtml(catId)+'\')">+ Add</button></div>'+
+      '<div id="detail-apify"><div class="spinner">Loading…</div></div></div>';
+  openModal({ title:'Category — '+(cat.label||catId), sub:catId, wide:true, bodyHtml: body });
+  loadCatDetailChannels(catId);
+  loadCatDetailAnalytics(catId);
+  loadDetailSourceAccounts(catId);
+  loadDetailApify(catId);
+}
+async function catDetailToggleEnabled(ev, enable){
+  await toggleCategoryEnabled(ev, DETAIL_CTX.id, enable);
+  const cat = STRUCT_CACHE.categories[DETAIL_CTX.id]; if(cat) cat.enabled = enable?1:0;
+  openCategoryDetail(DETAIL_CTX.id);
+}
+async function loadCatDetailChannels(catId){
+  const host = el('detail-cat-channels'); if(!host) return;
+  try{
+    const res = await api('/internal/channels?category='+enc(catId)).catch(()=>({channels:[]}));
+    const list = res.channels || [];
+    list.forEach(c=>{ STRUCT_CACHE.channels[c.id]=c; });
+    const rows = list.map(ch=>{
+      const en=isOn(ch.enabled), pub=isOn(ch.publish_enabled);
+      return '<tr><td><code>'+escapeHtml(ch.language||'—')+'</code></td>'+
+        '<td><code>'+escapeHtml(ch.telegram_chat_id||'—')+'</code>'+(ch.channel_label?' <span class="faint">'+escapeHtml(ch.channel_label)+'</span>':'')+'</td>'+
+        '<td>'+pill(en?'enabled':'disabled', en?'green':'dim')+'</td>'+
+        '<td>'+pill((pub&&en)?'publishing':'paused', (pub&&en)?'green':'dim')+'</td>'+
+        '<td><div class="btn-row"><button class="btn btn-sm btn-primary" onclick="openChannelDetail(\''+escapeHtml(ch.id)+'\')">Manage</button>'+
+          '<button class="btn btn-sm" onclick="openChannelEditor(\''+escapeHtml(ch.id)+'\',null)">Edit</button></div></td></tr>';
+    });
+    host.innerHTML = tableCard('detail-cat-channels-tbl',{
+      head:[{label:'Language'},{label:'Telegram chat'},{label:'State'},{label:'Publish'},{label:'Actions'}],
+      rows:rows, empty:'No channels under this category yet.', pageSize:10 });
+  }catch(e){ host.innerHTML='<div class="err-inline">'+escapeHtml(e.message)+'</div>'; }
+}
+async function loadCatDetailAnalytics(catId){
+  const host = el('detail-cat-analytics'); if(!host) return;
+  try{
+    const [funnel, mix, yieldRes] = await Promise.all([
+      api('/internal/report/funnel?hours='+WINDOW_HOURS+'&category='+enc(catId)).catch(()=>({totals:{}})),
+      api('/internal/report/topic-mix?hours='+WINDOW_HOURS+'&category='+enc(catId)).catch(()=>({byTheme:[],totalPublished:0})),
+      api('/internal/report/source-yield?hours='+WINDOW_HOURS+'&category='+enc(catId)).catch(()=>({sources:[]})),
+    ]);
+    const t = funnel.totals||{};
+    const themeRows = (mix.byTheme||[]).slice().sort((a,b)=>b.count-a.count).map(x=>{
+      const pct = mix.totalPublished? (x.count/mix.totalPublished*100):0;
+      return '<tr><td>'+escapeHtml(x.theme||'—')+'</td><td class="num">'+fmtNum(x.count)+'</td><td class="num">'+pct.toFixed(0)+'%</td></tr>';
+    });
+    const yieldRows = (yieldRes.sources||[]).slice().sort((a,b)=>b.published-a.published).map(y=>{
+      const yPct=(y.publishYield!=null?y.publishYield*100:0);
+      return '<tr><td><code>'+escapeHtml(y.sourceAccount)+'</code></td><td class="num">'+fmtNum(y.candidates)+'</td><td class="num">'+fmtNum(y.published)+'</td><td class="num">'+pill(yPct.toFixed(1)+'%', yPct>=20?'s-green':(yPct>=5?'s-amber':'s-red'))+'</td></tr>';
+    });
+    host.innerHTML =
+      '<div class="grid cols-4" style="margin-bottom:14px">'+
+        statCard('Fetched', fmtNum(t.fetched))+ statCard('Queued', fmtNum(t.queued),{tone:'good'})+
+        statCard('Published', fmtNum(t.published),{tone:'good'})+ statCard('Failed', fmtNum(t.failed),{tone:'bad'})+
+      '</div>'+
+      '<div class="grid cols-2">'+
+        tableCard('detail-cat-themes',{ title:'Topic mix', head:[{label:'Theme'},{label:'Count',cls:'num'},{label:'Share',cls:'num'}], rows:themeRows, empty:'No published content in window.', pageSize:8 })+
+        tableCard('detail-cat-yield',{ title:'Source yield', head:[{label:'Account'},{label:'Cand.',cls:'num'},{label:'Pub.',cls:'num'},{label:'Yield',cls:'num'}], rows:yieldRows, empty:'No yield data.', pageSize:8 })+
+      '</div>';
+  }catch(e){ host.innerHTML='<div class="err-inline">'+escapeHtml(e.message)+'</div>'; }
+}
+
+/* ---------- Structural sources (category-scoped) ---------- */
+async function loadDetailSourceAccounts(catId){
+  const host = el('detail-srcacc'); if(!host) return;
+  try{
+    const res = await api('/internal/source-accounts?category='+enc(catId)).catch(()=>({accounts:[]}));
+    const rows = (res.accounts||[]).map(a=>{
+      const en = isOn(a.enabled);
+      return '<tr><td><code>'+escapeHtml(a.platform)+'</code></td>'+
+        '<td>@'+escapeHtml(a.account_handle)+(a.display_name?' <span class="faint">'+escapeHtml(a.display_name)+'</span>':'')+'</td>'+
+        '<td>'+escapeHtml(a.trust_level||'—')+'</td>'+
+        '<td>'+pill(en?'enabled':'disabled', en?'green':'dim')+'</td>'+
+        '<td>'+(en?'<button class="btn btn-sm btn-danger" onclick="disableSourceAccount(event,\''+escapeHtml(a.id)+'\')">Disable</button>':'<span class="faint">—</span>')+'</td></tr>';
+    });
+    host.innerHTML = tableCard('detail-srcacc-tbl',{
+      head:[{label:'Platform'},{label:'Handle'},{label:'Trust'},{label:'State'},{label:''}],
+      rows:rows, empty:'No source accounts for this category.', pageSize:10 });
+  }catch(e){ host.innerHTML='<div class="err-inline">'+escapeHtml(e.message)+'</div>'; }
+}
+async function loadDetailApify(catId){
+  const host = el('detail-apify'); if(!host) return;
+  try{
+    const res = await api('/internal/apify-sources').catch(()=>({sources:[]}));
+    const list = (res.sources||[]).filter(s=>s.category_id===catId);
+    list.forEach(s=>{ APIFY_CACHE[s.id]=s; });
+    const rows = list.map(s=>{
+      const en = isOn(s.enabled);
+      return '<tr><td><code>'+escapeHtml(s.id)+'</code></td>'+
+        '<td><code>'+escapeHtml(s.platform)+'</code></td>'+
+        '<td>'+escapeHtml(s.label||'—')+'</td>'+
+        '<td><code>'+escapeHtml(String(s.apify_dataset_id||'—').slice(0,18))+'</code></td>'+
+        '<td>'+pill(en?'enabled':'disabled', en?'green':'dim')+'</td>'+
+        '<td><div class="btn-row">'+
+          '<button class="btn btn-sm" onclick="openApifySourceEditor(\''+escapeHtml(s.id)+'\',\''+escapeHtml(catId)+'\')">Edit</button>'+
+          '<button class="btn btn-sm" onclick="toggleApifySource(event,\''+escapeHtml(s.id)+'\','+(!en)+')">'+(en?'Disable':'Enable')+'</button>'+
+          '<button class="btn btn-sm btn-danger" onclick="deleteApifySource(event,\''+escapeHtml(s.id)+'\')">Delete</button>'+
+        '</div></td></tr>';
+    });
+    host.innerHTML = tableCard('detail-apify-tbl',{
+      head:[{label:'ID'},{label:'Platform'},{label:'Label'},{label:'Dataset'},{label:'State'},{label:'Actions'}],
+      rows:rows, empty:'No Apify sources for this category.', pageSize:10 });
+  }catch(e){ host.innerHTML='<div class="err-inline">'+escapeHtml(e.message)+'</div>'; }
+}
+function refreshDetailSources(){
+  if(!DETAIL_CTX) return;
+  loadDetailSourceAccounts(DETAIL_CTX.catId); loadDetailApify(DETAIL_CTX.catId);
+}
+
+function openSourceAccountEditor(catId){
+  openModal({ title:'New source account', sub:'category '+catId, wide:true,
+    bodyHtml: renderForm(SOURCE_ACCOUNT_FIELDS, { category_id:catId }, true),
+    saveLabel:'Create', onSave: async ()=>{
+      const body = collectForm(SOURCE_ACCOUNT_FIELDS, true);
+      if(!body.category_id || !body.platform || !body.account_handle){ toast('category, platform and handle are required','err'); return; }
+      try{ await api('/internal/source-accounts', {method:'POST', body});
+        logChange('source_account', body.account_handle, 'create', summarizeCreate(body));
+        toast('Source account created','ok'); closeModal(); reopenDetail();
+      }catch(e){ toast(e.message,'err'); }
+    } });
+}
+async function disableSourceAccount(ev, id){
+  if(!confirm('Disable this source account?')) return;
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ await api('/internal/source-accounts/'+enc(id), {method:'DELETE'});
+      logChange('source_account', id, 'update', [{field:'enabled', from:'on', to:'off'}]);
+      toast('Disabled','ok'); refreshDetailSources();
+    }catch(e){ toast(e.message,'err'); }
+  });
+}
+let APIFY_CACHE = {};
+function openApifySourceEditor(id, catId){
+  const isCreate = !id;
+  // pull current row from the last-rendered list cache
+  const row = id ? APIFY_CACHE[id] : { category_id:catId };
+  openModal({ title:isCreate?'New Apify source':'Edit Apify source', sub:id||('category '+catId), wide:true,
+    bodyHtml: renderForm(APIFY_SOURCE_FIELDS, row, isCreate),
+    saveLabel:isCreate?'Create':'Save changes', onSave: async ()=>{
+      const body = collectForm(APIFY_SOURCE_FIELDS, isCreate);
+      if(isCreate){ if(!body.id||!body.platform||!body.apify_dataset_id){ toast('id, platform and dataset id are required','err'); return; } }
+      else { delete body.id; }
+      const path = isCreate ? '/internal/apify-sources' : '/internal/apify-sources/'+enc(id);
+      try{ await api(path, {method:isCreate?'POST':'PATCH', body});
+        logChange('apify_source', isCreate?body.id:id, isCreate?'create':'update', isCreate?summarizeCreate(body):diffFields(row, body, APIFY_SOURCE_FIELDS.filter(f=>f.key)));
+        toast('Apify source '+(isCreate?'created':'updated'),'ok'); closeModal(); reopenDetail();
+      }catch(e){ toast(e.message,'err'); }
+    } });
+}
+async function toggleApifySource(ev, id, enable){
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ await api('/internal/apify-sources/'+enc(id), {method:'PATCH', body:{enabled:enable}});
+      logChange('apify_source', id, 'update', [{field:'enabled', from:(!enable?'on':'off'), to:(enable?'on':'off')}]);
+      toast((enable?'Enabled':'Disabled')+' '+id,'ok'); refreshDetailSources();
+    }catch(e){ toast(e.message,'err'); }
+  });
+}
+async function deleteApifySource(ev, id){
+  if(!confirm('Permanently delete Apify source '+id+'? This cannot be undone.')) return;
+  await withBtn(ev&&ev.currentTarget, async ()=>{
+    try{ await api('/internal/apify-sources/'+enc(id), {method:'DELETE'});
+      logChange('apify_source', id, 'delete', []);
+      toast('Deleted '+id,'ok'); refreshDetailSources();
+    }catch(e){ toast(e.message,'err'); }
+  });
+}
+
+/* ---------- Enable/disable & publish actions (correct dependent state) ---------- */
+async function toggleCategoryEnabled(ev, id, enable){
+  const btn = ev && ev.currentTarget;
+  if(!enable && !confirm('Disable category '+id+'?\n\nIts pipeline stops; channels under it will not receive new posts.')) return;
+  await withBtn(btn, async ()=>{
+    try{
+      await api('/internal/categories/'+enc(id), { method:'PATCH', body:{ enabled: enable } });
+      logChange('category', id, 'update', [{field:'enabled', from:(!enable?'on':'off'), to:(enable?'on':'off')}]);
+      toast('Category '+(enable?'enabled':'disabled'),'ok');
+      if(CURRENT_PAGE==='structure') loadPage('structure');
+    }catch(e){ toast(e.message,'err'); }
+  });
+}
+async function toggleChannelEnabled(ev, id, enable){
+  const btn = ev && ev.currentTarget;
+  if(!enable && !confirm('Disable channel '+id+'?\n\nIt stops being active and cannot publish until re-enabled.')) return;
+  await withBtn(btn, async ()=>{
+    try{
+      await api('/internal/channels/'+enc(id), { method:'PATCH', body:{ enabled: enable } });
+      logChange('channel', id, 'update', [{field:'enabled', from:(!enable?'on':'off'), to:(enable?'on':'off')}]);
+      toast('Channel '+(enable?'enabled':'disabled'),'ok');
+      if(CURRENT_PAGE==='structure') loadPage('structure');
+    }catch(e){ toast(e.message,'err'); }
+  });
+}
+async function toggleChannelPublish(ev, id, enable, channelEnabled){
+  // Dependent state: publishing has no effect unless the master switch is on.
+  if(enable && !channelEnabled){ toast('Enable the channel before turning on publishing.','err'); return; }
+  const btn = ev && ev.currentTarget;
+  if(enable && !confirm('Start LIVE publishing for channel '+id+'?\n\nThis affects the live channel. Continue?')) return;
+  await withBtn(btn, async ()=>{
+    try{
+      await api('/internal/channels/'+enc(id)+'/publish', { method:'POST', body:{ enabled: enable } });
+      logChange('channel', id, 'update', [{field:'publish_enabled', from:(!enable?'on':'off'), to:(enable?'on':'off')}]);
+      toast('Publishing '+(enable?'enabled':'paused')+' for '+id,'ok');
+      if(CURRENT_PAGE==='structure') loadPage('structure');
+    }catch(e){ toast(e.message,'err'); }
+  });
+}
+
+/* ---------- Source / settings actions ---------- */
+async function toggleSource(ev, id, enable){
+  const btn = ev && ev.currentTarget;
+  if(!enable && !confirm('Disable source '+id+'?\n\nIt will stop being scraped until re-enabled.')) return;
+  await withBtn(btn, async ()=>{
+    try{
+      await api('/internal/apify-sources/'+enc(id), {method:'PATCH', body:{enabled:enable}});
+      logChange('source', id, 'update', [{field:'enabled', from:(!enable?'on':'off'), to:(enable?'on':'off')}]);
+      toast((enable?'Enabled ':'Disabled ')+id,'ok');
+      loadPage('sources');
+    }catch(e){ toast('Toggle failed: '+e.message,'err'); }
+  });
+}
+async function toggleSetting(ev, key, enable){
+  const btn = ev && ev.currentTarget;
   const HIGH_IMPACT = { telegram_publish_enabled:'live Telegram publishing', maintenance_mode:'maintenance mode' };
   if(HIGH_IMPACT[key]){
     const verb = enable?'ENABLE':'DISABLE';
     if(!confirm(verb+' '+HIGH_IMPACT[key]+'?\n\nThis affects the live channel. Continue?')) return;
   }
-  try{
-    await api('/internal/admin/toggle', {method:'POST', body:{key, value:String(enable)}});
-    toast(key+' → '+(enable?'on':'off'),'ok');
-    loadPills();
-    loadPage('settings');
-  }catch(e){ toast('Toggle failed: '+e.message,'err'); }
+  await withBtn(btn, async ()=>{
+    try{
+      await api('/internal/admin/toggle', {method:'POST', body:{key, value:String(enable)}});
+      logChange('setting', key, 'update', [{field:key, from:(!enable?'on':'off'), to:(enable?'on':'off')}]);
+      toast(key+' → '+(enable?'on':'off'),'ok');
+      loadPills();
+      loadPage('settings');
+    }catch(e){ toast('Toggle failed: '+e.message,'err'); }
+  });
 }
-
-async function triggerCuration(){
-  try{ await api('/internal/curation/trigger', {method:'POST', body:{}}); toast('Curation triggered','ok'); setTimeout(()=>loadPage('runs'),1500); }
-  catch(e){ toast('Trigger failed: '+e.message,'err'); }
+async function triggerCuration(ev){
+  const btn = ev && ev.currentTarget;
+  await withBtn(btn, async ()=>{
+    try{ await api('/internal/curation/trigger', {method:'POST', body:{}}); toast('Curation triggered','ok'); setTimeout(()=>loadPage('runs'),1500); }
+    catch(e){ toast('Trigger failed: '+e.message,'err'); }
+  });
 }
-async function drainBacklog(){
-  try{ const r=await api('/internal/backlog/drain', {method:'POST', body:{}}); toast('Drain done','ok'); loadPage('logs'); }
-  catch(e){ toast('Drain failed: '+e.message,'err'); }
+async function drainBacklog(ev){
+  const btn = ev && ev.currentTarget;
+  await withBtn(btn, async ()=>{
+    try{ await api('/internal/backlog/drain', {method:'POST', body:{}}); toast('Drain done','ok'); loadPage('logs'); }
+    catch(e){ toast('Drain failed: '+e.message,'err'); }
+  });
 }
 let TRACKER_STATUS = 'ai_rejected';
 function setTrackerStatus(s){ TRACKER_STATUS = s; loadPage('tracker'); }
 
 /* =========================================================================
-   TOPBAR PILLS — control flags (read-only display)
+   TOPBAR PILLS — sourced from the authoritative runtime_config so the
+   displayed enable/disable state always matches the real system state.
    ========================================================================= */
 async function loadPills(){
   try{
-    const s = await api('/internal/admin/settings');
-    const get=(k)=> (s.settings? s.settings[k] : s[k]);
-    setPill('pill-curation','curation', truthy(get('APIFY_CURATION_ENABLED')));
-    setPill('pill-publish','publish', truthy(get('TELEGRAM_FINAL_PUBLISH_ENABLED')));
-    setPill('pill-scheduler','scheduler', truthy(get('TELEGRAM_PUBLISH_SCHEDULER_ENABLED')));
+    const rc = await fetchRuntime();
+    setPill('pill-curation','curation', isOn(rc.curation_enabled));
+    setPill('pill-publish','publish', isOn(rc.telegram_publish_enabled));
+    setPill('pill-scheduler','scheduler', isOn(rc.telegram_scheduler_enabled));
   }catch(e){ /* pills are non-critical */ }
 }
-function truthy(v){ return v===true || v==='true' || v===1 || v==='1'; }
 function setPill(id,label,on){ const p=el(id); if(!p) return; p.textContent=label+' '+(on?'on':'off'); p.className='pill '+(on?'on':'off'); }
 
 /* =========================================================================
-   POLLING — refresh active page; pause when tab hidden
+   POLLING
    ========================================================================= */
 function startPolling(){
   if(POLL_TIMER) clearInterval(POLL_TIMER);
   POLL_TIMER = setInterval(()=>{
     if(document.hidden) return;
+    if(el('modal-root').classList.contains('open')) return; // don't yank an open editor
     loadPills();
-    // Don't auto-refresh heavy developer tabs (debug snapshot, raw logs) — only
-    // refresh lightweight management views on the timer.
     if(!DEV_PAGE_IDS.includes(CURRENT_PAGE)) loadPage(CURRENT_PAGE);
   }, 45000);
 }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ loadPills(); } });
-
 function onWindowChange(){ WINDOW_HOURS = parseInt(el('window-select').value,10)||24; loadPage(CURRENT_PAGE); }
 
 /* =========================================================================
@@ -865,6 +2124,8 @@ async function boot(){
   el('setup-screen').style.display='none';
   el('app').style.display='block';
   renderNav();
+  wireTableDelegation(el('content'));
+  wireTableDelegation(el('modal-root'));
   try{
     const h = await api('/health');
     el('env-pill').textContent = (h.environment || h.env || 'connected');
@@ -873,7 +2134,9 @@ async function boot(){
     toast('Cannot reach API. Check URL/secret.','err');
   }
   loadPills();
-  nav('monitoring');
+  await loadStructure();   // build the category→channel tree + scope selectors
+  renderNav();
+  nav('structure');        // land on the hierarchy — the core of the dashboard
   startPolling();
 }
 
