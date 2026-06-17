@@ -19,6 +19,7 @@ import { buildQueueHealthReport } from '../services/queue-health';
 import { buildRejectionFunnel } from '../services/rejection-funnel';
 import { buildSourcePerformanceReport } from '../services/source-reputation';
 import { buildStoryStabilityReport } from '../services/story-intelligence';
+import { buildFinalFunnelReport } from '../services/final-funnel-report';
 import {
   buildQueueQualityReport,
   buildSourceYieldReport,
@@ -207,6 +208,13 @@ export async function handleAdmin(
         parse_mode: 'HTML',
         text: formatOperationalReportForTelegram(report as any),
       });
+    }
+
+    // ── Final accountable funnel report (read-only) ─────────────
+    if (path === '/internal/report/final-funnel' && m === 'GET') {
+      const categoryId = sanitizeOptionalId(url.searchParams.get('category'));
+      const windowHours = num(url.searchParams.get('hours'), 24);
+      return ok(await buildFinalFunnelReport(env, { categoryId, windowHours }));
     }
 
     // ── Queue-health report (read-only, Phase 6E) ─────────────
