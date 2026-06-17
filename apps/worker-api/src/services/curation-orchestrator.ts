@@ -550,7 +550,16 @@ async function processSingleSource(
     }
 
     const normalizedBeforeBalance = normalized.length;
-    const normalizedBalanced = balanceNormalizedItemsBySourceAccount(normalized).slice(0, maxItems);
+    // Accountable backlog mode: when the durable AI backlog is enabled, every
+    // normalized item gets a clear fate: duplicate, stale, waiting_for_ai_score,
+    // ai_rejected, queued, or skipped. In legacy inline mode, preserve the old
+    // maxItems cap to avoid accidentally expanding synchronous AI work.
+    const normalizedAll = balanceNormalizedItemsBySourceAccount(normalized);
+    const backlogEnabledForRun = isCandidateBacklogEnabled(env);
+    const normalizedBalanced = backlogEnabledForRun
+      ? normalizedAll
+      : normalizedAll.slice(0, maxItems);
+    const normalizedSkippedByProcessingCap = Math.max(0, normalizedAll.length - normalizedBalanced.length);
 
     await recordRunEvent(env, {
       runId,
@@ -571,6 +580,9 @@ async function processSingleSource(
         normalizedCount: normalizedBalanced.length,
         sourceAccountsBeforeBalance: summarizeSourceAccounts(normalized),
         sourceAccountsAfterBalance: summarizeSourceAccounts(normalizedBalanced),
+        processingCapMode: isCandidateBacklogEnabled(env) ? 'backlog_all_fresh_items' : 'legacy_ai_batch_cap',
+        processingCap: maxItems,
+        normalizedSkippedByProcessingCap,
         droppedNormalizeNull,
         droppedMissingUrl,
         droppedShortTextNoSignal,
@@ -588,8 +600,40 @@ async function processSingleSource(
       const keys = computeDedupeKeys(item);
       if (await isDuplicate(env, keys)) {
         itemsDuplicate++;
+        await recordRunItemEvent(env, {
+          runId,
+          sourceUrl: item.sourceUrl,
+          postId: item.postId,
+          sourceAccount: item.sourceAccount,
+          phase: 'dedupe_check',
+          status: 'duplicate',
+          rejectReason: 'duplicate_dedupe_key',
+          mediaCount: item.media.length,
+          metadata: {
+            priorityScore: computeCandidatePriorityScore(item),
+            publishedAt: item.publishedAt,
+            textPreview: item.text.slice(0, 240),
+          },
+        });
       } else if (item.publishedAt < freshnessCutoffTs) {
         staleBeforeAiCount++;
+        await recordRunItemEvent(env, {
+          runId,
+          sourceUrl: item.sourceUrl,
+          postId: item.postId,
+          sourceAccount: item.sourceAccount,
+          phase: 'dedupe_check',
+          status: 'skipped',
+          rejectReason: 'stale_before_ai',
+          mediaCount: item.media.length,
+          metadata: {
+            priorityScore: computeCandidatePriorityScore(item),
+            publishedAt: item.publishedAt,
+            freshnessCutoffTs,
+            textPreview: item.text.slice(0, 240),
+          },
+        });
+        if (!dryRun) await recordDedupeKeys(env, keys, generateId('stale'));
       } else {
         fresh.push(item);
         freshKeys.push(keys);
@@ -652,6 +696,8 @@ async function processSingleSource(
         metadata: {
           freshCount: fresh.length,
           inserted: insertedIds.length,
+          waitingForAiScore: insertedIds.length,
+          candidateStatusLabel: 'waiting_for_ai_score',
           duplicateOrExisting: enqueueResults.filter(r => !r.inserted && r.reason === 'duplicate_source_url').length,
           errors: enqueueErrors.length,
         },

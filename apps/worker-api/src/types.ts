@@ -400,7 +400,7 @@ export interface PublishedMediaResult {
 /**
  * وضعیت‌های ممکن یک candidate در صف AI.
  *
- * pending     → منتظر scoring
+ * pending     → waiting_for_ai_score / منتظر scoring
  * scoring     → claimed برای یک batch scoring
  * ai_selected → Claude تأیید کرد
  * ai_rejected → Claude رد کرد
