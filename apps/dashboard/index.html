@@ -2107,11 +2107,26 @@ function setPill(id,label,on){ const p=el(id); if(!p) return; p.textContent=labe
    ========================================================================= */
 function startPolling(){
   if(POLL_TIMER) clearInterval(POLL_TIMER);
-  POLL_TIMER = setInterval(()=>{
+
+  // Keep live refresh only where it helps. Management/editing pages should not
+  // rebuild themselves every 45s because it resets scroll/focus and feels like
+  // the dashboard is haunted by a junior product manager.
+  const AUTO_REFRESH_PAGES = ['monitoring', 'overview'];
+
+  POLL_TIMER = setInterval(async ()=>{
     if(document.hidden) return;
     if(el('modal-root').classList.contains('open')) return; // don't yank an open editor
-    loadPills();
-    if(!DEV_PAGE_IDS.includes(CURRENT_PAGE)) loadPage(CURRENT_PAGE);
+
+    await loadPills();
+
+    if(!AUTO_REFRESH_PAGES.includes(CURRENT_PAGE)) return;
+
+    const content = el('content');
+    const scrollTop = content ? content.scrollTop : 0;
+
+    await loadPage(CURRENT_PAGE);
+
+    if(content) content.scrollTop = scrollTop;
   }, 45000);
 }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ loadPills(); } });
