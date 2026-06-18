@@ -30,7 +30,7 @@ describe('Persian caption quality guard (Phase 6G)', () => {
     const src = 'The company described its new product, with no figures.';
     const out = applyPersianCaptionQualityGuard('fa', t('این محصول ۲ میلیارد دلار ارزش‌گذاری شده است.'), src);
     expect(out.ok).toBe(false);
-    expect(out.reason).toBe('caption_unsupported_figure');
+    expect(out.reason).toBe('caption_unsupported_exact_figure');
   });
 
   it('accepts when at least one figure is grounded even if another is contextual', () => {

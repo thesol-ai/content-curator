@@ -6,6 +6,7 @@ import {
   removeRawSourceReferences,
   resolveChannelFooter,
   sourceLabel,
+  stabilizeRtlNumbersForTelegram,
 } from '../apps/worker-api/src/services/telegram-message-formatter';
 
 function channel(overrides: Partial<ChannelRow> = {}): ChannelRow {
@@ -40,6 +41,23 @@ function channel(overrides: Partial<ChannelRow> = {}): ChannelRow {
 }
 
 describe('telegram-message-formatter', () => {
+  it('stabilizes decimal and percent numbers inside Persian Telegram captions', () => {
+    const result = formatTelegramMessage({
+      body: 'بیت‌کوین ۲.۵ درصد رشد کرد و حجم معاملات به ۸۱.۷ میلیون دلار رسید.',
+      sourceUrl: 'https://x.com/example/status/1',
+      language: 'fa',
+      channel: channel({ source_enabled: 0 }),
+      maxLength: 4096,
+    });
+
+    expect(result.html).toContain('\u2066۲.۵\u2069 درصد');
+    expect(result.html).toContain('\u2066۸۱.۷\u2069 میلیون');
+  });
+
+  it('does not add numeric direction controls to English captions', () => {
+    expect(stabilizeRtlNumbersForTelegram('BTC rose 2.5%', 'en')).toBe('BTC rose 2.5%');
+  });
+
   it('omits source completely when source is disabled but keeps body text', () => {
     const sourceUrl = 'https://x.com/VitalikButerin/status/123';
     const result = formatTelegramMessage({

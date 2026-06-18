@@ -34,9 +34,43 @@ const DEFAULT_SOURCE_LABELS: Record<string, string> = {
 const ELLIPSIS = '…';
 const FOOTER_SEPARATOR = '\n\n';
 
+// Telegram clients can visually reorder decimal/percent numbers inside Persian RTL text.
+// Example: "۲.۵ درصد" may be rendered as "۵.۲" on some clients.
+// Keep only the numeric expression LTR-isolated, instead of forcing the whole message RTL.
+const LTR_ISOLATE = '\u2066';
+const POP_DIRECTIONAL_ISOLATE = '\u2069';
+
+const RTL_NUMERIC_RUN_RE = /(?:[$€£]\s*)?[+\-−]?[0-9۰-۹٠-٩]+(?:[0-9۰-۹٠-٩.,٫٬\s]*[0-9۰-۹٠-٩])?(?:\s*(?:%|٪|bps|bp|BTC|ETH|USDT|USDC|USD|EUR|GBP|BNB|SOL|XRP|ADA|DOGE|TON|TRX|AVAX|LINK|DOT|MATIC|POL|ARB|OP|LTC|BCH|UNI|AAVE|SUI|APT|SEI|INJ|NEAR|ATOM|FIL|million|billion|trillion|m|b|k))?/giu;
+
+const RTL_NUMERIC_FOLLOW_RE = /^\s*(?:درصد|دلار|یورو|پوند|میلیون|میلیارد|تریلیون|واحد|توکن|کوین|بیت‌کوین|اتریوم|BTC|ETH|USDT|USDC|USD)/iu;
+
+export function stabilizeRtlNumbersForTelegram(text: string, language: string): string {
+  const lang = String(language ?? '').trim().toLowerCase();
+  const raw = String(text ?? '');
+  if (lang !== 'fa' && lang !== 'ar') return raw;
+
+  return raw.replace(RTL_NUMERIC_RUN_RE, (match: string, offset: number, full: string) => {
+    const value = String(match ?? '');
+    if (!value.trim()) return value;
+
+    const before = full.slice(Math.max(0, offset - 1), offset);
+    const after = full.slice(offset + value.length, offset + value.length + 1);
+    if (before === LTR_ISOLATE && after === POP_DIRECTIONAL_ISOLATE) return value;
+
+    const following = full.slice(offset + value.length, offset + value.length + 24);
+    const hasDecimalOrSymbol = /[.,٫٬%٪$€£]/u.test(value);
+    const hasLatinUnit = /(?:BTC|ETH|USDT|USDC|USD|EUR|GBP|BNB|SOL|XRP|ADA|DOGE|TON|TRX|AVAX|LINK|DOT|MATIC|POL|ARB|OP|LTC|BCH|UNI|AAVE|SUI|APT|SEI|INJ|NEAR|ATOM|FIL|million|billion|trillion|bps|bp)\b/iu.test(value);
+    const hasRtlUnitAfter = RTL_NUMERIC_FOLLOW_RE.test(following);
+
+    if (!hasDecimalOrSymbol && !hasLatinUnit && !hasRtlUnitAfter) return value;
+    return `${LTR_ISOLATE}${value}${POP_DIRECTIONAL_ISOLATE}`;
+  });
+}
+
 export function formatTelegramMessage(input: TelegramMessageFormatInput): TelegramMessageFormatResult {
   const maxLength = normalizeMaxLength(input.maxLength);
-  const cleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
+  const rawCleanedBody = removeVisibleHashtagLines(removeRawSourceReferences(String(input.body ?? ''), input.sourceUrl)).trim();
+  const cleanedBody = stabilizeRtlNumbersForTelegram(rawCleanedBody, input.language);
   const footer = buildFooterHtml(input);
   // Do not inject Unicode direction marks.
   // Telegram boxes, numeric tables, tickers, links, and @handles can break badly when the whole message is forced RTL.
