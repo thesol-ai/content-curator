@@ -1143,6 +1143,10 @@ export async function publishDueItems(
     100
   );
   const now = Math.floor(Date.now() / 1000);
+  const recoveredPublishing = await recoverStalePublishingItems(env, now);
+  if (recoveredPublishing > 0) {
+    console.warn(`[Publisher] Recovered ${recoveredPublishing} stale publishing queue item(s)`);
+  }
 
   const due = await env.DB.prepare(`
     SELECT q.id
@@ -1172,6 +1176,31 @@ export async function publishDueItems(
   }
 
   return { published, failed, skipped };
+}
+
+async function recoverStalePublishingItems(env: Env, now: number): Promise<number> {
+  const staleAfterSec = 15 * 60;
+  const retryDelaySec = 60;
+
+  try {
+    const result = await env.DB.prepare(`
+      UPDATE publish_queue
+      SET
+        status=CASE WHEN COALESCE(retry_count,0) + 1 >= 3 THEN 'failed' ELSE 'retry' END,
+        retry_count=COALESCE(retry_count,0) + 1,
+        scheduled_at=CASE WHEN COALESCE(retry_count,0) + 1 >= 3 THEN scheduled_at ELSE ? END,
+        publish_error='recovered_from_stale_publishing'
+      WHERE status='publishing'
+        AND published_at IS NULL
+        AND (telegram_message_id IS NULL OR telegram_message_id='')
+        AND scheduled_at <= ?
+    `).bind(now + retryDelaySec, now - staleAfterSec).run();
+
+    return Number(result.meta.changes ?? 0);
+  } catch (err) {
+    console.warn('[Publisher] stale publishing recovery skipped:', err instanceof Error ? err.message : String(err));
+    return 0;
+  }
 }
 
 export async function publishQueueItem(
@@ -1227,6 +1256,7 @@ export async function publishQueueItem(
     return { queueId, ok: false, status: 'skipped', reason: 'optimistic_lock_failed' };
   }
 
+  try {
   const channel = await loadChannelForPublish(env, row.channel_id);
   if (!channel) {
     await env.DB.prepare(`UPDATE publish_queue SET status='failed', publish_error=? WHERE id=?`)
@@ -1292,6 +1322,30 @@ export async function publishQueueItem(
     .bind(newStatus, retries, newAt, error, queueId).run();
 
   return { queueId, ok: false, status: newStatus, reason: result.errorType ?? 'unknown', error };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const retries = (Number(row.retry_count) || 0) + 1;
+    const isFinal = retries >= 3;
+    const newStatus: 'failed' | 'retry' = isFinal ? 'failed' : 'retry';
+    const newAt = isFinal ? now : now + 30 * 60;
+    const error = `[unexpected_publish_exception] ${msg.slice(0, 350)}`;
+
+    try {
+      await env.DB
+        .prepare(`UPDATE publish_queue SET status=?, retry_count=?, scheduled_at=?, publish_error=? WHERE id=?`)
+        .bind(newStatus, retries, newAt, error, queueId).run();
+    } catch (updateErr) {
+      console.error('[Publisher] failed to recover queue item after unexpected exception:', updateErr instanceof Error ? updateErr.message : String(updateErr));
+    }
+
+    return {
+      queueId,
+      ok: false,
+      status: newStatus,
+      reason: 'unexpected_publish_exception',
+      error,
+    };
+  }
 }
 
 async function checkChannelPublishRateLimits(

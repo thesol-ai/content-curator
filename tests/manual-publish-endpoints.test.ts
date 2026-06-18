@@ -202,6 +202,22 @@ describe('manual publish endpoints and shared queue publish path', () => {
     expect(calls[0].url).toContain('/sendMessage');
   });
 
+  it('recovers stale publishing rows before selecting due queue items', async () => {
+    const { env, calls } = envWithDb({ dueIds: [] });
+
+    await expect(publishDueItems(env, { limit: 2, requireScheduler: false }))
+      .resolves.toEqual({ published: 0, failed: 0, skipped: 0 });
+
+    const recoveryCall = calls.find(call =>
+      call.kind === 'run'
+      && call.sql.includes("WHERE status='publishing'")
+      && call.sql.includes('recovered_from_stale_publishing')
+    );
+
+    expect(recoveryCall).toBeTruthy();
+    expect(recoveryCall?.values).toEqual([expect.any(Number), expect.any(Number)]);
+  });
+
   it('POST /internal/publish/due accepts a manual limit and returns due counters', async () => {
     const { env, calls } = envWithDb({ dueIds: [] });
     const res = await handleAdmin(request('/internal/publish/due', 'POST', { limit: 3 }), env, {} as ExecutionContext);
