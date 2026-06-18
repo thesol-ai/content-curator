@@ -199,6 +199,10 @@ export function applyPersianCaptionQualityGuard(
 
   // Phase 6G: factual grounding — if the caption introduces currency/percent
   // figures and NOT ONE of them appears in the source, treat it as fabricated.
+  if (hasUnsupportedExactGroundableFigure(sourceText, combinedCaption)) {
+    return { ok: false, reason: 'caption_unsupported_exact_figure' };
+  }
+
   if (hasFullyUngroundedFigures(sourceText, combinedCaption)) {
     return { ok: false, reason: 'caption_unsupported_figure' };
   }
@@ -569,6 +573,50 @@ function extractGroundableFigureCores(text: string): string[] {
   }
   return Array.from(cores);
 }
+
+function canonicalGroundableFigure(raw: string): string {
+  let value = normalizeDigits(String(raw ?? ''))
+    .replace(/[٬،,\s]/g, '')
+    .replace(/٫/g, '.')
+    .trim();
+
+  if (value.includes('.')) {
+    value = value.replace(/0+$/g, '').replace(/\.$/g, '');
+  }
+
+  return value;
+}
+
+function extractExactGroundableFigures(text: unknown): string[] {
+  const body = normalizeDigits(String(text ?? '')).replace(/٫/g, '.');
+  const figures = new Set<string>();
+  const patterns = [
+    /[$€£]\s*([0-9][0-9,٬]*(?:\.[0-9]+)?)/g,
+    /([0-9][0-9,٬]*(?:\.[0-9]+)?)\s*(?:%|٪|درصد|bps|bp)/gi,
+    /([0-9][0-9,٬]*(?:\.[0-9]+)?)\s*(?:میلیون|میلیارد|تریلیون|million|billion|trillion|BTC|ETH|USDT|USDC|USD|EUR|BNB|SOL|XRP)/gi,
+  ];
+
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(body)) !== null) {
+      const fig = canonicalGroundableFigure(String(m[1] ?? ''));
+      if (fig) figures.add(fig);
+    }
+  }
+
+  return Array.from(figures);
+}
+
+function hasUnsupportedExactGroundableFigure(sourceText: unknown, caption: string): boolean {
+  const captionFigures = extractExactGroundableFigures(caption);
+  if (captionFigures.length === 0) return false;
+
+  const sourceFigures = new Set(extractExactGroundableFigures(sourceText));
+  const normalizedSourceText = canonicalGroundableFigure(String(sourceText ?? ''));
+
+  return captionFigures.some(fig => !sourceFigures.has(fig) && !normalizedSourceText.includes(fig));
+}
+
 
 function hasFullyUngroundedFigures(sourceText: unknown, caption: string): boolean {
   const cores = extractGroundableFigureCores(caption);
