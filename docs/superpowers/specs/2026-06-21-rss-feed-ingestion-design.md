@@ -237,6 +237,23 @@ logged; RSS brief has its own daily cap / model / timeout (`RSS_BRIEF_*`); inval
 all attempts; per-feed `poll_interval_minutes` is honored. Accept header narrowed
 to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
 
+## rev 4 fixes (post third review)
+
+- RSS brief daily budget counts ALL attempts (success/failed/skipped); a cap hit
+  records a `skipped` usage event for observability.
+- Daily-cap-exhausted survivors are **deferred** (left claimed, recovered by
+  stale-recovery next tick) instead of released to pending — eliminating
+  re-claim/re-skip churn within a single drain cycle.
+- Cap drops are attributed separately: `droppedByFeedCap` / `droppedByRunCap` /
+  `droppedByDayCap` (summary + run_events).
+- Duplicate counters include both candidate-queue unique-index hits AND
+  `isDuplicate` dedupe-key hits.
+- RSS ingestion now emits `run_events` (`rss.ingest.started`, `rss.feed.*`,
+  `rss.ingest.completed`) so feed outcomes (304 / error / empty / enqueue / cap
+  drop) are visible in pipeline reports, not just console. The run is created
+  lazily on the first claimed feed (no empty run on ticks where every slot is
+  already taken).
+
 ## Error handling / isolation
 
 - Per-feed try/catch with short timeout; one bad/slow feed never blocks others or

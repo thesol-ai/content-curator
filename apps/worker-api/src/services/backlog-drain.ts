@@ -487,7 +487,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       const ais = rssSurvivorIdx.map(i => decisions[i]!.ai);
       const labels = rssSurvivorIdx.map(i => prepared[i]!.item.sourceAccount);
       try {
-        const { results: briefed, failedIndexes } = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
+        const { results: briefed, failedIndexes, capDeferredIndexes } = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
         rssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = briefed[k]!; });
 
         // Per-item brief failures: release ONLY those candidates to pending and
@@ -503,6 +503,16 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
           );
           failedOriginalIdx.forEach(i => { decisions[i] = null; });
           skipped += failedOriginalIdx.length;
+        }
+
+        // Daily-cap-deferred survivors: leave them CLAIMED (do NOT release) so
+        // they are not re-claimed and re-skipped within this same drain cycle.
+        // Stale-scoring recovery returns them to pending on a later tick, after
+        // the budget window rolls — a natural backoff with no churn.
+        if (capDeferredIndexes.length > 0) {
+          const deferredOriginalIdx = capDeferredIndexes.map(k => rssSurvivorIdx[k]!);
+          deferredOriginalIdx.forEach(i => { decisions[i] = null; });
+          skipped += deferredOriginalIdx.length;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

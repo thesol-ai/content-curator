@@ -35,10 +35,14 @@ function getRssBriefConfig(env: Env): RssBriefConfig {
 async function countBriefCallsToday(env: Env): Promise<number> {
   if (!env.DB) return 0;
   try {
+    // Count ALL attempts (success/failed/skipped) so failed briefs consume the
+    // daily budget too — otherwise a feed that keeps failing would retry without
+    // bound (the same hole already fixed for the Jina budget).
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM ai_usage
       WHERE provider = 'anthropic' AND purpose = 'rss_brief'
-        AND status = 'success' AND created_at > datetime('now','-1 day')
+        AND status IN ('success','failed','skipped')
+        AND created_at > datetime('now','-1 day')
     `).first<{ count: number }>();
     return Number(row?.count ?? 0);
   } catch {
@@ -183,10 +187,14 @@ async function callBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string)
 export interface RssBriefOutcome {
   /** Updated score results aligned to the input order (briefed survivors). */
   results: AIGateResult[];
-  /** Indexes (into the input arrays) whose brief could not be produced. The
-   *  caller MUST release these candidates to pending and NOT persist them, so a
-   *  transient failure does not strand the article as selected-but-unpublished. */
+  /** Per-item brief failures. Caller releases these to pending (retry soon) and
+   *  does NOT persist them, so a transient failure does not strand the article
+   *  as selected-but-unpublished. */
   failedIndexes: number[];
+  /** Survivors skipped because the daily brief budget is exhausted. Caller must
+   *  leave these CLAIMED (not released) so they are not re-claimed and re-skipped
+   *  in the same drain cycle — stale recovery returns them on a later tick. */
+  capDeferredIndexes: number[];
 }
 
 /**
@@ -208,6 +216,8 @@ export async function enrichAndBriefRssSurvivors(
   const enabledChannels = channels.filter(c => c.enabled);
   const out = [...scoreResults];
   const failedIndexes: number[] = [];
+  const capDeferredIndexes: number[] = [];
+  let capLogged = false;
 
   let callsToday = await countBriefCallsToday(env);
 
@@ -216,10 +226,15 @@ export async function enrichAndBriefRssSurvivors(
     const result = scoreResults[i]!;
     if (!result.publish) continue;
 
-    // Daily budget guard: stop spending once the cap is hit; remaining survivors
-    // are released to retry on a later tick rather than published without a brief.
+    // Daily budget guard: once the cap is hit, defer remaining survivors (leave
+    // them claimed) rather than publishing without a brief or churning them
+    // through pending in the same drain cycle.
     if (briefCfg.maxCallsPerDay > 0 && callsToday >= briefCfg.maxCallsPerDay) {
-      failedIndexes.push(i);
+      if (!capLogged) {
+        await recordBriefUsage(env, briefCfg.model, 0, 0, 'skipped', `daily_cap_${callsToday}/${briefCfg.maxCallsPerDay}`);
+        capLogged = true;
+      }
+      capDeferredIndexes.push(i);
       continue;
     }
 
@@ -253,5 +268,5 @@ export async function enrichAndBriefRssSurvivors(
     }
   }
 
-  return { results: out, failedIndexes };
+  return { results: out, failedIndexes, capDeferredIndexes };
 }

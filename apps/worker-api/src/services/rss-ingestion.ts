@@ -11,6 +11,7 @@ import { normalizeRssItem } from './apify-client';
 import { fetchFeed } from './rss-feed-fetcher';
 import { computeDedupeKeys, isDuplicate } from './dedupe';
 import { enqueueCandidates } from './candidate-queue';
+import { recordRunEvent } from './run-events';
 
 interface RssSourceRow {
   id: string;
@@ -157,7 +158,8 @@ export interface RssIngestSummary {
   reason?: string;
   feeds: Array<{
     source: string; status: number; fetched: number; fresh: number;
-    enqueued: number; duplicate?: number; droppedByCap?: number;
+    enqueued: number; duplicate?: number;
+    droppedByCap?: number; droppedByRunCap?: number; droppedByDayCap?: number;
     error?: string | null; probe?: boolean; notModified?: boolean;
   }>;
   totalEnqueued: number;
@@ -193,6 +195,32 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
   let runFetched = 0;
   let runDuplicate = 0;
 
+  // Lazily create the run the first time a feed is actually CLAIMED (so EVERY
+  // outcome of a worked feed — 304, error, parse_empty, all-duplicate, enqueue —
+  // is observable). Lazy (not up-front) avoids an empty run on the frequent ticks
+  // where every feed's slot is already taken.
+  const ensureRun = async (categoryId: string): Promise<void> => {
+    if (runCreated || cfg.probeOnly) return;
+    runCategoryId = opts?.categoryId ?? categoryId;
+    try {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO discovery_runs (id, category_id, platform, apify_dataset_id, status) VALUES (?, ?, 'rss', 'rss', 'processing')`,
+      ).bind(runId, runCategoryId).run();
+      runCreated = true;
+      await recordRunEvent(env, { runId, eventType: 'rss.ingest.started', phase: 'rss_ingest', categoryId: runCategoryId, platform: 'rss' });
+    } catch (err) {
+      console.warn('[RSSIngest] run create failed:', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const feedEvent = async (src: RssSourceRow, eventType: string, metadata: Record<string, unknown>, severity?: 'info' | 'warn') => {
+    if (!runCreated) return;
+    await recordRunEvent(env, {
+      runId, eventType, phase: 'rss_ingest', severity,
+      categoryId: src.category_id, platform: 'rss', sourceId: src.id, metadata,
+    });
+  };
+
   for (const src of sources) {
     if (cfg.maxNewItemsPerRun > 0 && runEnqueued >= cfg.maxNewItemsPerRun) break;
 
@@ -204,6 +232,7 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
     let claimed = false;
     try { claimed = await claimRssSlot(env, src.id, slot); } catch { claimed = false; }
     if (!claimed) { summary.feeds.push({ source: src.source_account, status: 0, fetched: 0, fresh: 0, enqueued: 0, error: 'slot_taken' }); continue; }
+    await ensureRun(src.category_id);
 
     try {
       const fetched = await fetchFeed(env, {
@@ -221,6 +250,9 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       });
 
       if (fetched.notModified || fetched.error || fetched.items.length === 0) {
+        const eventType = fetched.notModified ? 'rss.feed.not_modified'
+          : fetched.error ? 'rss.feed.error' : 'rss.feed.empty';
+        await feedEvent(src, eventType, { status: fetched.status, error: fetched.error }, fetched.error ? 'warn' : 'info');
         summary.feeds.push({
           source: src.source_account, status: fetched.status,
           fetched: fetched.items.length, fresh: 0, enqueued: 0,
@@ -253,28 +285,28 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       }
 
       // Per-feed enqueue, respecting run + day caps, with dedupe idempotency.
-      // News-first: items older than the cap window are intentionally dropped and
-      // logged (droppedByCap); the watermark advances past them below.
+      // News-first: items beyond a cap are intentionally dropped (and attributed
+      // to feed/run/day cap below); the watermark advances past them.
       const toEnqueue: Array<{ item: NormalizedItem; keys: string[] }> = [];
-      for (const item of fresh) {
-        if (cfg.maxNewItemsPerRun > 0 && runEnqueued + toEnqueue.length >= cfg.maxNewItemsPerRun) break;
-        if (cfg.maxNewItemsPerDay > 0 && dayCount + toEnqueue.length >= cfg.maxNewItemsPerDay) break;
+      let dedupeDuplicates = 0;
+      let droppedByRunCap = 0;
+      let droppedByDayCap = 0;
+      for (let idx = 0; idx < fresh.length; idx++) {
+        if (cfg.maxNewItemsPerRun > 0 && runEnqueued + toEnqueue.length >= cfg.maxNewItemsPerRun) {
+          droppedByRunCap = fresh.length - idx; break;
+        }
+        if (cfg.maxNewItemsPerDay > 0 && dayCount + toEnqueue.length >= cfg.maxNewItemsPerDay) {
+          droppedByDayCap = fresh.length - idx; break;
+        }
+        const item = fresh[idx]!;
         const keys = computeDedupeKeys(item);
-        if (await isDuplicate(env, keys)) continue;
+        if (await isDuplicate(env, keys)) { dedupeDuplicates++; continue; }
         toEnqueue.push({ item, keys });
       }
 
       let inserted = 0;
       let duplicateExisting = 0;
       if (toEnqueue.length > 0) {
-        if (!runCreated) {
-          runCategoryId = src.category_id;
-          await env.DB.prepare(
-            `INSERT OR IGNORE INTO discovery_runs (id, category_id, platform, apify_dataset_id, status) VALUES (?, ?, 'rss', 'rss', 'processing')`,
-          ).bind(runId, src.category_id).run();
-          runCreated = true;
-        }
-
         const enqueueResults = await enqueueCandidates(env, toEnqueue.map(({ item, keys }) => ({
           sourceId: src.id,
           runId,
@@ -300,21 +332,33 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       // News-first watermark: advance past every fresh item we considered this
       // run (enqueued, duplicate, or cap-dropped) so old backlog is not re-scanned.
       if (fresh.length > 0) await advanceWatermark(env, src.id, fresh);
-      if (droppedByCap > 0) {
-        console.log('[RSSIngest] cap drop (news-first):', { source: src.source_account, droppedByCap, cap: cfg.maxItemsPerFeed });
-      }
 
+      const totalDuplicate = duplicateExisting + dedupeDuplicates;
       runEnqueued += inserted;
       dayCount += inserted;
-      runDuplicate += duplicateExisting;
+      runDuplicate += totalDuplicate;
+
+      await feedEvent(src, 'rss.feed.enqueue_completed', {
+        status: fetched.status, fetched: normalized.length, fresh: fresh.length,
+        enqueued: inserted, duplicate: totalDuplicate,
+        droppedByFeedCap: droppedByCap, droppedByRunCap, droppedByDayCap,
+      });
+      if (droppedByCap > 0 || droppedByRunCap > 0 || droppedByDayCap > 0) {
+        console.log('[RSSIngest] news-first drops:', {
+          source: src.source_account, droppedByFeedCap: droppedByCap, droppedByRunCap, droppedByDayCap,
+        });
+      }
+
       summary.feeds.push({
         source: src.source_account, status: fetched.status,
         fetched: normalized.length, fresh: fresh.length,
-        enqueued: inserted, duplicate: duplicateExisting, droppedByCap,
+        enqueued: inserted, duplicate: totalDuplicate,
+        droppedByCap, droppedByRunCap, droppedByDayCap,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[RSSIngest] feed ${src.source_account} failed:`, msg);
+      await feedEvent(src, 'rss.feed.error', { error: msg.slice(0, 160) }, 'warn');
       summary.feeds.push({ source: src.source_account, status: 0, fetched: 0, fresh: 0, enqueued: 0, error: msg.slice(0, 160) });
     }
   }
@@ -327,6 +371,11 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
         SET status = 'completed', items_fetched = ?, items_new = ?, items_duplicate = ?, category_id = ?
         WHERE id = ?
       `).bind(runFetched, runEnqueued, runDuplicate, runCategoryId, runId).run();
+      await recordRunEvent(env, {
+        runId, eventType: 'rss.ingest.completed', phase: 'rss_ingest',
+        categoryId: runCategoryId ?? undefined, platform: 'rss',
+        metadata: { fetched: runFetched, enqueued: runEnqueued, duplicate: runDuplicate },
+      });
     } catch (err) {
       console.warn('[RSSIngest] run finalize failed:', err instanceof Error ? err.message : String(err));
     }
