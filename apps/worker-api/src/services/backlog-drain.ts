@@ -40,7 +40,9 @@ import {
   isStoryIntelligenceRejectActive,
   isFollowUpEventType,
   recordStoryEvent,
+  shouldRejectBySemanticStorySimilarity,
   shouldRejectByStoryKey,
+  similarStorySeenInWindow,
   storyKeySeenInWindow,
 } from './story-intelligence';
 
@@ -311,6 +313,13 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   const seenFingerprints = new Set<string>();
   const seenStoryClusters = new Set<string>();
   const seenStoryKeys = new Set<string>();
+  const seenSemanticStories: Array<{
+    storyKey: string | null;
+    fields: AIGateResult['storyFields'] | null;
+    topicFingerprint: string | null;
+    eventType: string | null;
+    text: string | null;
+  }> = [];
   const themeBatchCounts = new Map<string, number>();
   const decisions: Array<{
     candidate: typeof prepared[number];
@@ -351,6 +360,26 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
         && !(isStoryFollowupAllowEnabled(env) && isFollowUpEventType(ai.storyFields?.eventType))) {
       ev.storyKeyRejectReason = 'similar_story_key_recent_channel';
     }
+    if (!ev.storyKeyRejectReason && isStoryIntelligenceRejectActive(env)) {
+      const currentSemanticStory = {
+        storyKey: ev.storyKey,
+        fields: ai.storyFields ?? null,
+        topicFingerprint: ai.topicFingerprint ?? null,
+        eventType: ai.storyFields?.eventType ?? null,
+        text: candidate.item.text ?? null,
+      };
+      for (const prior of seenSemanticStories) {
+        if (shouldRejectBySemanticStorySimilarity({
+          rejectEnabled: true,
+          current: currentSemanticStory,
+          prior,
+          followupAllowEnabled: isStoryFollowupAllowEnabled(env),
+        })) {
+          ev.storyKeyRejectReason = 'similar_semantic_story_recent_batch';
+          break;
+        }
+      }
+    }
     if (!ev.themeCapRejectReason && ev.themeKey) {
       const cap = getCryptoThemeDailyCap(ev.themeKey, env); // IMPROVEMENT #4: env-overridable
       if (cap != null && (themeBatchCounts.get(ev.themeKey) ?? 0) >= cap) {
@@ -363,6 +392,13 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       if (fpNorm) seenFingerprints.add(fpNorm);
       if (ev.storyClusterKey) seenStoryClusters.add(ev.storyClusterKey);
       if (ev.storyKey) seenStoryKeys.add(ev.storyKey);
+      seenSemanticStories.push({
+        storyKey: ev.storyKey,
+        fields: ai.storyFields ?? null,
+        topicFingerprint: ai.topicFingerprint ?? null,
+        eventType: ai.storyFields?.eventType ?? null,
+        text: candidate.item.text ?? null,
+      });
       if (ev.themeKey) themeBatchCounts.set(ev.themeKey, (themeBatchCounts.get(ev.themeKey) ?? 0) + 1);
     }
     decisions.push({ candidate, ai, ev, rejectReason });
@@ -466,6 +502,21 @@ async function evaluateCandidateDb(
       followupAllowEnabled: isStoryFollowupAllowEnabled(env),
     })) {
       storyKeyRejectReason = 'similar_story_key_recent_channel';
+    }
+
+    if (!storyKeyRejectReason) {
+      const semanticallySeen = await similarStorySeenInWindow(env, {
+        categoryId: candidate.row.category_id,
+        channelId,
+        storyKey,
+        fields: ai.storyFields ?? null,
+        topicFingerprint: ai.topicFingerprint,
+        eventType: ai.storyFields?.eventType ?? null,
+        text: candidate.item.text ?? null,
+        windowHours: getStoryIntelligenceWindowHours(env),
+        followupAllowEnabled: isStoryFollowupAllowEnabled(env),
+      });
+      if (semanticallySeen) storyKeyRejectReason = 'similar_semantic_story_recent_channel';
     }
   }
 

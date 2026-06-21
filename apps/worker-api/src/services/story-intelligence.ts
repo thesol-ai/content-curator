@@ -92,6 +92,512 @@ export function shouldRejectByStoryKey(args: {
   return true;
 }
 
+
+export interface SemanticStoryInput {
+  storyKey?: string | null;
+  fields?: StoryFields | null;
+  topicFingerprint?: string | null;
+  eventType?: string | null;
+  text?: string | null;
+}
+
+export interface SemanticStoryRow {
+  story_key: string | null;
+  event_type: string | null;
+  canonical_date: string | null;
+  primary_entities_json: string | null;
+  topic_fingerprint: string | null;
+  discovery_text?: string | null;
+}
+
+interface SemanticStorySignature {
+  tokens: Set<string>;
+  /** Named entities/products/protocols extracted from story fields and story_key. */
+  anchorTokens: Set<string>;
+  strongTokens: Set<string>;
+  actionTokens: Set<string>;
+  materialNumbers: Set<string>;
+  lexicalTokens: Set<string>;
+  eventFamily: string;
+  canonicalDate: string | null;
+}
+
+const GENERIC_SEMANTIC_TOKENS = new Set([
+  'crypto', 'cryptocurrency', 'blockchain', 'web3', 'defi',
+  'news', 'update', 'latest', 'new', 'today',
+  'us', 'uk', 'usd', 'eur', 'million', 'billion',
+  'protocol', 'network', 'market', 'markets',
+  'regulation', 'regulatory', 'security',
+]);
+
+const ACTION_SEMANTIC_TOKENS = new Set([
+  'aml', 'kyc', 'customer', 'identification', 'compliance',
+  'clipper', 'clipboard', 'malware', 'stealer',
+  'exploit', 'hack', 'drain', 'drained', 'incident', 'bridge',
+  'filing', 'files', 'application', 'applications', 'dividend', 'dividends',
+  'funding', 'crisis', 'departure', 'departures', 'leadership',
+  'reserve', 'reserves', 'cash', 'privacy', 'coin', 'coins',
+]);
+
+const WEAK_SEMANTIC_ANCHOR_TOKENS = new Set([
+  'crypto', 'cryptocurrency', 'blockchain', 'web3', 'defi',
+  'news', 'update', 'latest', 'new', 'today',
+  'protocol', 'network', 'market', 'markets',
+  'regulation', 'regulatory', 'security',
+  'us', 'uk', 'usd', 'eur',
+]);
+
+const BROAD_SECURITY_CONTEXT_ANCHORS = new Set([
+  'bitcoin', 'btc', 'ethereum', 'eth', 'solana', 'sol',
+  'bnb', 'bnbchain', 'bnb_chain', 'base', 'arbitrum',
+  'optimism', 'polygon', 'avalanche', 'chain',
+]);
+
+function canonicalSemanticToken(raw: unknown): string | null {
+  const s = String(raw ?? '')
+    .toLowerCase()
+    .replace(/^\$/, '')
+    .replace(/&amp;/g, 'and')
+    .replace(/[^\p{L}\p{N}_-]/gu, '_')
+    .replace(/[-\s]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!s || s.length < 2) return null;
+
+  const aliases: Record<string, string> = {
+    european_union: 'eu',
+    msftsecurity: 'microsoft',
+    microsoft_security: 'microsoft',
+    jared_from_subway: 'jaredfromsubway',
+    jared_from_subway_mev_bot_drain: 'jaredfromsubway',
+    secret: 'secret_network',
+    secret_network_connections: 'secret_network',
+    franklin: 'franklin_templeton',
+    franklin_templeton: 'franklin_templeton',
+    crypto_clipper: 'crypto_clipper_malware',
+    clipboard_stealer: 'crypto_clipper_malware',
+    wallet_hijack: 'crypto_clipper_malware',
+    security_wallet_drain: 'wallet_drain',
+    bridge_incident: 'exploit',
+    security_malware_alert: 'malware',
+    security_threat: 'malware',
+    etf_product: 'etf',
+    institutional_etf_product: 'etf',
+    etf_filing: 'etf',
+    stablecoin_regulation: 'regulation',
+    protocol_governance: 'governance',
+    governance_leadership_change: 'governance',
+  };
+
+  return aliases[s] ?? s;
+}
+
+function addToken(out: Set<string>, raw: unknown): void {
+  const token = canonicalSemanticToken(raw);
+  if (!token) return;
+  out.add(token);
+
+  if (token.includes('_')) {
+    for (const part of token.split('_')) {
+      const p = canonicalSemanticToken(part);
+      if (p) out.add(p);
+    }
+  }
+}
+
+function addAnchorToken(out: Set<string>, raw: unknown): void {
+  const token = canonicalSemanticToken(raw);
+  if (!token || WEAK_SEMANTIC_ANCHOR_TOKENS.has(token)) return;
+  out.add(token);
+}
+
+function tokenizeSemantic(value: unknown): Set<string> {
+  const out = new Set<string>();
+  const normalized = String(value ?? '')
+    .toLowerCase()
+    .replace(/&amp;/g, 'and')
+    .replace(/[$]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!normalized) return out;
+
+  if (normalized.includes('jared_from_subway')) out.add('jaredfromsubway');
+  if (normalized.includes('secret_network')) out.add('secret_network');
+  if (normalized.includes('franklin_templeton')) out.add('franklin_templeton');
+  if (normalized.includes('ethereum_foundation')) out.add('ethereum_foundation');
+  if (normalized.includes('genius_act')) out.add('genius_act');
+
+  addToken(out, normalized);
+  for (const part of normalized.split('_')) addToken(out, part);
+
+  return out;
+}
+
+const LEXICAL_STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'onto',
+  'have', 'has', 'had', 'will', 'would', 'could', 'should', 'said',
+  'says', 'after', 'before', 'about', 'over', 'under', 'more', 'less',
+  'than', 'then', 'they', 'their', 'them', 'its', 'his', 'her', 'our',
+  'your', 'are', 'was', 'were', 'been', 'being', 'also', 'now',
+  'approximately', 'roughly', 'worth', 'including', 'according',
+  'report', 'reported', 'reports', 'new', 'latest', 'update', 'alert',
+]);
+
+function tokenizeLexical(value: unknown): Set<string> {
+  const out = new Set<string>();
+  const raw = String(value ?? '').toLowerCase().replace(/&amp;/g, 'and');
+  if (!raw.trim()) return out;
+
+  for (const part of raw.split(/[^\p{L}\p{N}_-]+/u)) {
+    const token = canonicalSemanticToken(part);
+    if (!token || token.length < 4) continue;
+    if (LEXICAL_STOP_WORDS.has(token)) continue;
+    if (GENERIC_SEMANTIC_TOKENS.has(token)) continue;
+    out.add(token);
+  }
+
+  return out;
+}
+
+function normalizeNumberUnit(unitRaw: string | undefined): string {
+  const unit = String(unitRaw ?? '').toLowerCase();
+  if (['m', 'mn', 'million'].includes(unit)) return 'm';
+  if (['b', 'bn', 'billion'].includes(unit)) return 'b';
+  if (['k', 'thousand'].includes(unit)) return 'k';
+  if (['t', 'trillion'].includes(unit)) return 't';
+  if (['%', 'percent'].includes(unit)) return 'pct';
+  if (['btc', 'eth', 'usdc', 'usdt', 'weth'].includes(unit)) return unit;
+  return '';
+}
+
+function extractMaterialNumberTokens(value: unknown): Set<string> {
+  const out = new Set<string>();
+  const text = String(value ?? '').toLowerCase().replace(/,/g, '');
+  if (!text.trim()) return out;
+
+  const re = /(?:[$€£]\s*)?(\d+(?:\.\d+)?)\s*(k|m|mn|b|bn|t|million|billion|thousand|trillion|%|percent|btc|eth|weth|usdc|usdt)?/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    const n = Number(match[1]);
+    if (!Number.isFinite(n)) continue;
+
+    const unit = normalizeNumberUnit(match[2]);
+    if (!unit) {
+      if (n >= 1900 && n <= 2100) continue;
+      if (n < 1000000) continue;
+      out.add(`num:${Math.round(n)}`);
+      continue;
+    }
+
+    // Ignore plain years even if punctuation around them confused the regex.
+    if (!match[2] && n >= 1900 && n <= 2100) continue;
+
+    const rounded = Math.round(n * 100) / 100;
+    out.add(`num:${rounded}:${unit}`);
+  }
+
+  return out;
+}
+
+function combinedTextForSemantic(input: SemanticStoryInput): string {
+  return [
+    input.storyKey ?? '',
+    input.topicFingerprint ?? '',
+    input.fields?.primaryEntities?.join(' ') ?? '',
+    input.fields?.eventType ?? '',
+    input.text ?? '',
+  ].join(' ');
+}
+
+function eventFamilyFromTokens(tokens: Set<string>, eventType?: string | null): string {
+  const joined = `${eventType ?? ''} ${Array.from(tokens).join(' ')}`.toLowerCase();
+
+  if (/(exploit|hack|drain|drained|malware|clipper|stealer|wallet_drain|bridge_incident|security_incident|incident)/.test(joined)) {
+    return 'security_incident';
+  }
+  if (/(aml|kyc|mica|cftc|sec|regulation|regulatory|compliance|cbdc|genius_act|privacy_coins)/.test(joined)) {
+    return 'regulation';
+  }
+  if (/(etf|filing|application|applications|fund|dividend|dividends|reserve)/.test(joined)) {
+    return 'etf_product';
+  }
+  if (/(governance|foundation|funding|leadership|departure|departures|core_development)/.test(joined)) {
+    return 'governance';
+  }
+  if (/(price|drawdown|options|expiry|miner|selling|accumulation|purchase)/.test(joined)) {
+    return 'market_activity';
+  }
+  return normalizeEventType(eventType ?? 'unknown');
+}
+
+function parseStoryKeyParts(storyKey?: string | null): { entities: string[]; eventType: string | null; date: string | null } {
+  const parts = String(storyKey ?? '').split('|').map(p => p.trim()).filter(Boolean);
+  if (parts.length === 0) return { entities: [], eventType: null, date: null };
+
+  let date: string | null = null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(parts[parts.length - 1] ?? '')) {
+    date = parts.pop() ?? null;
+  }
+
+  const eventType = parts.length > 0 ? parts.pop() ?? null : null;
+  return { entities: parts, eventType, date };
+}
+
+function parsePrimaryEntitiesJson(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(v => String(v)) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function buildSemanticStorySignature(input: SemanticStoryInput): SemanticStorySignature {
+  const parsed = parseStoryKeyParts(input.storyKey);
+  const tokens = new Set<string>();
+  const anchorTokens = new Set<string>();
+
+  for (const entity of parsed.entities) {
+    addToken(tokens, entity);
+    addAnchorToken(anchorTokens, entity);
+  }
+  for (const entity of input.fields?.primaryEntities ?? []) {
+    addToken(tokens, entity);
+    addAnchorToken(anchorTokens, entity);
+  }
+  for (const token of tokenizeSemantic(input.topicFingerprint)) tokens.add(token);
+  for (const token of tokenizeSemantic(parsed.eventType)) tokens.add(token);
+  for (const token of tokenizeSemantic(input.fields?.eventType ?? input.eventType)) tokens.add(token);
+
+  const lexicalTokens = tokenizeLexical(input.text);
+  const materialNumbers = extractMaterialNumberTokens(combinedTextForSemantic(input));
+
+  const eventType = input.fields?.eventType ?? input.eventType ?? parsed.eventType;
+  const eventFamily = eventFamilyFromTokens(tokens, eventType);
+  const canonicalDate = normalizeCanonicalDate(input.fields?.canonicalDate ?? parsed.date) || null;
+
+  const strongTokens = new Set<string>();
+  const actionTokens = new Set<string>();
+  for (const token of tokens) {
+    if (!GENERIC_SEMANTIC_TOKENS.has(token) && token.length >= 3) strongTokens.add(token);
+    if (ACTION_SEMANTIC_TOKENS.has(token)) actionTokens.add(token);
+  }
+
+  return { tokens, anchorTokens, strongTokens, actionTokens, materialNumbers, lexicalTokens, eventFamily, canonicalDate };
+}
+
+function intersectionCount(a: Set<string>, b: Set<string>): number {
+  let n = 0;
+  for (const value of a) if (b.has(value)) n++;
+  return n;
+}
+
+function hasAnyIntersection(a: Set<string>, b: Set<string>): boolean {
+  for (const value of a) if (b.has(value)) return true;
+  return false;
+}
+
+function hasSpecificSharedAnchor(a: Set<string>, b: Set<string>): boolean {
+  for (const value of a) {
+    if (!b.has(value)) continue;
+    if (BROAD_SECURITY_CONTEXT_ANCHORS.has(value)) continue;
+    if (WEAK_SEMANTIC_ANCHOR_TOKENS.has(value)) continue;
+    return true;
+  }
+  return false;
+}
+
+function hasLongSpecificSharedAnchor(a: Set<string>, b: Set<string>): boolean {
+  for (const value of a) {
+    if (!b.has(value)) continue;
+    if (BROAD_SECURITY_CONTEXT_ANCHORS.has(value)) continue;
+    if (WEAK_SEMANTIC_ANCHOR_TOKENS.has(value)) continue;
+    if (value.length >= 10) return true;
+  }
+  return false;
+}
+
+function differenceCount(a: Set<string>, b: Set<string>): number {
+  let n = 0;
+  for (const value of a) if (!b.has(value)) n++;
+  return n;
+}
+
+function datesAreCompatible(a: string | null, b: string | null): boolean {
+  if (!a || !b) return true;
+  const ta = Date.parse(`${a}T00:00:00Z`);
+  const tb = Date.parse(`${b}T00:00:00Z`);
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return true;
+  return Math.abs(ta - tb) <= 24 * 60 * 60 * 1000;
+}
+
+export function shouldRejectBySemanticStorySimilarity(args: {
+  rejectEnabled: boolean;
+  current: SemanticStoryInput;
+  prior: SemanticStoryInput;
+  followupAllowEnabled: boolean;
+}): boolean {
+  if (!args.rejectEnabled) return false;
+  if (args.followupAllowEnabled && isFollowUpEventType(args.current.fields?.eventType ?? args.current.eventType)) return false;
+
+  const current = buildSemanticStorySignature(args.current);
+  const prior = buildSemanticStorySignature(args.prior);
+
+  if (current.eventFamily !== prior.eventFamily) return false;
+
+  const dateCompatible = datesAreCompatible(current.canonicalDate, prior.canonicalDate);
+  if (!dateCompatible && current.eventFamily !== 'security_incident') return false;
+
+  const sharedStrong = intersectionCount(current.strongTokens, prior.strongTokens);
+  const sharedAction = intersectionCount(current.actionTokens, prior.actionTokens);
+  const sharedAnchors = intersectionCount(current.anchorTokens, prior.anchorTokens);
+  const sharedNumbers = intersectionCount(current.materialNumbers, prior.materialNumbers);
+  const sharedLexical = intersectionCount(current.lexicalTokens, prior.lexicalTokens);
+  const currentNewAnchors = differenceCount(current.anchorTokens, prior.anchorTokens);
+  const priorNewAnchors = differenceCount(prior.anchorTokens, current.anchorTokens);
+
+  // Same named actors/products/protocols. This is generic and does not depend on
+  // knowing the topic in advance.
+  if (sharedAnchors >= 3) return true;
+
+  // Same material number plus a specific shared actor is a strong duplicate signal.
+  // For security stories, broad chain anchors like Ethereum/Solana alone are not enough.
+  if (
+    sharedNumbers > 0
+    && (
+      hasSpecificSharedAnchor(current.anchorTokens, prior.anchorTokens)
+      || (current.eventFamily !== 'security_incident' && sharedAnchors >= 1)
+    )
+  ) return true;
+
+  // Security stories are often rewritten with different event labels. Block on
+  // a shared *specific* actor/protocol, not on broad chain context alone.
+  if (current.eventFamily === 'security_incident') {
+    const hasSpecificShared = hasSpecificSharedAnchor(current.anchorTokens, prior.anchorTokens);
+
+    if (!hasSpecificShared) {
+      return false;
+    }
+
+    if (sharedAnchors >= 2) return true;
+    if (sharedNumbers > 0) return true;
+    if (hasLongSpecificSharedAnchor(current.anchorTokens, prior.anchorTokens)) return true;
+    if (sharedAction > 0) return true;
+    if (sharedLexical >= 3) return true;
+  }
+
+  // ETF/product/governance repeats should block when the named anchors overlap,
+  // except when each side introduces a different major actor.
+  if (current.eventFamily === 'etf_product' || current.eventFamily === 'governance') {
+    if (sharedAnchors >= 2 && !(currentNewAnchors > 0 && priorNewAnchors > 0)) return true;
+    if (sharedAnchors >= 1 && sharedLexical >= 4) return true;
+  }
+
+  // Regulation is noisy. Same law + same regulated subject blocks; a new company
+  // operating under the same law should survive.
+  if (current.eventFamily === 'regulation') {
+    if (sharedAnchors >= 3 && !(currentNewAnchors > 0 && priorNewAnchors > 0)) return true;
+    if (sharedAnchors >= 2 && sharedAction > 0 && currentNewAnchors === 0) return true;
+    if (
+      current.anchorTokens.has('eu')
+      && prior.anchorTokens.has('eu')
+      && hasAnyIntersection(current.actionTokens, prior.actionTokens)
+      && sharedLexical >= 2
+    ) {
+      return true;
+    }
+  }
+
+  // Generic fallback: high lexical overlap plus an anchor means another source is
+  // likely retelling the same story with different wording.
+  if (sharedAnchors >= 1 && sharedLexical >= 5) return true;
+
+  // High structured overlap with no new current actor is probably the same story.
+  if (sharedStrong >= 3 && currentNewAnchors === 0) return true;
+
+  return false;
+}
+
+/** Was a semantically similar story already queued/published for the channel within window? */
+export async function similarStorySeenInWindow(
+  env: Env,
+  args: {
+    categoryId: string;
+    channelId?: string | null;
+    storyKey?: string | null;
+    fields?: StoryFields | null;
+    topicFingerprint?: string | null;
+    eventType?: string | null;
+    text?: string | null;
+    windowHours: number;
+    followupAllowEnabled: boolean;
+  },
+): Promise<boolean> {
+  if (!env.DB) return false;
+  if (!args.storyKey && !args.topicFingerprint) return false;
+
+  try {
+    const res = await env.DB.prepare(`
+      SELECT
+        sie.story_key,
+        sie.event_type,
+        sie.canonical_date,
+        sie.primary_entities_json,
+        sie.topic_fingerprint,
+        d.text AS discovery_text
+      FROM story_intelligence_events sie
+      LEFT JOIN discovery_items d ON d.id = sie.discovery_item_id
+      WHERE sie.category_id = ?
+        AND (sie.channel_id = ? OR ? IS NULL)
+        AND sie.status IN ('queued','published')
+        AND sie.created_at > datetime('now','-' || ? || ' hours')
+      ORDER BY sie.created_at DESC
+      LIMIT 250
+    `).bind(args.categoryId, args.channelId ?? null, args.channelId ?? null, String(args.windowHours))
+      .all<SemanticStoryRow>();
+
+    const current: SemanticStoryInput = {
+      storyKey: args.storyKey ?? null,
+      fields: args.fields ?? null,
+      topicFingerprint: args.topicFingerprint ?? null,
+      eventType: args.eventType ?? null,
+      text: args.text ?? null,
+    };
+
+    for (const row of res.results ?? []) {
+      const priorFields: StoryFields | null = {
+        primaryEntities: parsePrimaryEntitiesJson(row.primary_entities_json),
+        eventType: normalizeEventType(row.event_type),
+        canonicalDate: normalizeCanonicalDate(row.canonical_date),
+      };
+
+      if (shouldRejectBySemanticStorySimilarity({
+        rejectEnabled: true,
+        current,
+        prior: {
+          storyKey: row.story_key,
+          fields: priorFields,
+          topicFingerprint: row.topic_fingerprint,
+          eventType: row.event_type,
+          text: row.discovery_text ?? null,
+        },
+        followupAllowEnabled: args.followupAllowEnabled,
+      })) {
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn('[StoryIntel] similarStorySeenInWindow skipped:', err instanceof Error ? err.message : String(err));
+  }
+
+  return false;
+}
+
 // ── Pure helpers (unit-tested) ────────────────────────────────
 
 export function normalizeEntities(value: unknown): string[] {

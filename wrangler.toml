@@ -145,7 +145,7 @@ STORY_INTELLIGENCE_ENABLED = "true"
 STORY_INTELLIGENCE_OBSERVE_ONLY = "false"
 # ── Phase 6K active reject (default OFF) + window/follow-up ──
 STORY_INTELLIGENCE_REJECT_ENABLED = "true"
-STORY_INTELLIGENCE_WINDOW_HOURS = "48"
+STORY_INTELLIGENCE_WINDOW_HOURS = "72"
 STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED = "true"  # let materially-new follow-ups through
 STORY_INTELLIGENCE_RETENTION_DAYS = "30"     # retention for story_intelligence_events (daily-guarded cleanup)
 # ── AI cost attribution by source (default OFF; needs migration 0019) ──
