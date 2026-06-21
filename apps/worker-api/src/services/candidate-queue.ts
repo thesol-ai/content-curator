@@ -195,33 +195,30 @@ export async function fetchPendingCandidates(
   env: Env,
   limit: number,
   categoryId?: string,
+  excludePlatform?: string,
 ): Promise<AICandidateRow[]> {
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
     const maxAttempts = getMaxCandidateAttempts(env);
     const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
 
-    if (categoryId) {
-      const rows = await env.DB.prepare(`
-        SELECT * FROM ai_candidate_queue
-        WHERE status IN ('pending', 'needs_translation')
-          AND category_id = ?
-          AND created_at > ?
-          AND attempt_count < ?
-        ORDER BY priority_score DESC, created_at ASC
-        LIMIT ?
-      `).bind(categoryId, cutoff, maxAttempts, limit).all<AICandidateRow>();
-      return rows.results ?? [];
-    }
+    const conds = ["status IN ('pending', 'needs_translation')", 'created_at > ?', 'attempt_count < ?'];
+    const binds: unknown[] = [cutoff, maxAttempts];
+    if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
+    // When a per-platform brief budget is exhausted for the rest of a drain tick,
+    // exclude that platform at the SQL level. This matters because RSS rows carry
+    // priority_score = publishedAt (~1.7e9), which always sorts ahead of the
+    // engagement-derived scores (~0-100) of other platforms — an in-memory filter
+    // of a small top-priority page could be entirely RSS and starve the rest.
+    if (excludePlatform) { conds.push('platform != ?'); binds.push(excludePlatform); }
+    binds.push(limit);
 
     const rows = await env.DB.prepare(`
       SELECT * FROM ai_candidate_queue
-      WHERE status IN ('pending', 'needs_translation')
-        AND created_at > ?
-        AND attempt_count < ?
+      WHERE ${conds.join(' AND ')}
       ORDER BY priority_score DESC, created_at ASC
       LIMIT ?
-    `).bind(cutoff, maxAttempts, limit).all<AICandidateRow>();
+    `).bind(...binds).all<AICandidateRow>();
     return rows.results ?? [];
   } catch (err) {
     console.warn(`[CandidateQueue] fetchPendingCandidates failed: ${err instanceof Error ? err.message : String(err)}`);

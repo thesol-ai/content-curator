@@ -125,13 +125,18 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   const drainLimit = Math.max(baseDrainLimit, maxBatches * scoringBatchSize);
   const batchSize = Math.max(1, Math.min(scoringBatchSize, drainLimit));
 
+  // Set once the RSS brief daily cap is hit in this tick. Subsequent fetches then
+  // exclude RSS at the SQL level so the cap defers ONLY RSS — non-RSS candidates
+  // (which sort behind RSS by priority_score) keep draining instead of starving.
+  let rssBudgetExhausted = false;
+
   for (let batchNo = 0; batchNo < maxBatches && result.candidatesPulled < drainLimit; batchNo++) {
     const remaining = drainLimit - result.candidatesPulled;
     const fairPickerEnabled = isFairSourcePickerEnabled(env);
     const poolLimit = fairPickerEnabled
       ? Math.min(Math.max(batchSize * getFairSourcePickerPoolMultiplier(env), batchSize), 200)
       : Math.min(batchSize, remaining);
-    const pendingPool = await fetchPendingCandidates(env, poolLimit, options.categoryId);
+    const pendingPool = await fetchPendingCandidates(env, poolLimit, options.categoryId, rssBudgetExhausted ? 'rss' : undefined);
     if (pendingPool.length === 0) break;
 
     const selection = selectCandidateBatchForScoring(pendingPool, Math.min(batchSize, remaining), fairPickerEnabled);
@@ -167,6 +172,12 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesQueued += batchResult.queued;
     result.candidatesFailed += batchResult.failed;
     result.candidatesSkipped += batchResult.skipped;
+    // RSS brief cap: defer RSS for the rest of this tick but keep draining
+    // non-RSS. Must be checked BEFORE the generic budget break below.
+    if (batchResult.rssBudgetExhausted) {
+      rssBudgetExhausted = true;
+      if (!result.error) result.error = batchResult.error;
+    }
     if (batchResult.stoppedByBudget) {
       result.stoppedByBudget = true;
       result.error = batchResult.error;
@@ -185,6 +196,9 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   failed: number;
   skipped: number;
   stoppedByBudget: boolean;
+  /** RSS brief daily cap hit: stop pulling RSS for the rest of this tick WITHOUT
+   *  stopping non-RSS drain (unlike stoppedByBudget, which halts everything). */
+  rssBudgetExhausted?: boolean;
   error?: string;
 }> {
   const zero = { scored: 0, selected: 0, rejected: 0, queued: 0, failed: 0, skipped: 0, stoppedByBudget: false };
@@ -206,8 +220,9 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   const prepared: Array<{ row: AICandidateRow; item: NormalizedItem; keys: string[] }> = [];
   let skipped = 0;
   let rejected = 0;
-  // Set when the RSS brief daily cap is hit so the outer drain loop stops and
-  // does not re-claim the just-released cap-deferred candidates in the same tick.
+  // Set when the RSS brief daily cap is hit so the outer drain loop stops pulling
+  // RSS (and does not re-claim the just-released cap-deferred candidates) for the
+  // rest of this tick — while letting non-RSS candidates keep draining.
   let rssBriefCapHit = false;
 
   const cutoffTs = Math.floor(Date.now() / 1000) - category.freshness_hours * 3600;
@@ -551,9 +566,10 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   return {
     ...zero,
     scored: prepared.length, selected, rejected, queued, skipped,
-    // When the RSS brief daily cap was hit, signal the outer loop to stop so it
-    // does not immediately re-claim the just-released cap-deferred candidates.
-    stoppedByBudget: rssBriefCapHit,
+    // RSS brief cap is platform-scoped: signal the outer loop to stop pulling RSS
+    // for the rest of this tick (so the just-released cap-deferred RSS candidates
+    // are not re-claimed) WITHOUT halting the non-RSS backlog.
+    rssBudgetExhausted: rssBriefCapHit,
     ...(rssBriefCapHit && { error: 'rss_brief_daily_cap' }),
   };
 }

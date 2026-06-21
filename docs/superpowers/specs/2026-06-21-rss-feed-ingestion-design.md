@@ -254,13 +254,59 @@ to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
   lazily on the first claimed feed (no empty run on ticks where every slot is
   already taken).
 
+## rev 5 fixes (post fourth/fifth review) — SUPERSEDES the two rev 4 budget/defer points
+
+- **Budget self-lock fixed (P0).** A daily-cap hit logs a `skipped` usage row for
+  observability, but the budget counters must NOT count those rows — otherwise
+  each cap-hit inflates tomorrow's count and keeps the cap latched open.
+  - `rss_brief` daily budget now counts **only real model calls** (`success` +
+    `failed`). (Supersedes rev 4's "counts ALL attempts including skipped".)
+  - Jina `rss_fulltext` budget counts real fetches (`success` + `error`) and
+    non-cap skips (paywall/empty), but **excludes** `daily_cap_%` skips.
+- **Cap-deferred survivors are released, not left claimed (P0).** Daily-cap-exhausted
+  RSS survivors are released to `pending` with the attempt **decremented**
+  (`releaseClaimedCandidatesToPending(..., { decrementAttempt: true })`), never
+  persisted (no premature `dedupe_keys`). Repeated deferral therefore never burns
+  `attempt_count` toward max-attempts (which would falsely `fail` a healthy
+  article). (Supersedes rev 4's "left claimed, recovered by stale-recovery".)
+- **RSS brief cap is platform-scoped (P0).** When the brief cap is hit, the batch
+  signals `rssBudgetExhausted` (NOT the generic `stoppedByBudget`). The outer
+  `drainAICandidateQueue` loop then:
+  1. does **not** stop — non-RSS candidates keep draining; and
+  2. excludes RSS from subsequent `fetchPendingCandidates` for the rest of the
+     tick (`excludePlatform='rss'` at the SQL level), so the just-released
+     cap-deferred RSS rows are not re-claimed/re-churned in the same tick.
+  This matters because RSS rows carry `priority_score = publishedAt` (~1.7e9),
+  which always sorts ahead of engagement-derived scores (~0–100); a generic stop
+  (or an in-memory filter of a small top-priority page) would starve non-RSS.
+- **Same-second sibling re-scan is bounded + observable.** The composite watermark
+  (`isNewerThanWatermark` = strictly-newer OR same-timestamp-different-URL) keeps
+  siblings sharing a coarse `pubDate` from being silently dropped. Double-enqueue
+  is prevented by two layers: the `isDuplicate(keys)` check and the
+  `ai_candidate_queue` unique `source_url` index (`INSERT OR IGNORE`). The
+  redundant re-scan is bounded (≤ `RSS_MAX_ITEMS_PER_FEED` dedupe lookups/feed/run)
+  and self-heals the moment a newer item advances the watermark; it is surfaced
+  via the `rss.feed.same_second_rescan` run_event. A durable `rss_seen_items`
+  table is a possible follow-up but is **out of scope for v1** (the bounded,
+  self-healing, observable behavior is acceptable at current RSS volume).
+- **Node version enforced.** `package.json` `engines.node >= 22.5.0` plus
+  `.npmrc` `engine-strict=true` fail fast (the D1 integration harness imports the
+  Node 22.5+ `node:sqlite` builtin).
+
 ## Error handling / isolation
 
 - Per-feed try/catch with short timeout; one bad/slow feed never blocks others or
   the Apify path; `rss_sources.last_error` / `consecutive_failures` updated.
 - Jina failure / paywall → fall back to summary (or skip per policy), never crash.
-- RSS brief failure → release only RSS candidates (mirrors existing translation
-  failure handling).
+- RSS survivor brief, three terminal states (all isolated from non-RSS survivors
+  in the same batch):
+  1. **brief success** → translation attached under the channel keys → persisted
+     and queued like any survivor.
+  2. **brief failure** (bad/empty/verbatim draft, HTTP/timeout) → that candidate
+     released to `pending` with attempt decremented, not persisted; retries soon.
+  3. **brief daily cap** → released to `pending` with attempt decremented, not
+     persisted, AND RSS is deferred for the rest of the tick (platform-scoped
+     stop above); retries once budget frees the next day.
 - All flags default off → dark-launchable.
 
 ## Testing
