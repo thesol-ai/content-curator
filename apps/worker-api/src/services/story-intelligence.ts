@@ -61,6 +61,16 @@ export function isStoryFollowupAllowEnabled(env: Env): boolean {
   return raw !== 'false'; // default true
 }
 
+/**
+ * Heuristic semantic blocking is intentionally default-off.
+ * It is useful as a candidate signal, but should not be a final reject gate until
+ * we have production precision/recall evidence. Exact story_key blocking and the
+ * batched AI duplicate judge remain active through their own flags.
+ */
+export function isSemanticStoryHeuristicRejectEnabled(env: Env): boolean {
+  return String((env as any).STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED ?? '').toLowerCase() === 'true';
+}
+
 // Follow-up event types that are materially new developments and must NOT be
 // blocked even when an earlier story with the same key was published.
 const FOLLOWUP_EVENT_TYPES = new Set([
