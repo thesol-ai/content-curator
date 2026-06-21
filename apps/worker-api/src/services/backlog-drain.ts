@@ -8,6 +8,7 @@ import {
   claimCandidateBatch,
   failMaxAttemptPendingCandidates,
   fetchPendingCandidates,
+  hasPendingCandidatesForPlatform,
   getCandidateBacklogDrainLimit,
   getFairSourcePickerPoolMultiplier,
   getMaxScoringBatchesPerRun,
@@ -34,7 +35,7 @@ import {
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
 import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
-import { enrichAndBriefRssSurvivors, isRssBriefBudgetExhausted } from './rss-brief';
+import { enrichAndBriefRssSurvivors, getRssBriefBudgetState } from './rss-brief';
 import {
   getStoryIntelligenceWindowHours,
   isStoryFollowupAllowEnabled,
@@ -73,11 +74,16 @@ export interface BacklogDrainResult {
   candidatesSkipped: number;
   batchesAttempted: number;
   stoppedByBudget: boolean;
-  /** A per-platform brief budget was exhausted this tick: that platform was
-   *  deferred (excluded from claim/scoring) but the overall drain ran normally —
-   *  this is NOT a drain failure, so it is surfaced separately from `error`. */
+  /** Budget STATE: the RSS brief daily budget is spent (informational; true even
+   *  when there were no RSS candidates to defer). */
   rssBudgetExhausted?: boolean;
+  /** ACTION: at least one real RSS candidate was actually set aside this run
+   *  because the brief budget was spent. Distinct from `rssBudgetExhausted` so a
+   *  budget-spent tick with no RSS work does not emit a false deferral signal. */
+  rssDeferredThisRun?: boolean;
+  /** Platforms actually deferred this run (only set when something was deferred). */
   deferredPlatforms?: string[];
+  /** Benign, non-failing notices (e.g. a platform deferral) — NOT `error`. */
   warnings?: string[];
   error?: string;
 }
@@ -131,13 +137,20 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   const drainLimit = Math.max(baseDrainLimit, maxBatches * scoringBatchSize);
   const batchSize = Math.max(1, Math.min(scoringBatchSize, drainLimit));
 
-  // Set once the RSS brief daily cap is exhausted (either already at drain start,
-  // or hit mid-tick). Subsequent fetches then exclude RSS at the SQL level so the
-  // cap defers ONLY RSS — non-RSS candidates (which sort behind RSS by
-  // priority_score) keep draining instead of starving. Pre-checking up front also
-  // prevents RSS from being claimed/scored just to be deferred at the brief step,
-  // which would burn AI scoring / duplicate-judge budget every tick (cost churn).
-  let rssBudgetExhausted = await isRssBriefBudgetExhausted(env);
+  // RSS brief budget gating. `rssBudgetExhausted` (no calls left) makes the rest
+  // of this tick exclude RSS at the SQL level so the cap defers ONLY RSS — non-RSS
+  // candidates keep draining. Pre-checking up front also stops RSS from being
+  // claimed/scored just to be deferred at the brief step, which would burn AI
+  // scoring / duplicate-judge budget every tick (cost churn). When the budget is
+  // only PARTLY spent, each RSS-bearing batch is trimmed so no more than the
+  // remaining brief calls' worth of RSS is claimed (the surplus would be scored
+  // only to be cap-deferred). `rssDeferredThisRun` records whether real RSS work
+  // was actually set aside (distinct from the mere budget state).
+  let rssBudgetExhausted = (await getRssBriefBudgetState(env)).exhausted;
+  let rssDeferredThisRun = false;
+  if (rssBudgetExhausted) {
+    rssDeferredThisRun = await hasPendingCandidatesForPlatform(env, 'rss', options.categoryId);
+  }
 
   for (let batchNo = 0; batchNo < maxBatches && result.candidatesPulled < drainLimit; batchNo++) {
     const remaining = drainLimit - result.candidatesPulled;
@@ -149,8 +162,26 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     if (pendingPool.length === 0) break;
 
     const selection = selectCandidateBatchForScoring(pendingPool, Math.min(batchSize, remaining), fairPickerEnabled);
-    const pending = selection.selected;
+    let pending = selection.selected;
     if (pending.length === 0) break;
+
+    // Partial-budget RSS trim: only when the selected batch actually carries RSS.
+    // Re-read the brief budget (cheap COUNT) so RSS claimed ACROSS batches in this
+    // tick never exceeds what brief can serve. If it just got exhausted, drop RSS
+    // from this batch and continue (next fetch excludes RSS at the SQL level).
+    if (!rssBudgetExhausted && pending.some(c => c.platform === 'rss')) {
+      const briefState = await getRssBriefBudgetState(env);
+      if (briefState.exhausted) {
+        rssBudgetExhausted = true;
+        rssDeferredThisRun = true;
+        pending = pending.filter(c => c.platform !== 'rss');
+        if (pending.length === 0) continue;
+      } else if (Number.isFinite(briefState.remaining)) {
+        let allow = briefState.remaining;
+        pending = pending.filter(c => c.platform !== 'rss' || allow-- > 0);
+        if (pending.length === 0) continue;
+      }
+    }
     result.candidatesPulled += pending.length;
 
     const budget = await checkScoringBudgetForBacklog(env, options.scoringCallBonus ?? 0);
@@ -181,9 +212,13 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesQueued += batchResult.queued;
     result.candidatesFailed += batchResult.failed;
     result.candidatesSkipped += batchResult.skipped;
-    // RSS brief cap hit mid-tick: defer RSS for the rest of this tick but keep
-    // draining non-RSS. Not a drain failure — recorded as a warning, not `error`.
-    if (batchResult.rssBudgetExhausted) rssBudgetExhausted = true;
+    // RSS brief cap hit mid-tick (safety net; the trim above usually prevents it):
+    // defer RSS for the rest of this tick but keep draining non-RSS. Not a drain
+    // failure — recorded as a warning, not `error`.
+    if (batchResult.rssBudgetExhausted) {
+      rssBudgetExhausted = true;
+      rssDeferredThisRun = true;
+    }
     if (batchResult.stoppedByBudget) {
       result.stoppedByBudget = true;
       result.error = batchResult.error;
@@ -191,10 +226,12 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     }
   }
 
-  // RSS was deferred (pre-checked exhausted or hit mid-tick). Surface it as a
-  // benign, structured signal so reports don't read a healthy drain as failed.
-  if (rssBudgetExhausted) {
-    result.rssBudgetExhausted = true;
+  // Budget STATE is always surfaced; the deferral ACTION (warnings/deferredPlatforms)
+  // only when real RSS work was actually set aside — so a budget-spent tick with no
+  // RSS candidates doesn't read as a failure or a noisy deferral.
+  if (rssBudgetExhausted) result.rssBudgetExhausted = true;
+  if (rssDeferredThisRun) {
+    result.rssDeferredThisRun = true;
     result.deferredPlatforms = ['rss'];
     result.warnings = [...(result.warnings ?? []), 'rss_brief_daily_cap'];
   }

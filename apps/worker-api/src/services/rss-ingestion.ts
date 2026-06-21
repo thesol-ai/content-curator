@@ -90,6 +90,29 @@ function rid(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Priority score for an RSS candidate, on the SAME 0–100 scale as the
+ * engagement-based score used for Apify/X candidates (`computeCandidatePriorityScore`).
+ *
+ * RSS feeds carry no engagement signal, so we previously used `publishedAt`
+ * directly — a ~1.7e9 unix timestamp that dwarfed every engagement score (~0–100)
+ * and made RSS permanently dominate `ORDER BY priority_score DESC`, starving
+ * Apify/X regardless of the brief budget. Instead: a modest base + a bounded
+ * recency boost (newer sorts first WITHIN the RSS cohort; `created_at ASC` breaks
+ * exact ties) + a small media bonus. Result is ~50–75 — comparable to, not above,
+ * a strong engagement post.
+ */
+export function computeRssCandidatePriorityScore(
+  item: NormalizedItem,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): number {
+  const base = 50;
+  const ageHours = Math.max(0, (nowSec - item.publishedAt) / 3600);
+  const recencyBoost = Math.round(20 * (1 - Math.min(ageHours, 48) / 48)); // +20 fresh → 0 at ≥48h
+  const mediaBoost = item.media.length > 0 ? 5 : 0;
+  return base + recencyBoost + mediaBoost;
+}
+
 async function claimRssSlot(env: Env, sourceId: string, slot: number): Promise<boolean> {
   const key = `rss_ingest_slot:${sourceId}:${slot}`;
   const res = await env.DB.prepare(
@@ -349,7 +372,7 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
           publishedAt: item.publishedAt,
           normalizedItem: item,
           dedupeKeys: keys,
-          priorityScore: item.publishedAt,
+          priorityScore: computeRssCandidatePriorityScore(item),
         })));
         // Count only rows actually inserted — INSERT OR IGNORE no-ops on the
         // candidate-queue unique source_url index for an already-queued article.

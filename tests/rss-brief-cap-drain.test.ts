@@ -3,12 +3,13 @@
 // the queue state machine, gates, rule gate, brief budget, and the Anthropic
 // brief endpoint (test B) run for real.
 //
-// Two budget states are proven:
-//   A. budget ALREADY exhausted at drain start → RSS is excluded before
-//      claim/scoring (no AI scoring/duplicate-judge churn), non-RSS still drains.
-//   B. budget hit MID-tick → the RSS survivor that crossed the cap is released to
-//      pending with attempt DECREMENTED (not burned, not persisted), while the
-//      RSS that fit the budget is briefed/queued and non-RSS still drains.
+// Covered:
+//   A. budget ALREADY exhausted at start → RSS excluded before claim/scoring (no
+//      scoring/duplicate-judge churn), non-RSS still drains, deferral reported.
+//   B. budget only PARTLY spent (1 slot) → at most 1 RSS enters scoreItems; the
+//      surplus RSS is left pending un-scored (attempt 0), non-RSS still drains.
+//   C. budget exhausted but NO RSS candidates → no false deferral warning.
+// Plus a unit check that RSS priority is normalized onto the 0–100 scale.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +22,7 @@ vi.mock('../apps/worker-api/src/services/ai-gate', () => ({
 
 import { makeTestDb, type FakeD1 } from './helpers/fake-d1';
 import { drainAICandidateQueue } from '../apps/worker-api/src/services/backlog-drain';
+import { computeRssCandidatePriorityScore } from '../apps/worker-api/src/services/rss-ingestion';
 import { attachTranslations, scoreItems } from '../apps/worker-api/src/services/ai-gate';
 import type { AIGateResult, NormalizedItem } from '../apps/worker-api/src/types';
 
@@ -86,7 +88,7 @@ function baseEnv(db: FakeD1, overrides: Record<string, string> = {}): any {
     AI_CANDIDATE_BACKLOG_ENABLED: 'true',
     BACKLOG_TRANSLATE_AFTER_GATES_ENABLED: 'true',
     AI_SCORING_BATCH_SIZE: '2',
-    AI_MAX_SCORING_BATCHES_PER_RUN: '3',
+    AI_MAX_SCORING_BATCHES_PER_RUN: '4',
     AI_CANDIDATE_BACKLOG_DRAIN_LIMIT: '20',
     AI_CANDIDATE_MAX_ATTEMPTS: '3',
     AI_CANDIDATE_MAX_AGE_HOURS: '24',
@@ -106,7 +108,6 @@ let db: FakeD1;
 beforeEach(() => {
   db = makeTestDb();
   vi.clearAllMocks();
-  // A permissive, enabled crypto channel (no semantic dedupe, open windows).
   db.exec(`
     INSERT INTO channels
       (id, category_id, telegram_chat_id, language, timezone, allowed_windows, blocked_windows,
@@ -134,28 +135,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('RSS candidate priority is normalized onto the engagement 0–100 scale', () => {
+  it('is bounded and recency-decaying (never a raw unix timestamp)', () => {
+    const fresh = computeRssCandidatePriorityScore({ publishedAt: NOW, media: [] } as any, NOW);
+    const old = computeRssCandidatePriorityScore({ publishedAt: NOW - 48 * 3600, media: [] } as any, NOW);
+    expect(fresh).toBe(70);          // 50 base + 20 recency
+    expect(old).toBe(50);            // recency decayed to 0
+    expect(fresh).toBeLessThanOrEqual(100);
+    expect(fresh).toBeGreaterThan(old);
+  });
+});
+
 describe('drainAICandidateQueue — RSS brief budget is platform-scoped', () => {
-  it('A: when the brief budget is ALREADY exhausted, RSS is never scored and non-RSS still drains', async () => {
-    fillBriefBudget(db, 2); // == RSS_BRIEF_MAX_CALLS_PER_DAY → exhausted at drain start
-    // RSS carries a huge priority_score (publishedAt) so it sorts ahead of non-RSS.
-    seedCandidate(db, 'rss', 'r1', NOW - 60);
-    seedCandidate(db, 'rss', 'r2', NOW - 61);
-    seedCandidate(db, 'x', 'x1', 10);
-    seedCandidate(db, 'x', 'x2', 9);
+  it('A: when the budget is ALREADY exhausted, RSS is never scored and non-RSS still drains', async () => {
+    fillBriefBudget(db, 2); // == cap → exhausted at drain start
+    seedCandidate(db, 'rss', 'r1', 70);
+    seedCandidate(db, 'rss', 'r2', 69);
+    seedCandidate(db, 'x', 'x1', 60);
+    seedCandidate(db, 'x', 'x2', 59);
 
-    const result = await drainAICandidateQueue(baseEnv(db), { categoryId: 'crypto', maxBatches: 3 });
+    const result = await drainAICandidateQueue(baseEnv(db), { categoryId: 'crypto', maxBatches: 4 });
 
-    // No drain failure; RSS deferral surfaced as a structured warning, not `error`.
     expect(result.stoppedByBudget).toBe(false);
     expect(result.error).toBeUndefined();
     expect(result.rssBudgetExhausted).toBe(true);
+    expect(result.rssDeferredThisRun).toBe(true);
     expect(result.deferredPlatforms).toEqual(['rss']);
     expect(result.warnings).toContain('rss_brief_daily_cap');
 
-    // The cost-churn guarantee: RSS never entered scoring at all.
     expect(scoredPlatforms()).not.toContain('rss');
 
-    // RSS untouched: still pending, attempt_count 0, never claimed (no defer reason).
     const rss = db.rows<{ status: string; attempt_count: number; last_error: string | null }>(
       `SELECT status, attempt_count, last_error FROM ai_candidate_queue WHERE platform='rss' ORDER BY id`);
     expect(rss.map(r => r.status)).toEqual(['pending', 'pending']);
@@ -163,15 +172,13 @@ describe('drainAICandidateQueue — RSS brief budget is platform-scoped', () => 
     expect(rss.every(r => r.last_error === null)).toBe(true);
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM discovery_items WHERE platform='rss'`)!.c).toBe(0);
 
-    // Non-RSS drained to the publish queue.
     const nonRss = db.rows<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE platform='x'`);
     expect(nonRss.every(r => r.status !== 'pending' && r.status !== 'scoring')).toBe(true);
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(2);
   });
 
-  it('B: when the cap is hit MID-tick, the over-cap RSS is deferred without burning attempts; non-RSS drains', async () => {
-    fillBriefBudget(db, 0); // room for exactly 1 brief before the cap of 1
-    // Anthropic brief endpoint returns a valid Persian brief (only call that fetches).
+  it('B: with only 1 brief slot left, at most 1 RSS enters scoreItems; the surplus stays pending un-scored', async () => {
+    fillBriefBudget(db, 0); // room for exactly 1 brief (cap=1 below)
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       content: [{ text: JSON.stringify({
         captionShort: 'تیتر کوتاه فارسی',
@@ -181,30 +188,43 @@ describe('drainAICandidateQueue — RSS brief budget is platform-scoped', () => 
       usage: { input_tokens: 10, output_tokens: 20 },
     }), { status: 200 })));
 
-    seedCandidate(db, 'rss', 'r1', NOW - 60); // briefed (fits the budget of 1)
-    seedCandidate(db, 'rss', 'r2', NOW - 61); // crosses the cap → deferred
-    seedCandidate(db, 'x', 'x1', 10);
-    seedCandidate(db, 'x', 'x2', 9);
+    seedCandidate(db, 'rss', 'r1', 71); // fits the 1 brief slot → briefed + queued
+    seedCandidate(db, 'rss', 'r2', 70); // surplus → trimmed, never scored
+    seedCandidate(db, 'x', 'x1', 60);
+    seedCandidate(db, 'x', 'x2', 59);
 
     const env = baseEnv(db, { RSS_BRIEF_MAX_CALLS_PER_DAY: '1', ANTHROPIC_API_KEY: 'k' });
-    const result = await drainAICandidateQueue(env, { categoryId: 'crypto', maxBatches: 3 });
+    const result = await drainAICandidateQueue(env, { categoryId: 'crypto', maxBatches: 4 });
 
     expect(result.stoppedByBudget).toBe(false);
-    expect(result.rssBudgetExhausted).toBe(true);
+    // Cost guarantee: no more than the 1 remaining brief slot's worth of RSS scored.
+    expect(scoredPlatforms().filter(p => p === 'rss').length).toBe(1);
 
-    // r1 briefed and queued; r2 deferred to pending with attempt NOT burned.
     const r1 = db.get<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE id='cand_rss_r1'`)!;
-    const r2 = db.get<{ status: string; attempt_count: number; last_error: string }>(
+    const r2 = db.get<{ status: string; attempt_count: number; last_error: string | null }>(
       `SELECT status, attempt_count, last_error FROM ai_candidate_queue WHERE id='cand_rss_r2'`)!;
     expect(r1.status).toBe('queued');
-    expect(r2.status).toBe('pending');
-    expect(r2.attempt_count).toBe(0);
-    expect(r2.last_error).toBe('rss_brief_daily_cap');
+    expect(r2.status).toBe('pending');     // surplus RSS left for a later tick
+    expect(r2.attempt_count).toBe(0);      // never claimed → attempt untouched
+    expect(r2.last_error).toBe(null);      // trimmed before claim, not cap-deferred
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM discovery_items WHERE source_url LIKE '%/r2'`)!.c).toBe(0);
 
-    // Non-RSS still drained: queue holds the briefed r1 + both x items.
     const nonRss = db.rows<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE platform='x'`);
     expect(nonRss.every(r => r.status !== 'pending' && r.status !== 'scoring')).toBe(true);
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(3);
+  });
+
+  it('C: budget exhausted but NO RSS candidates → no false deferral signal', async () => {
+    fillBriefBudget(db, 2); // exhausted
+    seedCandidate(db, 'x', 'x1', 60);
+    seedCandidate(db, 'x', 'x2', 59);
+
+    const result = await drainAICandidateQueue(baseEnv(db), { categoryId: 'crypto', maxBatches: 4 });
+
+    expect(result.rssBudgetExhausted).toBe(true);   // budget state is still reported
+    expect(result.rssDeferredThisRun).toBeFalsy();   // but nothing was actually deferred
+    expect(result.deferredPlatforms).toBeUndefined();
+    expect(result.warnings).toBeUndefined();
+    expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(2);
   });
 });

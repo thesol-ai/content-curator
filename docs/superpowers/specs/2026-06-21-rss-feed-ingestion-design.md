@@ -206,6 +206,20 @@ content-type, item count, latest title/link, has `content:encoded`?, has image? 
 (the feeds return 200 from a normal client; a Worker's egress may be treated
 differently by bot protection). The URLs themselves are confirmed reachable.
 
+### Rollout gates (operational — run these, don't just trust the design)
+
+Staged: merge flag-off → remote D1 migration → `RSS_INGEST_ENABLED=true` with
+`RSS_FEED_PROBE_ONLY=true` → live ingestion only after the gates below pass on
+real probe data:
+
+1. **Probe reachability:** every feed shows HTTP 200 + parsed item count > 0 in
+   `rss.feed.probe` events (not 403/empty from the Worker egress IP).
+2. **Same-second re-scan bounded:** run the `rss.feed.same_second_rescan` query
+   (above). If `rescanned_items` is non-trivial per feed/day, build
+   `rss_seen_items` BEFORE enabling live ingestion.
+3. **Queue ordering sane:** confirm ingested RSS `priority_score` is ~50–75 (not a
+   raw timestamp) so RSS does not dominate the backlog over Apify/X.
+
 ### Reused unchanged
 
 `ai_candidate_queue`, `backlog-drain` scoring/gates/dedup/AI judge,
@@ -310,7 +324,31 @@ to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
   ```
 - **Node version enforced.** `package.json` `engines.node >= 22.5.0` plus
   `.npmrc` `engine-strict=true` fail fast (the D1 integration harness imports the
-  Node 22.5+ `node:sqlite` builtin).
+  Node 22.5+ `node:sqlite` builtin). `package-lock.json` carries the same
+  `engines` so `npm ci` agrees with `package.json`.
+
+## rev 6 fixes (post sixth review)
+
+- **RSS candidate priority normalized (P0).** RSS candidates are enqueued with
+  `computeRssCandidatePriorityScore(item)` (~50–75 on the same 0–100 scale as the
+  engagement-based `computeCandidatePriorityScore`), NOT the raw `publishedAt`
+  unix timestamp. Using `publishedAt` (~1.7e9) put every RSS item astronomically
+  ahead of engagement scores (~0–100) in `ORDER BY priority_score DESC`, so RSS
+  dominated queue ordering and could push Apify/X back even when the brief budget
+  was fine. The new score keeps newer RSS ahead WITHIN the RSS cohort (recency
+  boost, `created_at ASC` ties) without out-ranking a strong engagement post.
+- **Partial-budget RSS trim (P0).** The pre-check (`getRssBriefBudgetState`) now
+  returns `remaining`, not just `exhausted`. When the budget is only partly spent,
+  each RSS-bearing batch is trimmed so no more than `remaining` RSS is claimed/
+  scored this run — the surplus RSS is left `pending` (un-scored, attempt
+  untouched) for a later tick instead of being scored only to be cap-deferred at
+  the brief step. Combined with the up-front exclude-when-exhausted, RSS never
+  consumes scoring / duplicate-judge budget it cannot use.
+- **Deferral signal split from budget state (P1).** The drain result distinguishes
+  `rssBudgetExhausted` (budget STATE — informational) from `rssDeferredThisRun`
+  (a real RSS candidate was actually set aside). `deferredPlatforms` / `warnings`
+  are emitted ONLY when `rssDeferredThisRun`, so a budget-spent tick with no RSS
+  candidates does not produce a false deferral signal (and never an `error`).
 
 ## Error handling / isolation
 

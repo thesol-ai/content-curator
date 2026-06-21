@@ -226,6 +226,29 @@ export async function fetchPendingCandidates(
   }
 }
 
+/** True if at least one drain-eligible (pending/needs_translation, under the
+ *  attempt cap) candidate of the given platform exists. Used to tell a benign
+ *  "budget exhausted, but no RSS to defer" tick from a real RSS deferral. */
+export async function hasPendingCandidatesForPlatform(
+  env: Env,
+  platform: string,
+  categoryId?: string,
+): Promise<boolean> {
+  try {
+    const maxAttempts = getMaxCandidateAttempts(env);
+    const conds = ["status IN ('pending', 'needs_translation')", 'platform = ?', 'attempt_count < ?'];
+    const binds: unknown[] = [platform, maxAttempts];
+    if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
+    const row = await env.DB.prepare(
+      `SELECT 1 AS x FROM ai_candidate_queue WHERE ${conds.join(' AND ')} LIMIT 1`,
+    ).bind(...binds).first<{ x: number }>();
+    return row != null;
+  } catch (err) {
+    console.warn(`[CandidateQueue] hasPendingCandidatesForPlatform failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 export async function claimCandidateBatch(
   env: Env,
   candidates: AICandidateRow[],

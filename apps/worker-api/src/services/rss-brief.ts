@@ -51,17 +51,33 @@ async function countBriefCallsToday(env: Env): Promise<number> {
   }
 }
 
+export interface RssBriefBudgetState {
+  /** No daily cap configured (maxCallsPerDay <= 0). */
+  unlimited: boolean;
+  /** No brief calls left today. */
+  exhausted: boolean;
+  callsToday: number;
+  maxCallsPerDay: number;
+  /** Brief calls left today; Infinity when unlimited. */
+  remaining: number;
+}
+
 /**
- * True when the RSS brief daily budget is already spent. The drain calls this
- * BEFORE claiming/scoring so exhausted RSS candidates are excluded up front and
- * never consume AI scoring / duplicate-judge budget just to be deferred at the
- * brief step (cross-tick cost churn). maxCallsPerDay <= 0 means "no cap".
+ * Snapshot of the RSS brief daily budget. The drain calls this BEFORE
+ * claiming/scoring so that (a) when exhausted, RSS is excluded up front and never
+ * consumes AI scoring / duplicate-judge budget just to be deferred at the brief
+ * step (cross-tick cost churn); and (b) when only partly spent, no more RSS than
+ * `remaining` is claimed per run (the surplus would be scored only to be
+ * cap-deferred). maxCallsPerDay <= 0 means "no cap" (unlimited).
  */
-export async function isRssBriefBudgetExhausted(env: Env): Promise<boolean> {
+export async function getRssBriefBudgetState(env: Env): Promise<RssBriefBudgetState> {
   const cfg = getRssBriefConfig(env);
-  if (cfg.maxCallsPerDay <= 0) return false;
-  const used = await countBriefCallsToday(env);
-  return used >= cfg.maxCallsPerDay;
+  if (cfg.maxCallsPerDay <= 0) {
+    return { unlimited: true, exhausted: false, callsToday: 0, maxCallsPerDay: 0, remaining: Infinity };
+  }
+  const callsToday = await countBriefCallsToday(env);
+  const remaining = Math.max(0, cfg.maxCallsPerDay - callsToday);
+  return { unlimited: false, exhausted: remaining <= 0, callsToday, maxCallsPerDay: cfg.maxCallsPerDay, remaining };
 }
 
 function normalizeWords(s: string): string[] {
