@@ -111,6 +111,7 @@ export interface Env {
   STORY_INTELLIGENCE_REJECT_ENABLED?: string;       // default: "false" — actively reject story_key repeats
   STORY_INTELLIGENCE_WINDOW_HOURS?: string;         // default: "48"
   STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED?: string; // default: "true" — let materially-new follow-ups through
+  STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED?: string; // default: "false" — allow heuristic semantic story blocking
   STORY_INTELLIGENCE_RETENTION_DAYS?: string;       // default: "30" — retention for story_intelligence_events
   DUPLICATE_AI_JUDGE_ENABLED?: string;             // default: "false" — Claude duplicate judge before translation/queue
   DUPLICATE_AI_JUDGE_MODEL?: string;               // default: AI_SCORING_MODEL

@@ -39,6 +39,7 @@ import {
   isStoryFollowupAllowEnabled,
   isStoryIntelligenceEnabled,
   isStoryIntelligenceRejectActive,
+  isSemanticStoryHeuristicRejectEnabled,
   isFollowUpEventType,
   recordStoryEvent,
   shouldRejectBySemanticStorySimilarity,
@@ -361,7 +362,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
         && !(isStoryFollowupAllowEnabled(env) && isFollowUpEventType(ai.storyFields?.eventType))) {
       ev.storyKeyRejectReason = 'similar_story_key_recent_channel';
     }
-    if (!ev.storyKeyRejectReason && isStoryIntelligenceRejectActive(env)) {
+    if (!ev.storyKeyRejectReason && isStoryIntelligenceRejectActive(env) && isSemanticStoryHeuristicRejectEnabled(env)) {
       const currentSemanticStory = {
         storyKey: ev.storyKey,
         fields: ai.storyFields ?? null,
@@ -540,7 +541,7 @@ async function evaluateCandidateDb(
       storyKeyRejectReason = 'similar_story_key_recent_channel';
     }
 
-    if (!storyKeyRejectReason) {
+    if (!storyKeyRejectReason && isSemanticStoryHeuristicRejectEnabled(env)) {
       const semanticallySeen = await similarStorySeenInWindow(env, {
         categoryId: candidate.row.category_id,
         channelId,
