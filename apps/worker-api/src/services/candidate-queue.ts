@@ -195,37 +195,63 @@ export async function fetchPendingCandidates(
   env: Env,
   limit: number,
   categoryId?: string,
+  excludePlatform?: string,
 ): Promise<AICandidateRow[]> {
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
     const maxAttempts = getMaxCandidateAttempts(env);
     const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
 
-    if (categoryId) {
-      const rows = await env.DB.prepare(`
-        SELECT * FROM ai_candidate_queue
-        WHERE status IN ('pending', 'needs_translation')
-          AND category_id = ?
-          AND created_at > ?
-          AND attempt_count < ?
-        ORDER BY priority_score DESC, created_at ASC
-        LIMIT ?
-      `).bind(categoryId, cutoff, maxAttempts, limit).all<AICandidateRow>();
-      return rows.results ?? [];
-    }
+    const conds = ["status IN ('pending', 'needs_translation')", 'created_at > ?', 'attempt_count < ?'];
+    const binds: unknown[] = [cutoff, maxAttempts];
+    if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
+    // When a per-platform brief budget is exhausted for the rest of a drain tick,
+    // exclude that platform at the SQL level. Even with RSS priority normalized to
+    // the same 0-100-ish scale as other sources, budget-exhausted RSS should not be
+    // claimed/scored at all while waiting for brief capacity.
+    if (excludePlatform) { conds.push('platform != ?'); binds.push(excludePlatform); }
+    binds.push(limit);
 
     const rows = await env.DB.prepare(`
       SELECT * FROM ai_candidate_queue
-      WHERE status IN ('pending', 'needs_translation')
-        AND created_at > ?
-        AND attempt_count < ?
+      WHERE ${conds.join(' AND ')}
       ORDER BY priority_score DESC, created_at ASC
       LIMIT ?
-    `).bind(cutoff, maxAttempts, limit).all<AICandidateRow>();
+    `).bind(...binds).all<AICandidateRow>();
     return rows.results ?? [];
   } catch (err) {
     console.warn(`[CandidateQueue] fetchPendingCandidates failed: ${err instanceof Error ? err.message : String(err)}`);
     return [];
+  }
+}
+
+/** True if at least one drain-eligible (pending/needs_translation, under the
+ *  attempt cap) candidate of the given platform exists. Used to tell a benign
+ *  "budget exhausted, but no RSS to defer" tick from a real RSS deferral. */
+export async function hasPendingCandidatesForPlatform(
+  env: Env,
+  platform: string,
+  categoryId?: string,
+): Promise<boolean> {
+  try {
+    const maxAgeHours = getCandidateMaxAgeHours(env);
+    const maxAttempts = getMaxCandidateAttempts(env);
+    const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
+    const conds = [
+      "status IN ('pending', 'needs_translation')",
+      'platform = ?',
+      'attempt_count < ?',
+      'created_at > ?',
+    ];
+    const binds: unknown[] = [platform, maxAttempts, cutoff];
+    if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
+    const row = await env.DB.prepare(
+      `SELECT 1 AS x FROM ai_candidate_queue WHERE ${conds.join(' AND ')} LIMIT 1`,
+    ).bind(...binds).first<{ x: number }>();
+    return row != null;
+  } catch (err) {
+    console.warn(`[CandidateQueue] hasPendingCandidatesForPlatform failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
   }
 }
 

@@ -8,6 +8,7 @@ import {
   claimCandidateBatch,
   failMaxAttemptPendingCandidates,
   fetchPendingCandidates,
+  hasPendingCandidatesForPlatform,
   getCandidateBacklogDrainLimit,
   getFairSourcePickerPoolMultiplier,
   getMaxScoringBatchesPerRun,
@@ -34,6 +35,7 @@ import {
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
 import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
+import { enrichAndBriefRssSurvivors, getRssBriefBudgetState } from './rss-brief';
 import {
   getStoryIntelligenceWindowHours,
   isStoryFollowupAllowEnabled,
@@ -72,6 +74,17 @@ export interface BacklogDrainResult {
   candidatesSkipped: number;
   batchesAttempted: number;
   stoppedByBudget: boolean;
+  /** Budget STATE: the RSS brief daily budget is spent (informational; true even
+   *  when there were no RSS candidates to defer). */
+  rssBudgetExhausted?: boolean;
+  /** ACTION: at least one real RSS candidate was actually set aside this run
+   *  because the brief budget was spent. Distinct from `rssBudgetExhausted` so a
+   *  budget-spent tick with no RSS work does not emit a false deferral signal. */
+  rssDeferredThisRun?: boolean;
+  /** Platforms actually deferred this run (only set when something was deferred). */
+  deferredPlatforms?: string[];
+  /** Benign, non-failing notices (e.g. a platform deferral) — NOT `error`. */
+  warnings?: string[];
   error?: string;
 }
 
@@ -124,18 +137,80 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   const drainLimit = Math.max(baseDrainLimit, maxBatches * scoringBatchSize);
   const batchSize = Math.max(1, Math.min(scoringBatchSize, drainLimit));
 
+  // RSS brief budget gating. `rssBudgetExhausted` (no calls left) makes the rest
+  // of this tick exclude RSS at the SQL level so the cap defers ONLY RSS — non-RSS
+  // candidates keep draining. Pre-checking up front also stops RSS from being
+  // claimed/scored just to be deferred at the brief step, which would burn AI
+  // scoring / duplicate-judge budget every tick (cost churn). When the budget is
+  // only PARTLY spent, each RSS-bearing batch is trimmed so no more than the
+  // remaining brief calls' worth of RSS is claimed (the surplus would be scored
+  // only to be cap-deferred). `rssDeferredThisRun` records whether real RSS work
+  // was actually set aside (distinct from the mere budget state).
+  let rssBudgetExhausted = (await getRssBriefBudgetState(env)).exhausted;
+  let rssDeferredThisRun = false;
+  const rssDeferralWarnings = new Set<string>();
+  if (rssBudgetExhausted) {
+    rssDeferredThisRun = await hasPendingCandidatesForPlatform(env, 'rss', options.categoryId);
+    if (rssDeferredThisRun) rssDeferralWarnings.add('rss_brief_daily_cap');
+  }
+
   for (let batchNo = 0; batchNo < maxBatches && result.candidatesPulled < drainLimit; batchNo++) {
     const remaining = drainLimit - result.candidatesPulled;
     const fairPickerEnabled = isFairSourcePickerEnabled(env);
     const poolLimit = fairPickerEnabled
       ? Math.min(Math.max(batchSize * getFairSourcePickerPoolMultiplier(env), batchSize), 200)
       : Math.min(batchSize, remaining);
-    const pendingPool = await fetchPendingCandidates(env, poolLimit, options.categoryId);
+    const pendingPool = await fetchPendingCandidates(env, poolLimit, options.categoryId, rssBudgetExhausted ? 'rss' : undefined);
     if (pendingPool.length === 0) break;
 
     const selection = selectCandidateBatchForScoring(pendingPool, Math.min(batchSize, remaining), fairPickerEnabled);
-    const pending = selection.selected;
+    let pending = selection.selected;
     if (pending.length === 0) break;
+
+    // Partial-budget RSS trim: only when the selected batch actually carries RSS.
+    // Re-read the brief budget (cheap COUNT) so RSS claimed ACROSS batches in this
+    // tick never exceeds what brief can serve. If it just got exhausted, drop RSS
+    // from this batch and continue (next fetch excludes RSS at the SQL level).
+    if (!rssBudgetExhausted && pending.some(c => c.platform === 'rss')) {
+      const briefState = await getRssBriefBudgetState(env);
+      let trimmedRssThisBatch = false;
+
+      if (briefState.exhausted) {
+        rssBudgetExhausted = true;
+        trimmedRssThisBatch = pending.some(c => c.platform === 'rss');
+        pending = pending.filter(c => c.platform !== 'rss');
+        if (trimmedRssThisBatch) rssDeferralWarnings.add('rss_brief_daily_cap');
+      } else if (Number.isFinite(briefState.remaining)) {
+        const rssBefore = pending.filter(c => c.platform === 'rss').length;
+        let allow = briefState.remaining;
+        pending = pending.filter(c => c.platform !== 'rss' || allow-- > 0);
+        const rssAfter = pending.filter(c => c.platform === 'rss').length;
+        trimmedRssThisBatch = rssBefore > rssAfter;
+        if (trimmedRssThisBatch) rssDeferralWarnings.add('rss_brief_capacity_limited');
+      }
+
+      if (trimmedRssThisBatch) {
+        rssDeferredThisRun = true;
+        const targetSize = Math.min(batchSize, remaining);
+        if (pending.length < targetSize) {
+          const usedIds = new Set(pending.map(c => c.id));
+          const refillPool = await fetchPendingCandidates(
+            env,
+            Math.max(targetSize * 2, targetSize),
+            options.categoryId,
+            'rss',
+          );
+          const refillSelection = selectCandidateBatchForScoring(
+            refillPool.filter(c => !usedIds.has(c.id)),
+            targetSize - pending.length,
+            fairPickerEnabled,
+          );
+          pending = [...pending, ...refillSelection.selected];
+        }
+      }
+
+      if (pending.length === 0) continue;
+    }
     result.candidatesPulled += pending.length;
 
     const budget = await checkScoringBudgetForBacklog(env, options.scoringCallBonus ?? 0);
@@ -166,11 +241,30 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesQueued += batchResult.queued;
     result.candidatesFailed += batchResult.failed;
     result.candidatesSkipped += batchResult.skipped;
+    // RSS brief cap hit mid-tick (safety net; the trim above usually prevents it):
+    // defer RSS for the rest of this tick but keep draining non-RSS. Not a drain
+    // failure — recorded as a warning, not `error`.
+    if (batchResult.rssBudgetExhausted) {
+      rssBudgetExhausted = true;
+      rssDeferredThisRun = true;
+      rssDeferralWarnings.add('rss_brief_daily_cap');
+    }
     if (batchResult.stoppedByBudget) {
       result.stoppedByBudget = true;
       result.error = batchResult.error;
       break;
     }
+  }
+
+  // Budget STATE is always surfaced; the deferral ACTION (warnings/deferredPlatforms)
+  // only when real RSS work was actually set aside — so a budget-spent tick with no
+  // RSS candidates doesn't read as a failure or a noisy deferral.
+  if (rssBudgetExhausted) result.rssBudgetExhausted = true;
+  if (rssDeferredThisRun) {
+    result.rssDeferredThisRun = true;
+    result.deferredPlatforms = ['rss'];
+    const warnings = Array.from(rssDeferralWarnings);
+    if (warnings.length > 0) result.warnings = [...(result.warnings ?? []), ...warnings];
   }
 
   return result;
@@ -184,6 +278,9 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   failed: number;
   skipped: number;
   stoppedByBudget: boolean;
+  /** RSS brief daily cap hit: stop pulling RSS for the rest of this tick WITHOUT
+   *  stopping non-RSS drain (unlike stoppedByBudget, which halts everything). */
+  rssBudgetExhausted?: boolean;
   error?: string;
 }> {
   const zero = { scored: 0, selected: 0, rejected: 0, queued: 0, failed: 0, skipped: 0, stoppedByBudget: false };
@@ -205,6 +302,10 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   const prepared: Array<{ row: AICandidateRow; item: NormalizedItem; keys: string[] }> = [];
   let skipped = 0;
   let rejected = 0;
+  // Set when the RSS brief daily cap is hit so the outer drain loop stops pulling
+  // RSS (and does not re-claim the just-released cap-deferred candidates) for the
+  // rest of this tick — while letting non-RSS candidates keep draining.
+  let rssBriefCapHit = false;
 
   const cutoffTs = Math.floor(Date.now() / 1000) - category.freshness_hours * 3600;
   for (const row of rows) {
@@ -446,32 +547,92 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   }
 
   if (survivorIdx.length > 0) {
-    const survivorItems = survivorIdx.map(i => prepared[i]!.item);
-    const survivorAi = survivorIdx.map(i => decisions[i]!.ai);
-    const survivorAttribution = survivorIdx.map(i => ({
-      sourceAccount: prepared[i]!.item.sourceAccount,
-      sourceId: prepared[i]!.row.source_id ?? null,
-      candidateId: prepared[i]!.row.id,
-      discoveryItemId: itemIdForCandidate(prepared[i]!.row.id),
-      channelId: channels[0]?.id ?? null,
-    }));
-    try {
-      const translated = await attachTranslations(env, survivorItems, survivorAi, category, channels, survivorAttribution);
-      survivorIdx.forEach((i, k) => { decisions[i]!.ai = translated[k]!; });
-    } catch (err) {
-      // A transient translation-provider failure must NOT strand survivors in
-      // 'claimed'. Release them back to pending (retryable) and skip persisting
-      // them this tick; already-rejected items below are still recorded.
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[BacklogDrain] attachTranslations failed; releasing survivors to retry:', msg);
-      await releaseClaimedCandidatesToPending(
-        env,
-        survivorIdx.map(i => prepared[i]!.row.id),
-        `translation_error: ${msg}`,
-        { decrementAttempt: true },
-      );
-      survivorIdx.forEach(i => { decisions[i] = null; });
-      skipped += survivorIdx.length;
+    // Mixed batches (Apify X + RSS) take separate caption paths and fail
+    // independently — an RSS brief failure must never strand X survivors and
+    // vice-versa.
+    const nonRssSurvivorIdx = survivorIdx.filter(i => prepared[i]!.item.platform !== 'rss');
+    const rssSurvivorIdx = survivorIdx.filter(i => prepared[i]!.item.platform === 'rss');
+
+    // ── Non-RSS survivors: existing translation path (behavior UNCHANGED) ──
+    if (nonRssSurvivorIdx.length > 0) {
+      const survivorItems = nonRssSurvivorIdx.map(i => prepared[i]!.item);
+      const survivorAi = nonRssSurvivorIdx.map(i => decisions[i]!.ai);
+      const survivorAttribution = nonRssSurvivorIdx.map(i => ({
+        sourceAccount: prepared[i]!.item.sourceAccount,
+        sourceId: prepared[i]!.row.source_id ?? null,
+        candidateId: prepared[i]!.row.id,
+        discoveryItemId: itemIdForCandidate(prepared[i]!.row.id),
+        channelId: channels[0]?.id ?? null,
+      }));
+      try {
+        const translated = await attachTranslations(env, survivorItems, survivorAi, category, channels, survivorAttribution);
+        nonRssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = translated[k]!; });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[BacklogDrain] attachTranslations failed; releasing survivors to retry:', msg);
+        await releaseClaimedCandidatesToPending(
+          env,
+          nonRssSurvivorIdx.map(i => prepared[i]!.row.id),
+          `translation_error: ${msg}`,
+          { decrementAttempt: true },
+        );
+        nonRssSurvivorIdx.forEach(i => { decisions[i] = null; });
+        skipped += nonRssSurvivorIdx.length;
+      }
+    }
+
+    // ── RSS survivors: copyright-safe Persian brief (isolated failure) ──
+    if (rssSurvivorIdx.length > 0) {
+      const items = rssSurvivorIdx.map(i => prepared[i]!.item);
+      const ais = rssSurvivorIdx.map(i => decisions[i]!.ai);
+      const labels = rssSurvivorIdx.map(i => prepared[i]!.item.sourceAccount);
+      try {
+        const { results: briefed, failedIndexes, capDeferredIndexes } = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
+        rssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = briefed[k]!; });
+
+        // Per-item brief failures: release ONLY those candidates to pending and
+        // drop them from this tick's decisions so they are not persisted (which
+        // would record dedupe_keys and never retry). Local index k → original i.
+        if (failedIndexes.length > 0) {
+          const failedOriginalIdx = failedIndexes.map(k => rssSurvivorIdx[k]!);
+          await releaseClaimedCandidatesToPending(
+            env,
+            failedOriginalIdx.map(i => prepared[i]!.row.id),
+            'rss_brief_unavailable',
+            { decrementAttempt: true },
+          );
+          failedOriginalIdx.forEach(i => { decisions[i] = null; });
+          skipped += failedOriginalIdx.length;
+        }
+
+        // Daily-cap-deferred survivors: release to pending with the attempt
+        // DECREMENTED so repeated deferral never burns attempt_count toward
+        // max-attempts (which would falsely 'fail' a healthy article). They are
+        // not persisted (no premature dedupe_keys) and retry once budget frees.
+        if (capDeferredIndexes.length > 0) {
+          const deferredOriginalIdx = capDeferredIndexes.map(k => rssSurvivorIdx[k]!);
+          await releaseClaimedCandidatesToPending(
+            env,
+            deferredOriginalIdx.map(i => prepared[i]!.row.id),
+            'rss_brief_daily_cap',
+            { decrementAttempt: true },
+          );
+          deferredOriginalIdx.forEach(i => { decisions[i] = null; });
+          skipped += deferredOriginalIdx.length;
+          rssBriefCapHit = true;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[BacklogDrain] RSS brief failed; releasing RSS survivors to retry:', msg);
+        await releaseClaimedCandidatesToPending(
+          env,
+          rssSurvivorIdx.map(i => prepared[i]!.row.id),
+          `rss_brief_error: ${msg}`,
+          { decrementAttempt: true },
+        );
+        rssSurvivorIdx.forEach(i => { decisions[i] = null; });
+        skipped += rssSurvivorIdx.length;
+      }
     }
   }
 
@@ -484,7 +645,15 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     queued += counts.queued;
   }
 
-  return { ...zero, scored: prepared.length, selected, rejected, queued, skipped };
+  return {
+    ...zero,
+    scored: prepared.length, selected, rejected, queued, skipped,
+    // RSS brief cap is platform-scoped: signal the outer loop to stop pulling RSS
+    // for the rest of this tick (so the just-released cap-deferred RSS candidates
+    // are not re-claimed) WITHOUT halting the non-RSS backlog. The outer loop
+    // records the benign warning; this is not a drain `error`.
+    rssBudgetExhausted: rssBriefCapHit,
+  };
 }
 
 // ── Phase 6H helpers (shared by both paths) ───────────────────

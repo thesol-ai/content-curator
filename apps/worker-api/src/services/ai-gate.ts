@@ -1134,7 +1134,7 @@ function buildTranslationTargets(langs: string[], channels: ChannelRow[]): Trans
   return targets;
 }
 
-function channelTranslationKey(channelId: string): string {
+export function channelTranslationKey(channelId: string): string {
   return `channel:${channelId}`;
 }
 

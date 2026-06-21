@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "dev": "wrangler dev --config wrangler.toml",
     "build": "wrangler deploy --dry-run --outdir dist --config wrangler.toml",
@@ -26,5 +29,8 @@
     "typescript": "^5.4.5",
     "vitest": "^4.1.8",
     "wrangler": "^4.98.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.9.3"
   }
 }

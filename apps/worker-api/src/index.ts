@@ -11,6 +11,7 @@ import { cleanupOldDedupeKeys } from './services/dedupe';
 import { getRuntimeConfig } from './services/runtime-config';
 import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
 import { drainAICandidateQueue } from './services/backlog-drain';
+import { runRssIngestion, cleanupOldRssIngestClaims } from './services/rss-ingestion';
 import { buildPipelineHealthReport } from './services/pipeline-health-report'; // IMPROVEMENT #10
 import { cleanupOldRotationClaims, getDiversityRotationSourceId, getRotationSlotMinutes, getStarvationRotationSourceId, runApifyRotation } from './services/apify-rotation-runner';
 import { handleTelegramAdminBot } from './routes/telegram-admin-bot';
@@ -153,6 +154,20 @@ export default {
         const publishResult = await publishDueItems(env);
         console.log('[Scheduled] Published:', publishResult);
 
+        // 2.5. RSS feed ingestion (independent, zero-Apify-cost). After publish
+        // (must not delay due posts), before backlog drain (new items get scored
+        // this tick). Isolated: a slow/bad feed never affects the Apify path.
+        if (String(env.RSS_INGEST_ENABLED ?? '').toLowerCase() === 'true') {
+          try {
+            const rss = await runRssIngestion(env);
+            if (!rss.skipped) {
+              console.log('[Scheduled] RSS ingestion:', { enqueued: rss.totalEnqueued, feeds: rss.feeds });
+            }
+          } catch (err) {
+            console.error('[Scheduled] RSS ingestion failed:', err instanceof Error ? err.message : String(err));
+          }
+        }
+
         // 3. Controlled AI candidate backlog drain. Runs only when explicitly enabled.
         // Publishing stays first; backlog errors are isolated so cleanup still runs.
         if (isCandidateBacklogEnabled(env)) {
@@ -260,6 +275,10 @@ export default {
         // 5. Cleanup stale Apify rotation claim keys (prevents settings bloat)
         const rotationCleanup = await cleanupOldRotationClaims(env);
         if (rotationCleanup.deleted > 0) console.log(`[Scheduled] Cleaned ${rotationCleanup.deleted} stale rotation claim keys`);
+
+        // 5.1 Cleanup stale RSS ingest slot-claim keys (same settings-bloat guard)
+        const rssClaimCleanup = await cleanupOldRssIngestClaims(env);
+        if (rssClaimCleanup.deleted > 0) console.log(`[Scheduled] Cleaned ${rssClaimCleanup.deleted} stale RSS slot claim keys`);
 
         // 6. Retention cleanup for ai_usage_attribution (daily-guarded; no-op unless
         //    cost attribution is enabled). Prevents the attribution table from growing forever.
