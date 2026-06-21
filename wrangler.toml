@@ -125,7 +125,7 @@ AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER = "6"
 # ── Phase 6F: Adaptive rotation + queue-health controller + scheduler ──
 # All default to current behavior. Roll out one flag at a time per channel.
 APIFY_ROTATION_CONTINUOUS_ENABLED = "true"
-APIFY_ROTATION_SLOT_MINUTES         = "60"     # one designated source per 30-min slot (6 sources / 3h, evenly)
+APIFY_ROTATION_SLOT_MINUTES         = "60"     # one designated source per 60-min slot (3 enabled sources / 3h, evenly)
 QUEUE_HEALTH_CONTROLLER_ENABLED = "true"
 QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H  = "3"      # healthy floor for scheduled posts in next 6h
 QUEUE_HEALTH_STARVING_MAX_BATCHES   = "3"      # scoring batches per tick while starving (normal stays AI_MAX_SCORING_BATCHES_PER_RUN)
