@@ -62,3 +62,8 @@ secrets.*
 
 # Local audit backups
 audits/
+
+# Local secrets
+.dev.vars
+.dev.vars.*
+.dev.vars.production
