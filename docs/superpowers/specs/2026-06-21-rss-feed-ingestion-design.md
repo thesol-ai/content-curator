@@ -350,6 +350,33 @@ to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
   are emitted ONLY when `rssDeferredThisRun`, so a budget-spent tick with no RSS
   candidates does not produce a false deferral signal (and never an `error`).
 
+
+## rev 8 fixes (post seventh review)
+
+- **Partial trim emits a true deferral signal.** When a batch contains more RSS
+  survivors than the remaining `RSS_BRIEF_*` capacity, the surplus RSS is left
+  pending/unclaimed and the drain emits `rssDeferredThisRun=true`,
+  `deferredPlatforms=['rss']`, and `rss_brief_capacity_limited` in `warnings`.
+- **Partial trim refills with non-RSS when possible.** If RSS is trimmed from a
+  selected batch, the drain fetches non-RSS candidates to refill the batch so
+  RSS capacity limits do not under-fill the backlog drain or reduce non-RSS
+  throughput.
+- **False deferral guard matches fetch eligibility.** `hasPendingCandidatesForPlatform`
+  now uses the same max-age cutoff as `fetchPendingCandidates`, so stale RSS rows
+  do not produce false `rssDeferredThisRun` warnings.
+- **Priority rollout gate.** During probe/Phase 0, verify RSS priority is in the
+  same range as existing candidates:
+
+      SELECT platform,
+             COUNT(*) AS candidates,
+             MIN(priority_score) AS min_priority,
+             AVG(priority_score) AS avg_priority,
+             MAX(priority_score) AS max_priority
+      FROM ai_candidate_queue
+      WHERE created_at > datetime('now','-24 hours')
+      GROUP BY platform
+      ORDER BY avg_priority DESC;
+
 ## Error handling / isolation
 
 - Per-feed try/catch with short timeout; one bad/slow feed never blocks others or
