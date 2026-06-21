@@ -112,6 +112,14 @@ export interface Env {
   STORY_INTELLIGENCE_WINDOW_HOURS?: string;         // default: "48"
   STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED?: string; // default: "true" — let materially-new follow-ups through
   STORY_INTELLIGENCE_RETENTION_DAYS?: string;       // default: "30" — retention for story_intelligence_events
+  DUPLICATE_AI_JUDGE_ENABLED?: string;             // default: "false" — Claude duplicate judge before translation/queue
+  DUPLICATE_AI_JUDGE_MODEL?: string;               // default: AI_SCORING_MODEL
+  DUPLICATE_AI_JUDGE_BATCH_SIZE?: string;          // default: "5"
+  DUPLICATE_AI_JUDGE_MAX_PRIORS?: string;          // default: "20"
+  DUPLICATE_AI_JUDGE_WINDOW_HOURS?: string;        // default: STORY_INTELLIGENCE_WINDOW_HOURS or "72"
+  DUPLICATE_AI_JUDGE_MAX_TEXT_CHARS?: string;      // default: "220"
+  DUPLICATE_AI_JUDGE_MAX_CALLS_PER_DAY?: string;   // default: "14"
+  DUPLICATE_AI_JUDGE_CONFIDENCE_THRESHOLD?: string;// default: "0.78"
   AI_COST_ATTRIBUTION_ENABLED?: string;             // default: "false" — write ai_usage_attribution rows
   AI_USAGE_ATTRIBUTION_RETENTION_DAYS?: string;     // default: "45"
   SOURCE_REPUTATION_WEIGHTING_ENABLED?: string;     // default: "false" — weight rotation by source reputation

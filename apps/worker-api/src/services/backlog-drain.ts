@@ -33,6 +33,7 @@ import {
   getSourceAudienceRejectReason,
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
+import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
 import {
   getStoryIntelligenceWindowHours,
   isStoryFollowupAllowEnabled,
@@ -405,9 +406,44 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   }
 
   // Translate ONLY survivors (cost saving) — one batched call.
-  const survivorIdx = decisions
+  let survivorIdx = decisions
     .map((d, i) => (d && d.rejectReason === null ? i : -1))
     .filter(i => i >= 0);
+
+  // Final pre-translation AI duplicate judge. Batched + daily-capped, so it
+  // checks only publish-eligible survivors instead of every scraped item.
+  if (survivorIdx.length > 0) {
+    const judgeRejected = await runDuplicateAiJudgeForSurvivors(env, {
+      categoryId: category.id,
+      channelId: channels[0]?.id ?? null,
+      candidates: survivorIdx.map(i => ({
+        index: i,
+        item: prepared[i]!.item,
+        ai: decisions[i]!.ai,
+      })),
+    });
+
+    for (const [i, judge] of judgeRejected) {
+      const decision = decisions[i];
+      if (!decision || decision.rejectReason !== null) continue;
+      decision.rejectReason = 'similar_ai_duplicate_recent_channel';
+      decision.ai = {
+        ...decision.ai,
+        riskFlags: Array.from(new Set([
+          ...(decision.ai.riskFlags ?? []),
+          'ai_duplicate_judge',
+          `ai_duplicate_confidence:${judge.confidence.toFixed(2)}`,
+        ])).slice(0, 10),
+      };
+    }
+
+    if (judgeRejected.size > 0) {
+      survivorIdx = decisions
+        .map((d, i) => (d && d.rejectReason === null ? i : -1))
+        .filter(i => i >= 0);
+    }
+  }
+
   if (survivorIdx.length > 0) {
     const survivorItems = survivorIdx.map(i => prepared[i]!.item);
     const survivorAi = survivorIdx.map(i => decisions[i]!.ai);
