@@ -35,13 +35,14 @@ function getRssBriefConfig(env: Env): RssBriefConfig {
 async function countBriefCallsToday(env: Env): Promise<number> {
   if (!env.DB) return 0;
   try {
-    // Count ALL attempts (success/failed/skipped) so failed briefs consume the
-    // daily budget too — otherwise a feed that keeps failing would retry without
-    // bound (the same hole already fixed for the Jina budget).
+    // Count only real model calls (success + failed). Daily-cap "skipped" entries
+    // record no API call — counting them would self-inflate the budget counter
+    // and lock the cap open past midnight (each cap-hit emits one skipped, which
+    // then appears in the count the next tick, perpetuating the cap).
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM ai_usage
       WHERE provider = 'anthropic' AND purpose = 'rss_brief'
-        AND status IN ('success','failed','skipped')
+        AND status IN ('success','failed')
         AND created_at > datetime('now','-1 day')
     `).first<{ count: number }>();
     return Number(row?.count ?? 0);

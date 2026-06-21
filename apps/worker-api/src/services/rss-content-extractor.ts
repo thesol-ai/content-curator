@@ -68,12 +68,16 @@ export function looksPaywalled(text: string): boolean {
 async function countJinaCallsToday(env: Env): Promise<number> {
   if (!env.DB) return 0;
   try {
-    // Count ALL attempts (success/skipped/error), not just successes — otherwise
-    // a feed that keeps hitting paywalls/errors would retry Jina without bound.
+    // Count real fetch attempts (success + error) and non-cap skips (paywall,
+    // empty). Daily-cap "skipped" entries make no HTTP call — including them
+    // would self-inflate the counter and lock Jina out past midnight.
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM ai_usage
       WHERE provider = 'jina' AND purpose = 'rss_fulltext'
-        AND status IN ('success','skipped','error')
+        AND (
+          status IN ('success','error')
+          OR (status = 'skipped' AND (error_message IS NULL OR error_message NOT LIKE 'daily_cap_%'))
+        )
         AND created_at > datetime('now','-1 day')
     `).first<{ count: number }>();
     return Number(row?.count ?? 0);

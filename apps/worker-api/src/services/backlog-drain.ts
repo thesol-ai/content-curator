@@ -206,6 +206,9 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   const prepared: Array<{ row: AICandidateRow; item: NormalizedItem; keys: string[] }> = [];
   let skipped = 0;
   let rejected = 0;
+  // Set when the RSS brief daily cap is hit so the outer drain loop stops and
+  // does not re-claim the just-released cap-deferred candidates in the same tick.
+  let rssBriefCapHit = false;
 
   const cutoffTs = Math.floor(Date.now() / 1000) - category.freshness_hours * 3600;
   for (const row of rows) {
@@ -519,6 +522,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
           );
           deferredOriginalIdx.forEach(i => { decisions[i] = null; });
           skipped += deferredOriginalIdx.length;
+          rssBriefCapHit = true;
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -544,7 +548,14 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     queued += counts.queued;
   }
 
-  return { ...zero, scored: prepared.length, selected, rejected, queued, skipped };
+  return {
+    ...zero,
+    scored: prepared.length, selected, rejected, queued, skipped,
+    // When the RSS brief daily cap was hit, signal the outer loop to stop so it
+    // does not immediately re-claim the just-released cap-deferred candidates.
+    stoppedByBudget: rssBriefCapHit,
+    ...(rssBriefCapHit && { error: 'rss_brief_daily_cap' }),
+  };
 }
 
 // ── Phase 6H helpers (shared by both paths) ───────────────────

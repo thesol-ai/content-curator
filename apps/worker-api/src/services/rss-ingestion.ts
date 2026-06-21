@@ -289,6 +289,13 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       ).length;
       const fresh = filterNewByWatermark(normalized, src.last_seen_item_published_at, cfg.maxItemsPerFeed, src.last_seen_item_url);
       const droppedByCap = Math.max(0, freshBeforeCap - fresh.length);
+      // Same-second siblings: items at the exact watermark timestamp but with a
+      // different URL pass isNewerThanWatermark to avoid silent sibling drops.
+      // INSERT OR IGNORE prevents double-enqueue; the observable signal below
+      // surfaces the rescan count so monitoring can distinguish it from real-new.
+      const sameSecondRescanCount = src.last_seen_item_published_at != null
+        ? fresh.filter(it => it.publishedAt === src.last_seen_item_published_at).length
+        : 0;
 
       if (cfg.probeOnly) {
         const latest = fresh[0] ?? normalized[0];
@@ -372,6 +379,11 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
         enqueued: inserted, duplicate: totalDuplicate,
         droppedByFeedCap: droppedByCap, droppedByRunCap, droppedByDayCap,
       });
+      if (sameSecondRescanCount > 0) {
+        await feedEvent(src, 'rss.feed.same_second_rescan', {
+          count: sameSecondRescanCount, watermarkTs: src.last_seen_item_published_at,
+        });
+      }
       if (droppedByCap > 0 || droppedByRunCap > 0 || droppedByDayCap > 0) {
         console.log('[RSSIngest] news-first drops:', {
           source: src.source_account, droppedByFeedCap: droppedByCap, droppedByRunCap, droppedByDayCap,
