@@ -55,3 +55,10 @@ tsconfig.tsbuildinfo
 secrets.json
 secrets.*
 *.secret
+
+
+# Local assistant/tooling state
+.claude/
+
+# Local audit backups
+audits/
