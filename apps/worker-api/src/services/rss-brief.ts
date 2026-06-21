@@ -51,6 +51,19 @@ async function countBriefCallsToday(env: Env): Promise<number> {
   }
 }
 
+/**
+ * True when the RSS brief daily budget is already spent. The drain calls this
+ * BEFORE claiming/scoring so exhausted RSS candidates are excluded up front and
+ * never consume AI scoring / duplicate-judge budget just to be deferred at the
+ * brief step (cross-tick cost churn). maxCallsPerDay <= 0 means "no cap".
+ */
+export async function isRssBriefBudgetExhausted(env: Env): Promise<boolean> {
+  const cfg = getRssBriefConfig(env);
+  if (cfg.maxCallsPerDay <= 0) return false;
+  const used = await countBriefCallsToday(env);
+  return used >= cfg.maxCallsPerDay;
+}
+
 function normalizeWords(s: string): string[] {
   return String(s ?? '')
     .toLowerCase()

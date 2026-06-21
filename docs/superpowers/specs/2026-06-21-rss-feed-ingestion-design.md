@@ -269,9 +269,13 @@ to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
   persisted (no premature `dedupe_keys`). Repeated deferral therefore never burns
   `attempt_count` toward max-attempts (which would falsely `fail` a healthy
   article). (Supersedes rev 4's "left claimed, recovered by stale-recovery".)
-- **RSS brief cap is platform-scoped (P0).** When the brief cap is hit, the batch
-  signals `rssBudgetExhausted` (NOT the generic `stoppedByBudget`). The outer
-  `drainAICandidateQueue` loop then:
+- **RSS brief cap is platform-scoped, and pre-checked (P0).** The drain calls
+  `isRssBriefBudgetExhausted(env)` BEFORE the batch loop. If the brief budget is
+  already spent at drain start, RSS candidates are excluded before claim/scoring
+  so they do **not** consume AI scoring or duplicate-judge budget while waiting
+  for brief capacity (cross-tick cost churn). If instead the cap is hit *mid-tick*,
+  the batch signals `rssBudgetExhausted` (NOT the generic `stoppedByBudget`) and
+  the outer `drainAICandidateQueue` loop then:
   1. does **not** stop — non-RSS candidates keep draining; and
   2. excludes RSS from subsequent `fetchPendingCandidates` for the rest of the
      tick (`excludePlatform='rss'` at the SQL level), so the just-released
@@ -279,6 +283,9 @@ to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
   This matters because RSS rows carry `priority_score = publishedAt` (~1.7e9),
   which always sorts ahead of engagement-derived scores (~0–100); a generic stop
   (or an in-memory filter of a small top-priority page) would starve non-RSS.
+  The deferral is reported as a benign structured signal on the drain result
+  (`rssBudgetExhausted` / `deferredPlatforms: ['rss']` / `warnings`), never as
+  `error`, so reports don't read a healthy drain as a failure.
 - **Same-second sibling re-scan is bounded + observable.** The composite watermark
   (`isNewerThanWatermark` = strictly-newer OR same-timestamp-different-URL) keeps
   siblings sharing a coarse `pubDate` from being silently dropped. Double-enqueue
@@ -289,6 +296,18 @@ to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
   via the `rss.feed.same_second_rescan` run_event. A durable `rss_seen_items`
   table is a possible follow-up but is **out of scope for v1** (the bounded,
   self-healing, observable behavior is acceptable at current RSS volume).
+  **Rollout gate:** monitor the rescan volume during probe/Phase 0; if siblings
+  keep re-appearing every tick, build `rss_seen_items` before going wide:
+  ```sql
+  SELECT source_id,
+         COUNT(*) AS events,
+         SUM(CAST(json_extract(metadata_json, '$.count') AS INTEGER)) AS rescanned_items
+  FROM run_events
+  WHERE event_type = 'rss.feed.same_second_rescan'
+    AND created_at > datetime('now','-24 hours')
+  GROUP BY source_id
+  ORDER BY rescanned_items DESC;
+  ```
 - **Node version enforced.** `package.json` `engines.node >= 22.5.0` plus
   `.npmrc` `engine-strict=true` fail fast (the D1 integration harness imports the
   Node 22.5+ `node:sqlite` builtin).

@@ -34,7 +34,7 @@ import {
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
 import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
-import { enrichAndBriefRssSurvivors } from './rss-brief';
+import { enrichAndBriefRssSurvivors, isRssBriefBudgetExhausted } from './rss-brief';
 import {
   getStoryIntelligenceWindowHours,
   isStoryFollowupAllowEnabled,
@@ -73,6 +73,12 @@ export interface BacklogDrainResult {
   candidatesSkipped: number;
   batchesAttempted: number;
   stoppedByBudget: boolean;
+  /** A per-platform brief budget was exhausted this tick: that platform was
+   *  deferred (excluded from claim/scoring) but the overall drain ran normally —
+   *  this is NOT a drain failure, so it is surfaced separately from `error`. */
+  rssBudgetExhausted?: boolean;
+  deferredPlatforms?: string[];
+  warnings?: string[];
   error?: string;
 }
 
@@ -125,10 +131,13 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   const drainLimit = Math.max(baseDrainLimit, maxBatches * scoringBatchSize);
   const batchSize = Math.max(1, Math.min(scoringBatchSize, drainLimit));
 
-  // Set once the RSS brief daily cap is hit in this tick. Subsequent fetches then
-  // exclude RSS at the SQL level so the cap defers ONLY RSS — non-RSS candidates
-  // (which sort behind RSS by priority_score) keep draining instead of starving.
-  let rssBudgetExhausted = false;
+  // Set once the RSS brief daily cap is exhausted (either already at drain start,
+  // or hit mid-tick). Subsequent fetches then exclude RSS at the SQL level so the
+  // cap defers ONLY RSS — non-RSS candidates (which sort behind RSS by
+  // priority_score) keep draining instead of starving. Pre-checking up front also
+  // prevents RSS from being claimed/scored just to be deferred at the brief step,
+  // which would burn AI scoring / duplicate-judge budget every tick (cost churn).
+  let rssBudgetExhausted = await isRssBriefBudgetExhausted(env);
 
   for (let batchNo = 0; batchNo < maxBatches && result.candidatesPulled < drainLimit; batchNo++) {
     const remaining = drainLimit - result.candidatesPulled;
@@ -172,17 +181,22 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesQueued += batchResult.queued;
     result.candidatesFailed += batchResult.failed;
     result.candidatesSkipped += batchResult.skipped;
-    // RSS brief cap: defer RSS for the rest of this tick but keep draining
-    // non-RSS. Must be checked BEFORE the generic budget break below.
-    if (batchResult.rssBudgetExhausted) {
-      rssBudgetExhausted = true;
-      if (!result.error) result.error = batchResult.error;
-    }
+    // RSS brief cap hit mid-tick: defer RSS for the rest of this tick but keep
+    // draining non-RSS. Not a drain failure — recorded as a warning, not `error`.
+    if (batchResult.rssBudgetExhausted) rssBudgetExhausted = true;
     if (batchResult.stoppedByBudget) {
       result.stoppedByBudget = true;
       result.error = batchResult.error;
       break;
     }
+  }
+
+  // RSS was deferred (pre-checked exhausted or hit mid-tick). Surface it as a
+  // benign, structured signal so reports don't read a healthy drain as failed.
+  if (rssBudgetExhausted) {
+    result.rssBudgetExhausted = true;
+    result.deferredPlatforms = ['rss'];
+    result.warnings = [...(result.warnings ?? []), 'rss_brief_daily_cap'];
   }
 
   return result;
@@ -568,9 +582,9 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     scored: prepared.length, selected, rejected, queued, skipped,
     // RSS brief cap is platform-scoped: signal the outer loop to stop pulling RSS
     // for the rest of this tick (so the just-released cap-deferred RSS candidates
-    // are not re-claimed) WITHOUT halting the non-RSS backlog.
+    // are not re-claimed) WITHOUT halting the non-RSS backlog. The outer loop
+    // records the benign warning; this is not a drain `error`.
     rssBudgetExhausted: rssBriefCapHit,
-    ...(rssBriefCapHit && { error: 'rss_brief_daily_cap' }),
   };
 }
 

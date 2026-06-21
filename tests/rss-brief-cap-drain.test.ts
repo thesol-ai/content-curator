@@ -1,14 +1,14 @@
-// Integration: full drainAICandidateQueue under an exhausted RSS-brief budget.
+// Integration: full drainAICandidateQueue under the RSS-brief daily budget, on a
+// real SQLite DB. Only the AI calls (scoreItems / attachTranslations) are mocked;
+// the queue state machine, gates, rule gate, brief budget, and the Anthropic
+// brief endpoint (test B) run for real.
 //
-// Proves the platform-scoped cap behavior end-to-end on a real SQLite DB:
-//   - RSS survivors hitting the daily brief cap are released to pending with the
-//     attempt DECREMENTED (never burned toward max-attempts) and NOT persisted.
-//   - The RSS cap does NOT halt the whole drain: non-RSS candidates sitting
-//     behind RSS (RSS sorts first by priority_score = publishedAt) still drain
-//     to the publish_queue in the same tick.
-//
-// Only the AI calls (scoreItems / attachTranslations) are mocked; the queue
-// state machine, gates, rule gate, and budget counters run for real.
+// Two budget states are proven:
+//   A. budget ALREADY exhausted at drain start → RSS is excluded before
+//      claim/scoring (no AI scoring/duplicate-judge churn), non-RSS still drains.
+//   B. budget hit MID-tick → the RSS survivor that crossed the cap is released to
+//      pending with attempt DECREMENTED (not burned, not persisted), while the
+//      RSS that fit the budget is briefed/queued and non-RSS still drains.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,7 +73,14 @@ function seedCandidate(db: FakeD1, platform: 'rss' | 'x', postId: string, priori
   `);
 }
 
-function baseEnv(db: FakeD1): any {
+function fillBriefBudget(db: FakeD1, n: number): void {
+  for (let i = 0; i < n; i++) {
+    db.exec(`INSERT INTO ai_usage (id, provider, purpose, model, input_tokens, output_tokens, status)
+             VALUES ('u${i}', 'anthropic', 'rss_brief', 'claude-test', 10, 10, 'success')`);
+  }
+}
+
+function baseEnv(db: FakeD1, overrides: Record<string, string> = {}): any {
   return {
     DB: db,
     AI_CANDIDATE_BACKLOG_ENABLED: 'true',
@@ -87,7 +94,12 @@ function baseEnv(db: FakeD1): any {
     AI_DAILY_TOKEN_BUDGET: '500000',
     RSS_BRIEF_MODEL: 'claude-test',
     RSS_BRIEF_MAX_CALLS_PER_DAY: '2',
+    ...overrides,
   };
+}
+
+function scoredPlatforms(): string[] {
+  return scoreItemsMock.mock.calls.flatMap(call => (call[1] as NormalizedItem[]).map(i => i.platform));
 }
 
 let db: FakeD1;
@@ -102,59 +114,97 @@ beforeEach(() => {
     VALUES
       ('ch_fa', 'crypto', '@test', 'fa', 'Asia/Tehran', '[]', '[]', 100, 50, 0, 1, 1, 0, 48)
   `);
-  // Make the crypto category permissive so survivors are not policy-rejected.
   db.exec(`UPDATE categories SET score_threshold = 50, freshness_hours = 24, text_only_policy = 'allow',
             min_score_for_text_only = NULL, min_score_for_media = NULL WHERE id = 'crypto'`);
-  // discovery_items / persisted decisions reference the candidate's run_id.
   db.exec(`INSERT INTO discovery_runs (id, category_id, platform, apify_dataset_id, status) VALUES ('run1', 'crypto', 'x', 'ds1', 'processing')`);
 
-  // Pre-fill the RSS brief budget to its cap (2 real model calls today).
-  for (let i = 0; i < 2; i++) {
-    db.exec(`INSERT INTO ai_usage (id, provider, purpose, model, input_tokens, output_tokens, status)
-             VALUES ('u${i}', 'anthropic', 'rss_brief', 'claude-test', 10, 10, 'success')`);
-  }
+  scoreItemsMock.mockImplementation(async (_e: any, items: NormalizedItem[]) => items.map(it => scored(it.postId)));
+  attachTranslationsMock.mockImplementation(async (_e: any, items: NormalizedItem[]) =>
+    items.map(it => ({
+      ...scored(it.postId),
+      translations: {
+        'channel:ch_fa': { captionShort: 'کوتاه', captionFull: 'متن کامل تحلیلی', hashtags: ['#BTC'] },
+        fa: { captionShort: 'کوتاه', captionFull: 'متن کامل تحلیلی', hashtags: ['#BTC'] },
+      },
+    })),
+  );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
-describe('drainAICandidateQueue — RSS brief cap is platform-scoped', () => {
-  it('defers RSS without burning attempts while non-RSS keeps draining to the queue', async () => {
-    // RSS rows carry a huge priority_score (publishedAt) so they sort to the
-    // front; non-RSS rows sort behind them. Batch size 2 → batch 1 is all RSS.
+describe('drainAICandidateQueue — RSS brief budget is platform-scoped', () => {
+  it('A: when the brief budget is ALREADY exhausted, RSS is never scored and non-RSS still drains', async () => {
+    fillBriefBudget(db, 2); // == RSS_BRIEF_MAX_CALLS_PER_DAY → exhausted at drain start
+    // RSS carries a huge priority_score (publishedAt) so it sorts ahead of non-RSS.
     seedCandidate(db, 'rss', 'r1', NOW - 60);
     seedCandidate(db, 'rss', 'r2', NOW - 61);
     seedCandidate(db, 'x', 'x1', 10);
     seedCandidate(db, 'x', 'x2', 9);
 
-    scoreItemsMock.mockImplementation(async (_e: any, items: NormalizedItem[]) => items.map(it => scored(it.postId)));
-    attachTranslationsMock.mockImplementation(async (_e: any, items: NormalizedItem[]) =>
-      items.map(it => ({
-        ...scored(it.postId),
-        translations: {
-          'channel:ch_fa': { captionShort: 'کوتاه', captionFull: 'متن کامل تحلیلی', hashtags: ['#BTC'] },
-          fa: { captionShort: 'کوتاه', captionFull: 'متن کامل تحلیلی', hashtags: ['#BTC'] },
-        },
-      })),
-    );
-
     const result = await drainAICandidateQueue(baseEnv(db), { categoryId: 'crypto', maxBatches: 3 });
 
-    // The whole drain was NOT stopped by the RSS cap.
+    // No drain failure; RSS deferral surfaced as a structured warning, not `error`.
     expect(result.stoppedByBudget).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(result.rssBudgetExhausted).toBe(true);
+    expect(result.deferredPlatforms).toEqual(['rss']);
+    expect(result.warnings).toContain('rss_brief_daily_cap');
 
-    // RSS candidates: released back to pending, attempt_count NOT burned.
-    const rss = db.rows<{ id: string; status: string; attempt_count: number; last_error: string }>(
-      `SELECT id, status, attempt_count, last_error FROM ai_candidate_queue WHERE platform='rss' ORDER BY id`);
+    // The cost-churn guarantee: RSS never entered scoring at all.
+    expect(scoredPlatforms()).not.toContain('rss');
+
+    // RSS untouched: still pending, attempt_count 0, never claimed (no defer reason).
+    const rss = db.rows<{ status: string; attempt_count: number; last_error: string | null }>(
+      `SELECT status, attempt_count, last_error FROM ai_candidate_queue WHERE platform='rss' ORDER BY id`);
     expect(rss.map(r => r.status)).toEqual(['pending', 'pending']);
     expect(rss.map(r => r.attempt_count)).toEqual([0, 0]);
-    expect(rss.every(r => r.last_error === 'rss_brief_daily_cap')).toBe(true);
-
-    // RSS never persisted a discovery_item (no premature dedupe_keys lock).
+    expect(rss.every(r => r.last_error === null)).toBe(true);
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM discovery_items WHERE platform='rss'`)!.c).toBe(0);
 
-    // Non-RSS candidates: drained to terminal state (NOT left pending), queued.
-    const nonRss = db.rows<{ id: string; status: string }>(
-      `SELECT id, status FROM ai_candidate_queue WHERE platform='x' ORDER BY id`);
+    // Non-RSS drained to the publish queue.
+    const nonRss = db.rows<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE platform='x'`);
     expect(nonRss.every(r => r.status !== 'pending' && r.status !== 'scoring')).toBe(true);
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(2);
+  });
+
+  it('B: when the cap is hit MID-tick, the over-cap RSS is deferred without burning attempts; non-RSS drains', async () => {
+    fillBriefBudget(db, 0); // room for exactly 1 brief before the cap of 1
+    // Anthropic brief endpoint returns a valid Persian brief (only call that fetches).
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      content: [{ text: JSON.stringify({
+        captionShort: 'تیتر کوتاه فارسی',
+        captionFull: 'این یک تحلیل کاملا فارسی و اصیل درباره یک رویداد کریپتویی است که به اندازه کافی بلند است و هیچ همپوشانی با متن منبع انگلیسی ندارد.',
+        hashtags: ['#کریپتو'],
+      }) }],
+      usage: { input_tokens: 10, output_tokens: 20 },
+    }), { status: 200 })));
+
+    seedCandidate(db, 'rss', 'r1', NOW - 60); // briefed (fits the budget of 1)
+    seedCandidate(db, 'rss', 'r2', NOW - 61); // crosses the cap → deferred
+    seedCandidate(db, 'x', 'x1', 10);
+    seedCandidate(db, 'x', 'x2', 9);
+
+    const env = baseEnv(db, { RSS_BRIEF_MAX_CALLS_PER_DAY: '1', ANTHROPIC_API_KEY: 'k' });
+    const result = await drainAICandidateQueue(env, { categoryId: 'crypto', maxBatches: 3 });
+
+    expect(result.stoppedByBudget).toBe(false);
+    expect(result.rssBudgetExhausted).toBe(true);
+
+    // r1 briefed and queued; r2 deferred to pending with attempt NOT burned.
+    const r1 = db.get<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE id='cand_rss_r1'`)!;
+    const r2 = db.get<{ status: string; attempt_count: number; last_error: string }>(
+      `SELECT status, attempt_count, last_error FROM ai_candidate_queue WHERE id='cand_rss_r2'`)!;
+    expect(r1.status).toBe('queued');
+    expect(r2.status).toBe('pending');
+    expect(r2.attempt_count).toBe(0);
+    expect(r2.last_error).toBe('rss_brief_daily_cap');
+    expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM discovery_items WHERE source_url LIKE '%/r2'`)!.c).toBe(0);
+
+    // Non-RSS still drained: queue holds the briefed r1 + both x items.
+    const nonRss = db.rows<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE platform='x'`);
+    expect(nonRss.every(r => r.status !== 'pending' && r.status !== 'scoring')).toBe(true);
+    expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(3);
   });
 });
