@@ -227,4 +227,42 @@ describe('drainAICandidateQueue — RSS brief budget is platform-scoped', () => 
     expect(result.warnings).toBeUndefined();
     expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(2);
   });
+  it('D: partial trim surfaces a capacity warning and refills non-RSS in the same limited run', async () => {
+    fillBriefBudget(db, 0);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      content: [{ text: JSON.stringify({
+        captionShort: 'تیتر کوتاه فارسی',
+        captionFull: 'این یک تحلیل کاملا فارسی و اصیل درباره یک رویداد کریپتویی است که به اندازه کافی بلند است و هیچ همپوشانی با متن منبع انگلیسی ندارد.',
+        hashtags: ['#کریپتو'],
+      }) }],
+      usage: { input_tokens: 10, output_tokens: 20 },
+    }), { status: 200 })));
+
+    seedCandidate(db, 'rss', 'r1', 71);
+    seedCandidate(db, 'rss', 'r2', 70);
+    seedCandidate(db, 'x', 'x1', 60);
+    seedCandidate(db, 'x', 'x2', 59);
+
+    const env = baseEnv(db, { RSS_BRIEF_MAX_CALLS_PER_DAY: '1', ANTHROPIC_API_KEY: 'k' });
+    const result = await drainAICandidateQueue(env, { categoryId: 'crypto', maxBatches: 2 });
+
+    expect(result.stoppedByBudget).toBe(false);
+    expect(result.rssDeferredThisRun).toBe(true);
+    expect(result.deferredPlatforms).toEqual(['rss']);
+    expect(result.warnings).toContain('rss_brief_capacity_limited');
+
+    expect(scoredPlatforms().filter(p => p === 'rss').length).toBe(1);
+    expect(db.get<{ status: string }>(`SELECT status FROM ai_candidate_queue WHERE id='cand_rss_r1'`)!.status).toBe('queued');
+
+    const r2 = db.get<{ status: string; attempt_count: number; last_error: string | null }>(
+      `SELECT status, attempt_count, last_error FROM ai_candidate_queue WHERE id='cand_rss_r2'`)!;
+    expect(r2.status).toBe('pending');
+    expect(r2.attempt_count).toBe(0);
+    expect(r2.last_error).toBe(null);
+
+    // Refill proof: with maxBatches=2, without same-batch non-RSS refill only 2
+    // items would queue. Refill lets r1 + x1 queue in batch 1, then x2 in batch 2.
+    expect(db.get<{ c: number }>(`SELECT COUNT(*) c FROM publish_queue WHERE channel_id='ch_fa'`)!.c).toBe(3);
+  });
+
 });

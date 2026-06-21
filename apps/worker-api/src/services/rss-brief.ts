@@ -256,9 +256,9 @@ export async function enrichAndBriefRssSurvivors(
     const result = scoreResults[i]!;
     if (!result.publish) continue;
 
-    // Daily budget guard: once the cap is hit, defer remaining survivors (leave
-    // them claimed) rather than publishing without a brief or churning them
-    // through pending in the same drain cycle.
+    // Daily budget guard: once the cap is hit, report the remaining survivors to
+    // the caller as cap-deferred. The caller releases them to pending with
+    // decrementAttempt and excludes RSS for the rest of the tick.
     if (briefCfg.maxCallsPerDay > 0 && callsToday >= briefCfg.maxCallsPerDay) {
       if (!capLogged) {
         await recordBriefUsage(env, briefCfg.model, 0, 0, 'skipped', `daily_cap_${callsToday}/${briefCfg.maxCallsPerDay}`);

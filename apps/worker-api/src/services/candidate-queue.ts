@@ -206,10 +206,9 @@ export async function fetchPendingCandidates(
     const binds: unknown[] = [cutoff, maxAttempts];
     if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
     // When a per-platform brief budget is exhausted for the rest of a drain tick,
-    // exclude that platform at the SQL level. This matters because RSS rows carry
-    // priority_score = publishedAt (~1.7e9), which always sorts ahead of the
-    // engagement-derived scores (~0-100) of other platforms — an in-memory filter
-    // of a small top-priority page could be entirely RSS and starve the rest.
+    // exclude that platform at the SQL level. Even with RSS priority normalized to
+    // the same 0-100-ish scale as other sources, budget-exhausted RSS should not be
+    // claimed/scored at all while waiting for brief capacity.
     if (excludePlatform) { conds.push('platform != ?'); binds.push(excludePlatform); }
     binds.push(limit);
 
@@ -235,9 +234,16 @@ export async function hasPendingCandidatesForPlatform(
   categoryId?: string,
 ): Promise<boolean> {
   try {
+    const maxAgeHours = getCandidateMaxAgeHours(env);
     const maxAttempts = getMaxCandidateAttempts(env);
-    const conds = ["status IN ('pending', 'needs_translation')", 'platform = ?', 'attempt_count < ?'];
-    const binds: unknown[] = [platform, maxAttempts];
+    const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
+    const conds = [
+      "status IN ('pending', 'needs_translation')",
+      'platform = ?',
+      'attempt_count < ?',
+      'created_at > ?',
+    ];
+    const binds: unknown[] = [platform, maxAttempts, cutoff];
     if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
     const row = await env.DB.prepare(
       `SELECT 1 AS x FROM ai_candidate_queue WHERE ${conds.join(' AND ')} LIMIT 1`,

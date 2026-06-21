@@ -148,8 +148,10 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   // was actually set aside (distinct from the mere budget state).
   let rssBudgetExhausted = (await getRssBriefBudgetState(env)).exhausted;
   let rssDeferredThisRun = false;
+  const rssDeferralWarnings = new Set<string>();
   if (rssBudgetExhausted) {
     rssDeferredThisRun = await hasPendingCandidatesForPlatform(env, 'rss', options.categoryId);
+    if (rssDeferredThisRun) rssDeferralWarnings.add('rss_brief_daily_cap');
   }
 
   for (let batchNo = 0; batchNo < maxBatches && result.candidatesPulled < drainLimit; batchNo++) {
@@ -171,16 +173,43 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     // from this batch and continue (next fetch excludes RSS at the SQL level).
     if (!rssBudgetExhausted && pending.some(c => c.platform === 'rss')) {
       const briefState = await getRssBriefBudgetState(env);
+      let trimmedRssThisBatch = false;
+
       if (briefState.exhausted) {
         rssBudgetExhausted = true;
-        rssDeferredThisRun = true;
+        trimmedRssThisBatch = pending.some(c => c.platform === 'rss');
         pending = pending.filter(c => c.platform !== 'rss');
-        if (pending.length === 0) continue;
+        if (trimmedRssThisBatch) rssDeferralWarnings.add('rss_brief_daily_cap');
       } else if (Number.isFinite(briefState.remaining)) {
+        const rssBefore = pending.filter(c => c.platform === 'rss').length;
         let allow = briefState.remaining;
         pending = pending.filter(c => c.platform !== 'rss' || allow-- > 0);
-        if (pending.length === 0) continue;
+        const rssAfter = pending.filter(c => c.platform === 'rss').length;
+        trimmedRssThisBatch = rssBefore > rssAfter;
+        if (trimmedRssThisBatch) rssDeferralWarnings.add('rss_brief_capacity_limited');
       }
+
+      if (trimmedRssThisBatch) {
+        rssDeferredThisRun = true;
+        const targetSize = Math.min(batchSize, remaining);
+        if (pending.length < targetSize) {
+          const usedIds = new Set(pending.map(c => c.id));
+          const refillPool = await fetchPendingCandidates(
+            env,
+            Math.max(targetSize * 2, targetSize),
+            options.categoryId,
+            'rss',
+          );
+          const refillSelection = selectCandidateBatchForScoring(
+            refillPool.filter(c => !usedIds.has(c.id)),
+            targetSize - pending.length,
+            fairPickerEnabled,
+          );
+          pending = [...pending, ...refillSelection.selected];
+        }
+      }
+
+      if (pending.length === 0) continue;
     }
     result.candidatesPulled += pending.length;
 
@@ -218,6 +247,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     if (batchResult.rssBudgetExhausted) {
       rssBudgetExhausted = true;
       rssDeferredThisRun = true;
+      rssDeferralWarnings.add('rss_brief_daily_cap');
     }
     if (batchResult.stoppedByBudget) {
       result.stoppedByBudget = true;
@@ -233,7 +263,8 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   if (rssDeferredThisRun) {
     result.rssDeferredThisRun = true;
     result.deferredPlatforms = ['rss'];
-    result.warnings = [...(result.warnings ?? []), 'rss_brief_daily_cap'];
+    const warnings = Array.from(rssDeferralWarnings);
+    if (warnings.length > 0) result.warnings = [...(result.warnings ?? []), ...warnings];
   }
 
   return result;
