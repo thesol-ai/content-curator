@@ -68,10 +68,13 @@ export function looksPaywalled(text: string): boolean {
 async function countJinaCallsToday(env: Env): Promise<number> {
   if (!env.DB) return 0;
   try {
+    // Count ALL attempts (success/skipped/error), not just successes — otherwise
+    // a feed that keeps hitting paywalls/errors would retry Jina without bound.
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM ai_usage
       WHERE provider = 'jina' AND purpose = 'rss_fulltext'
-        AND status = 'success' AND created_at > datetime('now','-1 day')
+        AND status IN ('success','skipped','error')
+        AND created_at > datetime('now','-1 day')
     `).first<{ count: number }>();
     return Number(row?.count ?? 0);
   } catch {

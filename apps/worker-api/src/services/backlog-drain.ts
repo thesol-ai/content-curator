@@ -487,8 +487,23 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       const ais = rssSurvivorIdx.map(i => decisions[i]!.ai);
       const labels = rssSurvivorIdx.map(i => prepared[i]!.item.sourceAccount);
       try {
-        const briefed = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
+        const { results: briefed, failedIndexes } = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
         rssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = briefed[k]!; });
+
+        // Per-item brief failures: release ONLY those candidates to pending and
+        // drop them from this tick's decisions so they are not persisted (which
+        // would record dedupe_keys and never retry). Local index k → original i.
+        if (failedIndexes.length > 0) {
+          const failedOriginalIdx = failedIndexes.map(k => rssSurvivorIdx[k]!);
+          await releaseClaimedCandidatesToPending(
+            env,
+            failedOriginalIdx.map(i => prepared[i]!.row.id),
+            'rss_brief_unavailable',
+            { decrementAttempt: true },
+          );
+          failedOriginalIdx.forEach(i => { decisions[i] = null; });
+          skipped += failedOriginalIdx.length;
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn('[BacklogDrain] RSS brief failed; releasing RSS survivors to retry:', msg);

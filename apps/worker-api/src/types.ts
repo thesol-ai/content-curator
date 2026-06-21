@@ -123,8 +123,11 @@ export interface Env {
   RSS_FEED_TIMEOUT_SEC?: string;                    // default: "10" — per-feed fetch timeout
   JINA_READER_ENABLED?: string;                     // default: "false" — full-text extraction for short-summary feeds
   JINA_MIN_CONTENT_CHARS?: string;                  // default: "500" — below this, try Jina full text
-  JINA_MAX_CALLS_PER_DAY?: string;                  // default: "50" — daily Jina budget
+  JINA_MAX_CALLS_PER_DAY?: string;                  // default: "50" — daily Jina attempt budget (all attempts)
   JINA_API_KEY?: string;                            // optional — raises Jina rate limits
+  RSS_BRIEF_MODEL?: string;                         // default: DUPLICATE_AI_JUDGE_MODEL or AI_SCORING_MODEL
+  RSS_BRIEF_MAX_CALLS_PER_DAY?: string;             // default: "20" — daily RSS brief generation budget
+  RSS_BRIEF_TIMEOUT_SEC?: string;                   // default: "25" — per-brief Claude call timeout
   DUPLICATE_AI_JUDGE_ENABLED?: string;             // default: "false" — Claude duplicate judge before translation/queue
   DUPLICATE_AI_JUDGE_MODEL?: string;               // default: AI_SCORING_MODEL
   DUPLICATE_AI_JUDGE_BATCH_SIZE?: string;          // default: "5"

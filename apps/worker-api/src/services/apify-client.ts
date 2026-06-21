@@ -596,6 +596,10 @@ export function normalizeRssItem(
   if (!link) return null;
 
   const canonical = canonicalArticleUrl(link);
+  // Require a real absolute http(s) article URL. A bare guid (e.g. Cointelegraph
+  // "1") canonicalizes to a non-URL and would poison sourceUrl/postId, which the
+  // candidate queue uniquely indexes.
+  if (!/^https?:\/\//i.test(canonical)) return null;
   const title = cleanText(raw.title ?? '');
   const summary = stripRssHtml(raw.description).slice(0, RSS_SUMMARY_MAX_CHARS);
   const fullStripped = stripRssHtml(raw.contentEncoded ?? raw['content:encoded'] ?? '');

@@ -37,7 +37,12 @@ Initial feeds (all return `HTTP 200` + XML when fetched with a browser
 3. **Zero Apify cost.** Direct HTTP fetch.
 4. **Bounded downstream AI cost.** Cheap relevance scoring on the feed summary
    first; only survivors pay for full-text extraction + brief generation.
-5. **Copyright-safe output**, enforced by prompt + post-check, not just intent.
+5. **Copyright-safe output.** Prompt forbids translation/quotes and requires a
+   3–5 bullet analytical rewrite; a post-check guardrail rejects long verbatim
+   runs and over-length captions. The verbatim check catches English copy-paste,
+   not a fluent EN→FA re-translation — so it is a defense-in-depth guardrail, not
+   a complete legal guarantee. The prompt structure (bullets, no chronology, zero
+   quotes) is the primary control.
 
 ## Cost model (explicit)
 
@@ -213,6 +218,24 @@ differently by bot protection). The URLs themselves are confirmed reachable.
   index + `INSERT OR IGNORE` ⇒ re-reading a feed enqueues nothing new.
 - **Cross-source:** RSS dedups against Twitter/Apify via shared storyKey + AI
   judge (CoinDesk/Cointelegraph/The Block are also scraped from X).
+- **Watermark (news-first, explicit):** `last_seen_item_published_at` + postId
+  dedup gate new items. When a feed yields more fresh items than
+  `RSS_MAX_ITEMS_PER_FEED`, the newest are taken and the watermark advances past
+  the older overflow (logged as `droppedByCap`) — old backlog is intentionally
+  not back-filled.
+
+## rev 3 fixes (post second review)
+
+P0: probe-only no longer stores ETag/Last-Modified (can't stall live ingestion);
+304 counts as healthy (no false `consecutive_failures`); HTTP 200 with zero/non-XML
+parse is an error; RSS brief per-item failure is released to retry (not persisted,
+no dedupe_keys recorded); the RSS `discovery_run` is finalized to `completed` with
+counts; `rss_ingest_slot:*` claim keys are cleaned up each tick.
+P1: enqueue counts come from real `inserted` results; cap drops are explicit +
+logged; RSS brief has its own daily cap / model / timeout (`RSS_BRIEF_*`); invalid
+(non-URL) items are rejected in `normalizeRssItem`; the Jina daily budget counts
+all attempts; per-feed `poll_interval_minutes` is honored. Accept header narrowed
+to RSS/XML; brief prompt hardened (bullets, no chronology, zero quotes).
 
 ## Error handling / isolation
 

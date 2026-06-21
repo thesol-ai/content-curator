@@ -72,4 +72,9 @@ describe('normalizeRssItem', () => {
   it('returns null when there is no link', () => {
     expect(normalizeRssItem({ title: 'x' })).toBeNull();
   });
+
+  it('returns null when only a non-URL guid is present (Cointelegraph guid=1)', () => {
+    expect(normalizeRssItem({ title: 'x', guid: '1' })).toBeNull();
+    expect(normalizeRssItem({ title: 'x', link: 'not-a-url', guid: '1' })).toBeNull();
+  });
 });

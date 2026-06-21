@@ -14,6 +14,38 @@ const ANTHROPIC_VER = '2023-06-01';
 const CAPTION_FULL_MAX = 900;
 const CAPTION_SHORT_MAX = 220;
 
+interface RssBriefConfig {
+  model: string;
+  maxCallsPerDay: number;
+  timeoutMs: number;
+}
+
+function getRssBriefConfig(env: Env): RssBriefConfig {
+  const n = (v: string | undefined, d: number) => {
+    const x = Math.floor(Number(v));
+    return Number.isFinite(x) ? x : d;
+  };
+  return {
+    model: env.RSS_BRIEF_MODEL || env.DUPLICATE_AI_JUDGE_MODEL || env.AI_SCORING_MODEL,
+    maxCallsPerDay: Math.max(0, n(env.RSS_BRIEF_MAX_CALLS_PER_DAY, 20)),
+    timeoutMs: Math.max(5000, n(env.RSS_BRIEF_TIMEOUT_SEC, 25) * 1000),
+  };
+}
+
+async function countBriefCallsToday(env: Env): Promise<number> {
+  if (!env.DB) return 0;
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM ai_usage
+      WHERE provider = 'anthropic' AND purpose = 'rss_brief'
+        AND status = 'success' AND created_at > datetime('now','-1 day')
+    `).first<{ count: number }>();
+    return Number(row?.count ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 function normalizeWords(s: string): string[] {
   return String(s ?? '')
     .toLowerCase()
@@ -83,11 +115,13 @@ export function sanitizeBrief(
 function buildBriefSystem(): string {
   return [
     'You write original Persian (Farsi) news briefs for a crypto Telegram channel.',
-    'You are given an English source article. Produce an ANALYTICAL Persian brief — not a translation.',
-    'Rules:',
-    '- Do NOT translate paragraph-by-paragraph. Do NOT preserve the article sentence order.',
-    '- Do NOT include any direct quote from the article.',
-    '- Write 5–8 short lines: what happened, why it matters, likely market impact.',
+    'You are given an English source article. Produce an ANALYTICAL Persian brief — NOT a translation.',
+    'Hard rules (copyright):',
+    '- Do NOT translate the article. Do NOT reconstruct its chronology or sentence order.',
+    '- Do NOT include ANY direct quote from the article (zero quotes).',
+    '- Mention only 3–5 key facts and analyze them; do not retell the whole article.',
+    'Format:',
+    '- captionFull: 3–5 short analytical bullet lines (what happened, why it matters, likely market impact). Under ~700 chars.',
     '- Natural Persian. Numbers and entities accurate.',
     'Return ONLY JSON: {"captionShort":"...","captionFull":"...","hashtags":["#..."]}',
     'captionFull is the channel post body (no source link — it is appended automatically).',
@@ -114,9 +148,9 @@ async function recordBriefUsage(env: Env, model: string, inT: number, outT: numb
   } catch { /* best-effort */ }
 }
 
-async function callBriefModel(env: Env, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
+async function callBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
   if (!env.ANTHROPIC_API_KEY) return null;
-  const model = env.DUPLICATE_AI_JUDGE_MODEL || env.AI_SCORING_MODEL;
+  const model = cfg.model;
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: 'POST',
@@ -131,7 +165,7 @@ async function callBriefModel(env: Env, sourceText: string): Promise<{ captionSh
         system: buildBriefSystem(),
         messages: [{ role: 'user', content: `SOURCE ARTICLE:\n${sourceText.slice(0, 6000)}` }],
       }),
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(cfg.timeoutMs),
     });
     if (!res.ok) {
       await recordBriefUsage(env, model, 0, 0, 'failed', `http_${res.status}`);
@@ -146,35 +180,57 @@ async function callBriefModel(env: Env, sourceText: string): Promise<{ captionSh
   }
 }
 
+export interface RssBriefOutcome {
+  /** Updated score results aligned to the input order (briefed survivors). */
+  results: AIGateResult[];
+  /** Indexes (into the input arrays) whose brief could not be produced. The
+   *  caller MUST release these candidates to pending and NOT persist them, so a
+   *  transient failure does not strand the article as selected-but-unpublished. */
+  failedIndexes: number[];
+}
+
 /**
  * Mirror of attachTranslations for RSS survivors: extract full text, generate a
  * copyright-safe Persian brief, and attach it under the channel language keys.
- * Per-item failures set publish=false (+flag) rather than failing the batch.
+ * Per-item failures are reported via `failedIndexes` (released by the caller),
+ * never persisted. Daily-capped to bound AI cost/latency.
  */
 export async function enrichAndBriefRssSurvivors(
   env: Env,
   items: NormalizedItem[],
   scoreResults: AIGateResult[],
-  category: CategoryRow,
+  _category: CategoryRow,
   channels: ChannelRow[],
   labels: string[],
-): Promise<AIGateResult[]> {
-  const cfg = getRssExtractorConfig(env);
+): Promise<RssBriefOutcome> {
+  const extractCfg = getRssExtractorConfig(env);
+  const briefCfg = getRssBriefConfig(env);
   const enabledChannels = channels.filter(c => c.enabled);
   const out = [...scoreResults];
+  const failedIndexes: number[] = [];
+
+  let callsToday = await countBriefCallsToday(env);
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
     const result = scoreResults[i]!;
     if (!result.publish) continue;
 
+    // Daily budget guard: stop spending once the cap is hit; remaining survivors
+    // are released to retry on a later tick rather than published without a brief.
+    if (briefCfg.maxCallsPerDay > 0 && callsToday >= briefCfg.maxCallsPerDay) {
+      failedIndexes.push(i);
+      continue;
+    }
+
     try {
-      const { text: sourceText } = await extractFullTextForBrief(env, item, cfg);
-      const raw = await callBriefModel(env, sourceText);
+      const { text: sourceText } = await extractFullTextForBrief(env, item, extractCfg);
+      const raw = await callBriefModel(env, briefCfg, sourceText);
+      callsToday++;
       const draft = raw ? sanitizeBrief(raw, sourceText) : null;
 
       if (!draft) {
-        out[i] = { ...result, publish: false, riskFlags: [...result.riskFlags, 'rss_brief_failed'] };
+        failedIndexes.push(i);
         continue;
       }
 
@@ -193,9 +249,9 @@ export async function enrichAndBriefRssSurvivors(
       out[i] = { ...result, translations };
     } catch (err) {
       console.warn('[RSSBrief] item failed:', err instanceof Error ? err.message : String(err));
-      out[i] = { ...result, publish: false, riskFlags: [...result.riskFlags, 'rss_brief_failed'] };
+      failedIndexes.push(i);
     }
   }
 
-  return out;
+  return { results: out, failedIndexes };
 }

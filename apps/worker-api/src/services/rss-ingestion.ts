@@ -93,9 +93,21 @@ async function countRssEnqueuedToday(env: Env): Promise<number> {
 async function updateSourceBookkeeping(
   env: Env,
   sourceId: string,
-  patch: { status: number; error: string | null; etag: string | null; lastModified: string | null; success: boolean },
+  patch: {
+    status: number;
+    error: string | null;
+    etag: string | null;
+    lastModified: string | null;
+    /** error === null (a 304 is healthy: nothing changed, not a failure). */
+    healthy: boolean;
+    /** Persist ETag/Last-Modified for the LIVE path. False in probe-only so a
+     *  probe run can never make the first real ingestion get a 304 and stall. */
+    storeConditional: boolean;
+  },
 ): Promise<void> {
   try {
+    const h = patch.healthy ? 1 : 0;
+    const store = patch.storeConditional ? 1 : 0;
     await env.DB.prepare(`
       UPDATE rss_sources SET
         last_checked_at = CURRENT_TIMESTAMP,
@@ -103,16 +115,30 @@ async function updateSourceBookkeeping(
         last_error = ?,
         last_success_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE last_success_at END,
         consecutive_failures = CASE WHEN ? = 1 THEN 0 ELSE consecutive_failures + 1 END,
-        etag = COALESCE(?, etag),
-        last_modified = COALESCE(?, last_modified),
+        etag = CASE WHEN ? = 1 THEN COALESCE(?, etag) ELSE etag END,
+        last_modified = CASE WHEN ? = 1 THEN COALESCE(?, last_modified) ELSE last_modified END,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(
-      patch.status, patch.error, patch.success ? 1 : 0, patch.success ? 1 : 0,
-      patch.etag, patch.lastModified, sourceId,
+      patch.status, patch.error, h, h,
+      store, patch.etag, store, patch.lastModified, sourceId,
     ).run();
   } catch (err) {
     console.warn('[RSSIngest] bookkeeping failed:', err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** Remove RSS slot-claim keys older than 2 days from the settings table. */
+export async function cleanupOldRssIngestClaims(env: Env): Promise<{ deleted: number }> {
+  if (!env.DB) return { deleted: 0 };
+  try {
+    const res = await env.DB.prepare(
+      `DELETE FROM settings WHERE key LIKE 'rss_ingest_slot:%' AND updated_at < datetime('now','-2 days')`,
+    ).run();
+    return { deleted: res.meta.changes ?? 0 };
+  } catch (err) {
+    console.warn('[RSSIngest] slot cleanup failed:', err instanceof Error ? err.message : String(err));
+    return { deleted: 0 };
   }
 }
 
@@ -129,7 +155,11 @@ async function advanceWatermark(env: Env, sourceId: string, items: NormalizedIte
 export interface RssIngestSummary {
   skipped: boolean;
   reason?: string;
-  feeds: Array<{ source: string; status: number; fetched: number; fresh: number; enqueued: number; error?: string | null; probe?: boolean }>;
+  feeds: Array<{
+    source: string; status: number; fetched: number; fresh: number;
+    enqueued: number; duplicate?: number; droppedByCap?: number;
+    error?: string | null; probe?: boolean; notModified?: boolean;
+  }>;
   totalEnqueued: number;
 }
 
@@ -155,14 +185,20 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
   }
   if (sources.length === 0) return { ...summary, skipped: true, reason: 'no_sources' };
 
-  const slot = Math.floor(Date.now() / (cfg.intervalMin * 60 * 1000));
   let dayCount = await countRssEnqueuedToday(env);
   const runId = rid('rssrun');
   let runCreated = false;
+  let runCategoryId = opts?.categoryId ?? null;
   let runEnqueued = 0;
+  let runFetched = 0;
+  let runDuplicate = 0;
 
   for (const src of sources) {
     if (cfg.maxNewItemsPerRun > 0 && runEnqueued >= cfg.maxNewItemsPerRun) break;
+
+    // Per-feed interval (falls back to the global default).
+    const intervalMin = src.poll_interval_minutes || cfg.intervalMin;
+    const slot = Math.floor(Date.now() / (intervalMin * 60 * 1000));
 
     // Atomic per-feed slot claim: only the first cron tick inside this slot wins.
     let claimed = false;
@@ -180,19 +216,29 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       await updateSourceBookkeeping(env, src.id, {
         status: fetched.status, error: fetched.error,
         etag: fetched.etag, lastModified: fetched.lastModified,
-        success: fetched.error === null && !fetched.notModified,
+        healthy: fetched.error === null,          // 304 (notModified) is healthy
+        storeConditional: !cfg.probeOnly,         // probe must not poison live conditional headers
       });
 
       if (fetched.notModified || fetched.error || fetched.items.length === 0) {
-        summary.feeds.push({ source: src.source_account, status: fetched.status, fetched: fetched.items.length, fresh: 0, enqueued: 0, error: fetched.error });
+        summary.feeds.push({
+          source: src.source_account, status: fetched.status,
+          fetched: fetched.items.length, fresh: 0, enqueued: 0,
+          error: fetched.error, notModified: fetched.notModified,
+        });
         continue;
       }
 
       const normalized = fetched.items
         .map(raw => normalizeRssItem(raw, { sourceAccount: src.source_account }))
         .filter((it): it is NormalizedItem => it !== null);
+      runFetched += normalized.length;
 
+      const freshBeforeCap = normalized.filter(
+        it => src.last_seen_item_published_at == null || it.publishedAt > src.last_seen_item_published_at,
+      ).length;
       const fresh = filterNewByWatermark(normalized, src.last_seen_item_published_at, cfg.maxItemsPerFeed);
+      const droppedByCap = Math.max(0, freshBeforeCap - fresh.length);
 
       if (cfg.probeOnly) {
         const latest = fresh[0] ?? normalized[0];
@@ -207,6 +253,8 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       }
 
       // Per-feed enqueue, respecting run + day caps, with dedupe idempotency.
+      // News-first: items older than the cap window are intentionally dropped and
+      // logged (droppedByCap); the watermark advances past them below.
       const toEnqueue: Array<{ item: NormalizedItem; keys: string[] }> = [];
       for (const item of fresh) {
         if (cfg.maxNewItemsPerRun > 0 && runEnqueued + toEnqueue.length >= cfg.maxNewItemsPerRun) break;
@@ -216,15 +264,18 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
         toEnqueue.push({ item, keys });
       }
 
+      let inserted = 0;
+      let duplicateExisting = 0;
       if (toEnqueue.length > 0) {
         if (!runCreated) {
+          runCategoryId = src.category_id;
           await env.DB.prepare(
             `INSERT OR IGNORE INTO discovery_runs (id, category_id, platform, apify_dataset_id, status) VALUES (?, ?, 'rss', 'rss', 'processing')`,
           ).bind(runId, src.category_id).run();
           runCreated = true;
         }
 
-        await enqueueCandidates(env, toEnqueue.map(({ item }) => ({
+        const enqueueResults = await enqueueCandidates(env, toEnqueue.map(({ item, keys }) => ({
           sourceId: src.id,
           runId,
           categoryId: src.category_id,
@@ -234,20 +285,33 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
           postId: item.postId,
           publishedAt: item.publishedAt,
           normalizedItem: item,
-          dedupeKeys: keysOf(toEnqueue, item),
+          dedupeKeys: keys,
           priorityScore: item.publishedAt,
         })));
-
-        // NOTE: dedupe_keys are recorded by backlog-drain at persist time (from
+        // Count only rows actually inserted — INSERT OR IGNORE no-ops on the
+        // candidate-queue unique source_url index for an already-queued article.
+        inserted = enqueueResults.filter(r => r.inserted).length;
+        duplicateExisting = enqueueResults.length - inserted;
+        // dedupe_keys are recorded by backlog-drain at persist time (from
         // dedupe_keys_json), so a transient brief failure doesn't permanently
-        // dedup the article. Enqueue idempotency is the candidate-queue unique
-        // source_url index.
-        await advanceWatermark(env, src.id, toEnqueue.map(t => t.item));
+        // dedup the article.
       }
 
-      runEnqueued += toEnqueue.length;
-      dayCount += toEnqueue.length;
-      summary.feeds.push({ source: src.source_account, status: fetched.status, fetched: normalized.length, fresh: fresh.length, enqueued: toEnqueue.length });
+      // News-first watermark: advance past every fresh item we considered this
+      // run (enqueued, duplicate, or cap-dropped) so old backlog is not re-scanned.
+      if (fresh.length > 0) await advanceWatermark(env, src.id, fresh);
+      if (droppedByCap > 0) {
+        console.log('[RSSIngest] cap drop (news-first):', { source: src.source_account, droppedByCap, cap: cfg.maxItemsPerFeed });
+      }
+
+      runEnqueued += inserted;
+      dayCount += inserted;
+      runDuplicate += duplicateExisting;
+      summary.feeds.push({
+        source: src.source_account, status: fetched.status,
+        fetched: normalized.length, fresh: fresh.length,
+        enqueued: inserted, duplicate: duplicateExisting, droppedByCap,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[RSSIngest] feed ${src.source_account} failed:`, msg);
@@ -255,10 +319,19 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
     }
   }
 
+  // Finalize the RSS discovery_run so it does not linger in 'processing'.
+  if (runCreated) {
+    try {
+      await env.DB.prepare(`
+        UPDATE discovery_runs
+        SET status = 'completed', items_fetched = ?, items_new = ?, items_duplicate = ?, category_id = ?
+        WHERE id = ?
+      `).bind(runFetched, runEnqueued, runDuplicate, runCategoryId, runId).run();
+    } catch (err) {
+      console.warn('[RSSIngest] run finalize failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   summary.totalEnqueued = runEnqueued;
   return summary;
-}
-
-function keysOf(list: Array<{ item: NormalizedItem; keys: string[] }>, item: NormalizedItem): string[] {
-  return list.find(t => t.item === item)?.keys ?? [];
 }

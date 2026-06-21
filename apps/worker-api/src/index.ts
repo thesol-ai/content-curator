@@ -11,7 +11,7 @@ import { cleanupOldDedupeKeys } from './services/dedupe';
 import { getRuntimeConfig } from './services/runtime-config';
 import { maybeSendMarketSnapshotDirect } from './services/market-snapshot';
 import { drainAICandidateQueue } from './services/backlog-drain';
-import { runRssIngestion } from './services/rss-ingestion';
+import { runRssIngestion, cleanupOldRssIngestClaims } from './services/rss-ingestion';
 import { buildPipelineHealthReport } from './services/pipeline-health-report'; // IMPROVEMENT #10
 import { cleanupOldRotationClaims, getDiversityRotationSourceId, getRotationSlotMinutes, getStarvationRotationSourceId, runApifyRotation } from './services/apify-rotation-runner';
 import { handleTelegramAdminBot } from './routes/telegram-admin-bot';
@@ -275,6 +275,10 @@ export default {
         // 5. Cleanup stale Apify rotation claim keys (prevents settings bloat)
         const rotationCleanup = await cleanupOldRotationClaims(env);
         if (rotationCleanup.deleted > 0) console.log(`[Scheduled] Cleaned ${rotationCleanup.deleted} stale rotation claim keys`);
+
+        // 5.1 Cleanup stale RSS ingest slot-claim keys (same settings-bloat guard)
+        const rssClaimCleanup = await cleanupOldRssIngestClaims(env);
+        if (rssClaimCleanup.deleted > 0) console.log(`[Scheduled] Cleaned ${rssClaimCleanup.deleted} stale RSS slot claim keys`);
 
         // 6. Retention cleanup for ai_usage_attribution (daily-guarded; no-op unless
         //    cost attribution is enabled). Prevents the attribution table from growing forever.
