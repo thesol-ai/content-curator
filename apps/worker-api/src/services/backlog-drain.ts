@@ -33,6 +33,7 @@ import {
   getSourceAudienceRejectReason,
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
+import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
 import {
   getStoryIntelligenceWindowHours,
   isStoryFollowupAllowEnabled,
@@ -40,7 +41,9 @@ import {
   isStoryIntelligenceRejectActive,
   isFollowUpEventType,
   recordStoryEvent,
+  shouldRejectBySemanticStorySimilarity,
   shouldRejectByStoryKey,
+  similarStorySeenInWindow,
   storyKeySeenInWindow,
 } from './story-intelligence';
 
@@ -311,6 +314,13 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   const seenFingerprints = new Set<string>();
   const seenStoryClusters = new Set<string>();
   const seenStoryKeys = new Set<string>();
+  const seenSemanticStories: Array<{
+    storyKey: string | null;
+    fields: AIGateResult['storyFields'] | null;
+    topicFingerprint: string | null;
+    eventType: string | null;
+    text: string | null;
+  }> = [];
   const themeBatchCounts = new Map<string, number>();
   const decisions: Array<{
     candidate: typeof prepared[number];
@@ -351,6 +361,26 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
         && !(isStoryFollowupAllowEnabled(env) && isFollowUpEventType(ai.storyFields?.eventType))) {
       ev.storyKeyRejectReason = 'similar_story_key_recent_channel';
     }
+    if (!ev.storyKeyRejectReason && isStoryIntelligenceRejectActive(env)) {
+      const currentSemanticStory = {
+        storyKey: ev.storyKey,
+        fields: ai.storyFields ?? null,
+        topicFingerprint: ai.topicFingerprint ?? null,
+        eventType: ai.storyFields?.eventType ?? null,
+        text: candidate.item.text ?? null,
+      };
+      for (const prior of seenSemanticStories) {
+        if (shouldRejectBySemanticStorySimilarity({
+          rejectEnabled: true,
+          current: currentSemanticStory,
+          prior,
+          followupAllowEnabled: isStoryFollowupAllowEnabled(env),
+        })) {
+          ev.storyKeyRejectReason = 'similar_semantic_story_recent_batch';
+          break;
+        }
+      }
+    }
     if (!ev.themeCapRejectReason && ev.themeKey) {
       const cap = getCryptoThemeDailyCap(ev.themeKey, env); // IMPROVEMENT #4: env-overridable
       if (cap != null && (themeBatchCounts.get(ev.themeKey) ?? 0) >= cap) {
@@ -363,15 +393,57 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       if (fpNorm) seenFingerprints.add(fpNorm);
       if (ev.storyClusterKey) seenStoryClusters.add(ev.storyClusterKey);
       if (ev.storyKey) seenStoryKeys.add(ev.storyKey);
+      seenSemanticStories.push({
+        storyKey: ev.storyKey,
+        fields: ai.storyFields ?? null,
+        topicFingerprint: ai.topicFingerprint ?? null,
+        eventType: ai.storyFields?.eventType ?? null,
+        text: candidate.item.text ?? null,
+      });
       if (ev.themeKey) themeBatchCounts.set(ev.themeKey, (themeBatchCounts.get(ev.themeKey) ?? 0) + 1);
     }
     decisions.push({ candidate, ai, ev, rejectReason });
   }
 
   // Translate ONLY survivors (cost saving) — one batched call.
-  const survivorIdx = decisions
+  let survivorIdx = decisions
     .map((d, i) => (d && d.rejectReason === null ? i : -1))
     .filter(i => i >= 0);
+
+  // Final pre-translation AI duplicate judge. Batched + daily-capped, so it
+  // checks only publish-eligible survivors instead of every scraped item.
+  if (survivorIdx.length > 0) {
+    const judgeRejected = await runDuplicateAiJudgeForSurvivors(env, {
+      categoryId: category.id,
+      channelId: channels[0]?.id ?? null,
+      candidates: survivorIdx.map(i => ({
+        index: i,
+        item: prepared[i]!.item,
+        ai: decisions[i]!.ai,
+      })),
+    });
+
+    for (const [i, judge] of judgeRejected) {
+      const decision = decisions[i];
+      if (!decision || decision.rejectReason !== null) continue;
+      decision.rejectReason = 'similar_ai_duplicate_recent_channel';
+      decision.ai = {
+        ...decision.ai,
+        riskFlags: Array.from(new Set([
+          ...(decision.ai.riskFlags ?? []),
+          'ai_duplicate_judge',
+          `ai_duplicate_confidence:${judge.confidence.toFixed(2)}`,
+        ])).slice(0, 10),
+      };
+    }
+
+    if (judgeRejected.size > 0) {
+      survivorIdx = decisions
+        .map((d, i) => (d && d.rejectReason === null ? i : -1))
+        .filter(i => i >= 0);
+    }
+  }
+
   if (survivorIdx.length > 0) {
     const survivorItems = survivorIdx.map(i => prepared[i]!.item);
     const survivorAi = survivorIdx.map(i => decisions[i]!.ai);
@@ -466,6 +538,21 @@ async function evaluateCandidateDb(
       followupAllowEnabled: isStoryFollowupAllowEnabled(env),
     })) {
       storyKeyRejectReason = 'similar_story_key_recent_channel';
+    }
+
+    if (!storyKeyRejectReason) {
+      const semanticallySeen = await similarStorySeenInWindow(env, {
+        categoryId: candidate.row.category_id,
+        channelId,
+        storyKey,
+        fields: ai.storyFields ?? null,
+        topicFingerprint: ai.topicFingerprint,
+        eventType: ai.storyFields?.eventType ?? null,
+        text: candidate.item.text ?? null,
+        windowHours: getStoryIntelligenceWindowHours(env),
+        followupAllowEnabled: isStoryFollowupAllowEnabled(env),
+      });
+      if (semanticallySeen) storyKeyRejectReason = 'similar_semantic_story_recent_channel';
     }
   }
 

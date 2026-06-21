@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   isFollowUpEventType,
+  shouldRejectBySemanticStorySimilarity,
   shouldRejectByStoryKey,
   shapeStoryKeyMetrics,
   cleanupStoryIntelligenceEvents,
@@ -49,6 +50,139 @@ describe('6K active reject logic (pure)', () => {
     expect(m.storyKeyRepeated).toBe(2);
     expect(m.wouldBlockCountIfRejectEnabled).toBe(1); // only the non-followup repeat
     expect(m.topRepeatedStoryKeys[0]!.count).toBe(2);
+  });
+
+  it('blocks semantic story repeats even when story_key labels differ', () => {
+    const base = { rejectEnabled: true, followupAllowEnabled: true };
+
+    expect(shouldRejectBySemanticStorySimilarity({
+      ...base,
+      prior: {
+        storyKey: 'axelar|secret_network|exploit|2026-06-19',
+        topicFingerprint: 'axelar-secret-network-exploit-4-67m',
+        fields: { primaryEntities: ['Axelar', 'Secret Network'], eventType: 'exploit', canonicalDate: '2026-06-19' },
+      },
+      current: {
+        storyKey: 'axelar|secret_network|bridge_incident|2026-06-19',
+        topicFingerprint: 'axelar-secret-network-bridge-incident',
+        fields: { primaryEntities: ['Axelar', 'Secret Network'], eventType: 'bridge_incident', canonicalDate: '2026-06-19' },
+      },
+    })).toBe(true);
+
+    expect(shouldRejectBySemanticStorySimilarity({
+      ...base,
+      prior: {
+        storyKey: 'blockaid|ethereum|jaredfromsubway|exploit|2026-06-20',
+        topicFingerprint: 'jaredfromsubway-mev-bot-exploit',
+        fields: { primaryEntities: ['Blockaid', 'Ethereum', 'JaredFromSubway'], eventType: 'exploit', canonicalDate: '2026-06-20' },
+      },
+      current: {
+        storyKey: 'jaredfromsubway|specter|tornado_cash|security_wallet_drain|2026-06-20',
+        topicFingerprint: 'jared-from-subway-mev-bot-drain',
+        fields: { primaryEntities: ['JaredFromSubway', 'Specter', 'Tornado Cash'], eventType: 'security_wallet_drain', canonicalDate: '2026-06-20' },
+      },
+    })).toBe(true);
+  });
+
+  it('blocks known cross-source semantic duplicates from the 48h audit', () => {
+    const base = { rejectEnabled: true, followupAllowEnabled: true };
+
+    expect(shouldRejectBySemanticStorySimilarity({
+      ...base,
+      prior: {
+        storyKey: 'certik|microsoft_security|security_malware_alert|2026-02-01',
+        topicFingerprint: 'clipboard-stealer-malware-feb2026',
+        fields: { primaryEntities: ['CertiK', 'Microsoft Security'], eventType: 'security_malware_alert', canonicalDate: '2026-02-01' },
+      },
+      current: {
+        storyKey: 'crypto_clipper_malware|microsoft|tor|security_malware|2026-06-19',
+        topicFingerprint: 'microsoft-tor-crypto-clipper-malware',
+        fields: { primaryEntities: ['Microsoft', 'Tor', 'Crypto Clipper Malware'], eventType: 'security_malware', canonicalDate: '2026-06-19' },
+      },
+    })).toBe(true);
+
+    expect(shouldRejectBySemanticStorySimilarity({
+      ...base,
+      prior: {
+        storyKey: 'genius_act|stablecoin_issuers|us_regulators|regulation|2026-06-19',
+        topicFingerprint: 'us-genius-act-stablecoin-aml-framework',
+        fields: { primaryEntities: ['GENIUS Act', 'Stablecoin Issuers', 'US Regulators'], eventType: 'regulation', canonicalDate: '2026-06-19' },
+      },
+      current: {
+        storyKey: 'genius_act|stablecoin_issuers|us_regulators|regulation|2026-06-18',
+        topicFingerprint: 'us-genius-act-stablecoin-kyc',
+        fields: { primaryEntities: ['GENIUS Act', 'Stablecoin Issuers', 'US Regulators'], eventType: 'regulation', canonicalDate: '2026-06-18' },
+      },
+    })).toBe(true);
+
+    expect(shouldRejectBySemanticStorySimilarity({
+      ...base,
+      prior: {
+        storyKey: 'bitcoin|etf|franklin_templeton|etf_filing|2026-06-19',
+        topicFingerprint: 'franklin-templeton-btc-dividend-etf',
+        fields: { primaryEntities: ['Bitcoin', 'ETF', 'Franklin Templeton'], eventType: 'etf_filing', canonicalDate: '2026-06-19' },
+      },
+      current: {
+        storyKey: 'bitcoin|etf|franklin_templeton|institutional_etf_product|2026-06-19',
+        topicFingerprint: 'franklin-templeton-dividend-bitcoin-etf',
+        fields: { primaryEntities: ['Bitcoin', 'ETF', 'Franklin Templeton'], eventType: 'institutional_etf_product', canonicalDate: '2026-06-19' },
+      },
+    })).toBe(true);
+  });
+
+  it('blocks generic duplicates using text and material numbers without topic-specific rules', () => {
+    expect(shouldRejectBySemanticStorySimilarity({
+      rejectEnabled: true,
+      followupAllowEnabled: true,
+      prior: {
+        storyKey: 'alpha_protocol|vault|exploit|2026-06-21',
+        topicFingerprint: 'alpha-protocol-vault-exploit-12-4m',
+        text: 'Security researchers reported Alpha Protocol lost $12.4M after its vault was exploited.',
+        fields: { primaryEntities: ['Alpha Protocol', 'Vault'], eventType: 'exploit', canonicalDate: '2026-06-21' },
+      },
+      current: {
+        storyKey: 'alpha_protocol|security_incident|2026-06-21',
+        topicFingerprint: 'alpha-protocol-incident-funds-drained',
+        text: 'Alpha Protocol said an incident drained roughly 12.4 million dollars from the same vault.',
+        fields: { primaryEntities: ['Alpha Protocol'], eventType: 'security_incident', canonicalDate: '2026-06-21' },
+      },
+    })).toBe(true);
+  });
+
+  it('does not block unrelated security incidents just because the chain is shared', () => {
+    expect(shouldRejectBySemanticStorySimilarity({
+      rejectEnabled: true,
+      followupAllowEnabled: true,
+      prior: {
+        storyKey: 'ethereum|protocol_alpha|exploit|2026-06-21',
+        topicFingerprint: 'ethereum-protocol-alpha-exploit',
+        text: 'Protocol Alpha on Ethereum lost $3.2M after a vault exploit.',
+        fields: { primaryEntities: ['Ethereum', 'Protocol Alpha'], eventType: 'exploit', canonicalDate: '2026-06-21' },
+      },
+      current: {
+        storyKey: 'ethereum|protocol_beta|exploit|2026-06-21',
+        topicFingerprint: 'ethereum-protocol-beta-exploit',
+        text: 'Protocol Beta on Ethereum suffered a separate $8.9M oracle manipulation incident.',
+        fields: { primaryEntities: ['Ethereum', 'Protocol Beta'], eventType: 'exploit', canonicalDate: '2026-06-21' },
+      },
+    })).toBe(false);
+  });
+
+  it('does not block related but different GENIUS Act stories', () => {
+    expect(shouldRejectBySemanticStorySimilarity({
+      rejectEnabled: true,
+      followupAllowEnabled: true,
+      prior: {
+        storyKey: 'genius_act|stablecoin_issuers|us_regulators|regulation|2026-06-19',
+        topicFingerprint: 'us-genius-act-stablecoin-aml-framework',
+        fields: { primaryEntities: ['GENIUS Act', 'Stablecoin Issuers', 'US Regulators'], eventType: 'regulation', canonicalDate: '2026-06-19' },
+      },
+      current: {
+        storyKey: 'fidelity|genius_act|stablecoin_issuers|stablecoin_regulation|2026-06-19',
+        topicFingerprint: 'fidelity-stablecoin-reserve-fund-genius-act',
+        fields: { primaryEntities: ['Fidelity', 'GENIUS Act', 'Stablecoin Issuers'], eventType: 'stablecoin_regulation', canonicalDate: '2026-06-19' },
+      },
+    })).toBe(false);
   });
 });
 
