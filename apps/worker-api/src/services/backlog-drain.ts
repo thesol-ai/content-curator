@@ -505,12 +505,18 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
           skipped += failedOriginalIdx.length;
         }
 
-        // Daily-cap-deferred survivors: leave them CLAIMED (do NOT release) so
-        // they are not re-claimed and re-skipped within this same drain cycle.
-        // Stale-scoring recovery returns them to pending on a later tick, after
-        // the budget window rolls — a natural backoff with no churn.
+        // Daily-cap-deferred survivors: release to pending with the attempt
+        // DECREMENTED so repeated deferral never burns attempt_count toward
+        // max-attempts (which would falsely 'fail' a healthy article). They are
+        // not persisted (no premature dedupe_keys) and retry once budget frees.
         if (capDeferredIndexes.length > 0) {
           const deferredOriginalIdx = capDeferredIndexes.map(k => rssSurvivorIdx[k]!);
+          await releaseClaimedCandidatesToPending(
+            env,
+            deferredOriginalIdx.map(i => prepared[i]!.row.id),
+            'rss_brief_daily_cap',
+            { decrementAttempt: true },
+          );
           deferredOriginalIdx.forEach(i => { decisions[i] = null; });
           skipped += deferredOriginalIdx.length;
         }

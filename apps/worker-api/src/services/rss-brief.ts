@@ -192,8 +192,8 @@ export interface RssBriefOutcome {
    *  as selected-but-unpublished. */
   failedIndexes: number[];
   /** Survivors skipped because the daily brief budget is exhausted. Caller must
-   *  leave these CLAIMED (not released) so they are not re-claimed and re-skipped
-   *  in the same drain cycle — stale recovery returns them on a later tick. */
+   *  release these to pending with the attempt DECREMENTED (so repeated deferral
+   *  never burns attempt_count toward max-attempts) and must not persist them. */
   capDeferredIndexes: number[];
 }
 

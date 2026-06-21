@@ -25,6 +25,7 @@ interface RssSourceRow {
   etag: string | null;
   last_modified: string | null;
   last_seen_item_published_at: number | null;
+  last_seen_item_url: string | null;
 }
 
 export interface RssIngestConfig {
@@ -55,17 +56,32 @@ export function getRssIngestConfig(env: Env): RssIngestConfig {
 }
 
 /**
- * Pure: pick items newer than the watermark, newest first, capped per feed.
- * Items with no usable publishedAt are kept (dedupe is the precise idempotency
- * guard downstream).
+ * Pure: items strictly newer than the watermark, newest first, capped per feed.
+ * Composite watermark — an item at the EXACT watermark timestamp is still new
+ * unless it is the same article URL already seen, so same-second siblings (RSS
+ * pubDates are often coarse/rounded) are not silently dropped.
  */
+export function isNewerThanWatermark(
+  item: NormalizedItem,
+  lastPublishedAt: number | null,
+  lastSeenUrl: string | null,
+): boolean {
+  if (lastPublishedAt == null) return true;
+  if (item.publishedAt > lastPublishedAt) return true;
+  // Same-second sibling: new only when we know the last URL and this is a
+  // different article. Unknown last URL falls back to strict `>` (no re-scan).
+  if (item.publishedAt === lastPublishedAt) return lastSeenUrl != null && item.sourceUrl !== lastSeenUrl;
+  return false;
+}
+
 export function filterNewByWatermark(
   items: NormalizedItem[],
   lastPublishedAt: number | null,
   maxPerFeed: number,
+  lastSeenUrl: string | null = null,
 ): NormalizedItem[] {
   const fresh = items
-    .filter(it => lastPublishedAt == null || it.publishedAt > lastPublishedAt)
+    .filter(it => isNewerThanWatermark(it, lastPublishedAt, lastSeenUrl))
     .sort((a, b) => b.publishedAt - a.publishedAt);
   return maxPerFeed > 0 ? fresh.slice(0, maxPerFeed) : fresh;
 }
@@ -176,7 +192,7 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
   try {
     const res = await env.DB.prepare(`
       SELECT id, category_id, feed_url, label, source_account, enabled, poll_interval_minutes,
-             last_checked_at, etag, last_modified, last_seen_item_published_at
+             last_checked_at, etag, last_modified, last_seen_item_published_at, last_seen_item_url
       FROM rss_sources
       WHERE enabled = 1 ${opts?.categoryId ? 'AND category_id = ?' : ''}
       ORDER BY id
@@ -199,15 +215,17 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
   // outcome of a worked feed — 304, error, parse_empty, all-duplicate, enqueue —
   // is observable). Lazy (not up-front) avoids an empty run on the frequent ticks
   // where every feed's slot is already taken.
+  // Probe-only (Phase 0) is also recorded — the first production step IS probe,
+  // and it must be visible in reports, not just console.
   const ensureRun = async (categoryId: string): Promise<void> => {
-    if (runCreated || cfg.probeOnly) return;
+    if (runCreated) return;
     runCategoryId = opts?.categoryId ?? categoryId;
     try {
       await env.DB.prepare(
-        `INSERT OR IGNORE INTO discovery_runs (id, category_id, platform, apify_dataset_id, status) VALUES (?, ?, 'rss', 'rss', 'processing')`,
-      ).bind(runId, runCategoryId).run();
+        `INSERT OR IGNORE INTO discovery_runs (id, category_id, platform, apify_dataset_id, status) VALUES (?, ?, 'rss', ?, 'processing')`,
+      ).bind(runId, runCategoryId, cfg.probeOnly ? 'rss_probe' : 'rss').run();
       runCreated = true;
-      await recordRunEvent(env, { runId, eventType: 'rss.ingest.started', phase: 'rss_ingest', categoryId: runCategoryId, platform: 'rss' });
+      await recordRunEvent(env, { runId, eventType: 'rss.ingest.started', phase: 'rss_ingest', categoryId: runCategoryId, platform: 'rss', metadata: { probeOnly: cfg.probeOnly } });
     } catch (err) {
       console.warn('[RSSIngest] run create failed:', err instanceof Error ? err.message : String(err));
     }
@@ -267,9 +285,9 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
       runFetched += normalized.length;
 
       const freshBeforeCap = normalized.filter(
-        it => src.last_seen_item_published_at == null || it.publishedAt > src.last_seen_item_published_at,
+        it => isNewerThanWatermark(it, src.last_seen_item_published_at, src.last_seen_item_url),
       ).length;
-      const fresh = filterNewByWatermark(normalized, src.last_seen_item_published_at, cfg.maxItemsPerFeed);
+      const fresh = filterNewByWatermark(normalized, src.last_seen_item_published_at, cfg.maxItemsPerFeed, src.last_seen_item_url);
       const droppedByCap = Math.max(0, freshBeforeCap - fresh.length);
 
       if (cfg.probeOnly) {
@@ -277,6 +295,12 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
         console.log('[RSSIngest][probe]', {
           source: src.source_account, status: fetched.status, contentType: fetched.contentType,
           items: normalized.length, latestTitle: latest?.text?.slice(0, 80),
+          latestUrl: latest?.sourceUrl, hasImage: (latest?.media?.length ?? 0) > 0,
+          hasFullText: Boolean(latest?.fullText),
+        });
+        await feedEvent(src, 'rss.feed.probe', {
+          status: fetched.status, contentType: fetched.contentType,
+          items: normalized.length, fresh: fresh.length,
           latestUrl: latest?.sourceUrl, hasImage: (latest?.media?.length ?? 0) > 0,
           hasFullText: Boolean(latest?.fullText),
         });
@@ -329,9 +353,14 @@ export async function runRssIngestion(env: Env, opts?: { categoryId?: string }):
         // dedup the article.
       }
 
-      // News-first watermark: advance past every fresh item we considered this
-      // run (enqueued, duplicate, or cap-dropped) so old backlog is not re-scanned.
-      if (fresh.length > 0) await advanceWatermark(env, src.id, fresh);
+      // Watermark policy:
+      //  - feed-cap drop (editorial news-first) → advance past, intentional.
+      //  - run/day cap drop (cost control, NOT editorial) → do NOT advance, so
+      //    the unprocessed items get a turn on a later tick (dedupe/unique handle
+      //    anything already enqueued). Prevents cost caps from permanently
+      //    discarding potentially-important news.
+      const capCostDropped = droppedByRunCap > 0 || droppedByDayCap > 0;
+      if (fresh.length > 0 && !capCostDropped) await advanceWatermark(env, src.id, fresh);
 
       const totalDuplicate = duplicateExisting + dedupeDuplicates;
       runEnqueued += inserted;
