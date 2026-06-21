@@ -12,6 +12,7 @@
 // ══════════════════════════════════════════════════════════════
 
 import type { NormalizedItem, MediaItem, Platform } from '../types';
+import { canonicalArticleUrl } from './rss-url';
 
 const APIFY_API_BASE = 'https://api.apify.com/v2';
 const FETCH_TIMEOUT_MS = 25_000;
@@ -557,19 +558,63 @@ function extractLinkedInMedia(raw: any): ExtractionResult {
 
 // ── RSS ───────────────────────────────────────────────────────
 
-function normalizeRssItem(raw: any): NormalizedItem | null {
-  const url = firstString(raw.url, raw.link, raw.guid);
-  if (!url) return null;
+const RSS_FULLTEXT_MAX_CHARS = 6000;
+const RSS_SUMMARY_MAX_CHARS = 800;
+
+/** Strip HTML tags and collapse whitespace from RSS content/description. */
+export function stripRssHtml(html: unknown): string {
+  return String(html ?? '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Normalize one RSS item (parser shape or legacy Apify-RSS shape).
+ *
+ * - `sourceUrl` and `postId` both use the canonical article URL (never `guid` —
+ *   Cointelegraph emits `guid=1`, which would collide). `idx_ai_candidate_queue_
+ *   source_url_unique` requires a stable form.
+ * - `sourceAccount` should be the canonical feed account (passed via
+ *   `opts.sourceAccount`), not the per-article author, so source caps work.
+ * - `text` is title + short summary (cheap scoring input); `fullText` carries
+ *   the stripped+capped `content:encoded` when the feed provides it.
+ */
+export function normalizeRssItem(
+  raw: any,
+  opts?: { sourceAccount?: string },
+): NormalizedItem | null {
+  const link = firstString(raw.link, raw.url, raw.guid);
+  if (!link) return null;
+
+  const canonical = canonicalArticleUrl(link);
+  const title = cleanText(raw.title ?? '');
+  const summary = stripRssHtml(raw.description).slice(0, RSS_SUMMARY_MAX_CHARS);
+  const fullStripped = stripRssHtml(raw.contentEncoded ?? raw['content:encoded'] ?? '');
+  const fullText = fullStripped ? fullStripped.slice(0, RSS_FULLTEXT_MAX_CHARS) : undefined;
+
+  const imageCandidates: string[] = Array.isArray(raw.imageCandidates) ? raw.imageCandidates : [];
+  const leadImage = imageCandidates.find(u => typeof u === 'string' && /^https:\/\//i.test(u));
+  const media: MediaItem[] = leadImage ? [{ type: 'image', url: leadImage }] : [];
 
   return compactNormalized({
     platform:       'rss',
-    sourceAccount:  firstString(raw.author, raw.creator, raw.feed) ?? '',
-    sourceUrl:      url,
-    postId:         firstString(raw.guid, url) ?? url,
+    sourceAccount:  opts?.sourceAccount || firstString(raw.sourceAccount, raw.author, raw.creator, raw.feed) || '',
+    sourceUrl:      canonical,
+    postId:         canonical,
     publishedAt:    parseTimestamp(raw.pubDate ?? raw.date ?? raw.published),
-    text:           cleanText((raw.title ?? '') + (raw.description ? '\n' + raw.description : '')),
-    media:          [],
-    expectedMediaCount: 0,
+    text:           cleanText(title + (summary ? '\n' + summary : '')),
+    fullText,
+    media,
+    expectedMediaCount: media.length,
     mediaWarnings: [],
     engagementLikes: 0,
     engagementShares: 0,

@@ -113,6 +113,18 @@ export interface Env {
   STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED?: string; // default: "true" — let materially-new follow-ups through
   STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED?: string; // default: "false" — allow heuristic semantic story blocking
   STORY_INTELLIGENCE_RETENTION_DAYS?: string;       // default: "30" — retention for story_intelligence_events
+  // ── RSS feed ingestion (independent, zero-Apify-cost source) ──
+  RSS_INGEST_ENABLED?: string;                      // default: "false" — master switch for RSS polling
+  RSS_FEED_PROBE_ONLY?: string;                     // default: "false" — fetch+parse+log only, no enqueue
+  RSS_INGEST_INTERVAL_MIN?: string;                 // default: "30" — per-feed poll interval
+  RSS_MAX_ITEMS_PER_FEED?: string;                  // default: "4" — new items enqueued per feed per run
+  RSS_MAX_NEW_ITEMS_PER_RUN?: string;               // default: "12" — across all feeds per run
+  RSS_MAX_NEW_ITEMS_PER_DAY?: string;               // default: "80" — across all feeds per day
+  RSS_FEED_TIMEOUT_SEC?: string;                    // default: "10" — per-feed fetch timeout
+  JINA_READER_ENABLED?: string;                     // default: "false" — full-text extraction for short-summary feeds
+  JINA_MIN_CONTENT_CHARS?: string;                  // default: "500" — below this, try Jina full text
+  JINA_MAX_CALLS_PER_DAY?: string;                  // default: "50" — daily Jina budget
+  JINA_API_KEY?: string;                            // optional — raises Jina rate limits
   DUPLICATE_AI_JUDGE_ENABLED?: string;             // default: "false" — Claude duplicate judge before translation/queue
   DUPLICATE_AI_JUDGE_MODEL?: string;               // default: AI_SCORING_MODEL
   DUPLICATE_AI_JUDGE_BATCH_SIZE?: string;          // default: "5"
@@ -222,6 +234,9 @@ export interface NormalizedItem {
   postId: string;
   publishedAt: number;
   text: string;
+  /** Optional full article body (RSS content:encoded / extracted full text).
+   *  Scoring uses `text` (title + summary); the RSS brief step uses `fullText`. */
+  fullText?: string;
   media: MediaItem[];
   /** Apify/source media count when the actor exposes it. Used for extraction diagnostics. */
   expectedMediaCount?: number;

@@ -34,6 +34,7 @@ import {
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
 import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
+import { enrichAndBriefRssSurvivors } from './rss-brief';
 import {
   getStoryIntelligenceWindowHours,
   isStoryFollowupAllowEnabled,
@@ -446,32 +447,60 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   }
 
   if (survivorIdx.length > 0) {
-    const survivorItems = survivorIdx.map(i => prepared[i]!.item);
-    const survivorAi = survivorIdx.map(i => decisions[i]!.ai);
-    const survivorAttribution = survivorIdx.map(i => ({
-      sourceAccount: prepared[i]!.item.sourceAccount,
-      sourceId: prepared[i]!.row.source_id ?? null,
-      candidateId: prepared[i]!.row.id,
-      discoveryItemId: itemIdForCandidate(prepared[i]!.row.id),
-      channelId: channels[0]?.id ?? null,
-    }));
-    try {
-      const translated = await attachTranslations(env, survivorItems, survivorAi, category, channels, survivorAttribution);
-      survivorIdx.forEach((i, k) => { decisions[i]!.ai = translated[k]!; });
-    } catch (err) {
-      // A transient translation-provider failure must NOT strand survivors in
-      // 'claimed'. Release them back to pending (retryable) and skip persisting
-      // them this tick; already-rejected items below are still recorded.
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[BacklogDrain] attachTranslations failed; releasing survivors to retry:', msg);
-      await releaseClaimedCandidatesToPending(
-        env,
-        survivorIdx.map(i => prepared[i]!.row.id),
-        `translation_error: ${msg}`,
-        { decrementAttempt: true },
-      );
-      survivorIdx.forEach(i => { decisions[i] = null; });
-      skipped += survivorIdx.length;
+    // Mixed batches (Apify X + RSS) take separate caption paths and fail
+    // independently — an RSS brief failure must never strand X survivors and
+    // vice-versa.
+    const nonRssSurvivorIdx = survivorIdx.filter(i => prepared[i]!.item.platform !== 'rss');
+    const rssSurvivorIdx = survivorIdx.filter(i => prepared[i]!.item.platform === 'rss');
+
+    // ── Non-RSS survivors: existing translation path (behavior UNCHANGED) ──
+    if (nonRssSurvivorIdx.length > 0) {
+      const survivorItems = nonRssSurvivorIdx.map(i => prepared[i]!.item);
+      const survivorAi = nonRssSurvivorIdx.map(i => decisions[i]!.ai);
+      const survivorAttribution = nonRssSurvivorIdx.map(i => ({
+        sourceAccount: prepared[i]!.item.sourceAccount,
+        sourceId: prepared[i]!.row.source_id ?? null,
+        candidateId: prepared[i]!.row.id,
+        discoveryItemId: itemIdForCandidate(prepared[i]!.row.id),
+        channelId: channels[0]?.id ?? null,
+      }));
+      try {
+        const translated = await attachTranslations(env, survivorItems, survivorAi, category, channels, survivorAttribution);
+        nonRssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = translated[k]!; });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[BacklogDrain] attachTranslations failed; releasing survivors to retry:', msg);
+        await releaseClaimedCandidatesToPending(
+          env,
+          nonRssSurvivorIdx.map(i => prepared[i]!.row.id),
+          `translation_error: ${msg}`,
+          { decrementAttempt: true },
+        );
+        nonRssSurvivorIdx.forEach(i => { decisions[i] = null; });
+        skipped += nonRssSurvivorIdx.length;
+      }
+    }
+
+    // ── RSS survivors: copyright-safe Persian brief (isolated failure) ──
+    if (rssSurvivorIdx.length > 0) {
+      const items = rssSurvivorIdx.map(i => prepared[i]!.item);
+      const ais = rssSurvivorIdx.map(i => decisions[i]!.ai);
+      const labels = rssSurvivorIdx.map(i => prepared[i]!.item.sourceAccount);
+      try {
+        const briefed = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
+        rssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = briefed[k]!; });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[BacklogDrain] RSS brief failed; releasing RSS survivors to retry:', msg);
+        await releaseClaimedCandidatesToPending(
+          env,
+          rssSurvivorIdx.map(i => prepared[i]!.row.id),
+          `rss_brief_error: ${msg}`,
+          { decrementAttempt: true },
+        );
+        rssSurvivorIdx.forEach(i => { decisions[i] = null; });
+        skipped += rssSurvivorIdx.length;
+      }
     }
   }
 
