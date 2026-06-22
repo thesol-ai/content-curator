@@ -156,6 +156,45 @@ export async function scoreItems(
     return items.map(item => mockResult(item, category, cfg.translationTargets));
   }
 
+  const localResults: Array<AIGateResult | null> = items.map(item =>
+    shouldUseLocalMustCoverScoring(item, category)
+      ? buildLocalMustCoverScoringResult(item)
+      : null,
+  );
+
+  if (localResults.every(Boolean)) {
+    return localResults as AIGateResult[];
+  }
+
+  if (localResults.some(Boolean)) {
+    const remainingItems: NormalizedItem[] = [];
+    const remainingAttribution: AttributionItem[] = [];
+    const remainingIndexes: number[] = [];
+
+    items.forEach((item, index) => {
+      if (localResults[index]) return;
+      remainingIndexes.push(index);
+      remainingItems.push(item);
+      if (attributionItems?.[index]) remainingAttribution.push(attributionItems[index]!);
+    });
+
+    const scoredRemaining = await runScoring(
+      env,
+      cfg,
+      remainingItems,
+      category,
+      whitelistedAccounts,
+      attributionItems ? remainingAttribution : undefined,
+    );
+
+    const merged = [...localResults];
+    remainingIndexes.forEach((originalIndex, scoredIndex) => {
+      merged[originalIndex] = scoredRemaining[scoredIndex]!;
+    });
+
+    return merged as AIGateResult[];
+  }
+
   return runScoring(env, cfg, items, category, whitelistedAccounts, attributionItems);
 }
 
@@ -267,6 +306,44 @@ export function applyMustCoverCryptoAssetOverride(
       publishPriority: result.publishPriority === 'low' ? 'normal' : result.publishPriority,
     };
   });
+}
+
+function hasUnsafeMustCoverSourceText(item: NormalizedItem): boolean {
+  const text = [item.text, item.fullText]
+    .map(v => String(v ?? '').toLowerCase())
+    .join(' ');
+
+  return /\b(scam|giveaway|airdrop claim|promo code|voucher|guaranteed return|guaranteed profit|risk-free|pump signal|pump group)\b/i.test(text);
+}
+
+function shouldUseLocalMustCoverScoring(item: NormalizedItem, category: CategoryRow): boolean {
+  return isCryptoCategory(category)
+    && item.platform === 'rss'
+    && hasMustCoverCryptoAsset(item)
+    && !hasUnsafeMustCoverSourceText(item);
+}
+
+function localMustCoverTopicFingerprint(item: NormalizedItem): string {
+  const raw = String(item.text || item.postId || item.sourceUrl || 'must-cover')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+  return `must-cover-${raw || item.postId || 'rss'}`;
+}
+
+function buildLocalMustCoverScoringResult(item: NormalizedItem): AIGateResult {
+  return {
+    publish: true,
+    score: 82,
+    riskLevel: 'low',
+    riskFlags: ['must_cover_crypto_asset', 'local_must_cover_scoring'],
+    topicFingerprint: localMustCoverTopicFingerprint(item),
+    publishPriority: 'normal',
+    translations: {},
+  };
 }
 
 function itemScoringText(item: NormalizedItem, useExpandedRssText: boolean, maxTextChars: number): string {
@@ -485,11 +562,17 @@ async function runScoring(
     status: 'failed',
     errorMessage: lastErr,
   });
-  return items.map(item => ({
-    publish: false, score: 0, riskLevel: 'medium' as const,
-    riskFlags: ['scoring_error'], topicFingerprint: `err-${item.postId}`,
-    publishPriority: 'normal' as const, translations: {},
+  const fallbackResults = items.map(item => ({
+    publish: false,
+    score: 0,
+    riskLevel: 'medium' as const,
+    riskFlags: ['scoring_error'],
+    topicFingerprint: `err-${item.postId}`,
+    publishPriority: 'normal' as const,
+    translations: {},
   }));
+
+  return applyMustCoverCryptoAssetOverride(fallbackResults, items, category);
 }
 
 function isCryptoCategory(category: CategoryRow): boolean {
