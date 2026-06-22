@@ -155,6 +155,69 @@ export function clampCaption(text: unknown, max: number): string {
   return t.slice(0, max).replace(/\s+\S*$/, '').trim();
 }
 
+
+function briefTitleKey(text: string): string {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[.。؟?!،؛:：]+/gu, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function repairRepeatedTitleSegments(text: string): string {
+  const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!clean) return clean;
+
+  const parts = clean.split(/\s*[:：]\s*/u);
+  if (parts.length < 3) return clean;
+
+  const out: string[] = [];
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+
+    const prev = out[out.length - 1] ?? '';
+    const prevKey = briefTitleKey(prev);
+    const partKey = briefTitleKey(part);
+
+    if (partKey && prevKey.endsWith(partKey)) continue;
+    out.push(part);
+  }
+
+  return out.join(': ');
+}
+
+function briefTitleWithPeriod(text: string): string {
+  const clean = repairRepeatedTitleSegments(text)
+    .replace(/[.。؟?!،؛:：]+$/u, '')
+    .trim();
+
+  return clean ? `${clean}.` : clean;
+}
+
+function ensureCaptionFullLeadTitle(captionShort: string, captionFull: string): string {
+  const title = briefTitleWithPeriod(captionShort);
+  const body = String(captionFull ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!title) return body;
+  if (!body) return title;
+
+  const lines = body.split(/\n+/u);
+  const firstLine = briefTitleWithPeriod(lines[0] ?? '');
+  const firstKey = briefTitleKey(firstLine);
+  const titleKey = briefTitleKey(title);
+
+  if (firstKey && (firstKey === titleKey || firstKey.includes(titleKey) || titleKey.includes(firstKey))) {
+    return [title, ...lines.slice(1)].join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  return `${title}\n\n${body}`;
+}
+
 /** Append deterministic source attribution so it never depends on the model. */
 export function withAttribution(captionFull: string, label: string, url: string): string {
   const line = `\n\n🔗 منبع: ${label} — ${url}`;
@@ -176,14 +239,24 @@ export function sanitizeBrief(
   draft: { captionShort?: unknown; captionFull?: unknown; hashtags?: unknown },
   sourceText: string,
 ): BriefDraft | null {
-  const captionFull = clampCaption(draft.captionFull, CAPTION_FULL_MAX);
+  const rawCaptionFull = clampCaption(draft.captionFull, CAPTION_FULL_MAX);
+  if (rawCaptionFull.length < 60) return null;
+
+  const captionShort = repairRepeatedTitleSegments(
+    clampCaption(draft.captionShort || rawCaptionFull.split('
+')[0] || rawCaptionFull, CAPTION_SHORT_MAX)
+  );
+  if (captionShort.length < 12) return null;
+  if (hasBadRssBriefStyle(captionShort)) return null;
+
+  const captionFull = clampCaption(
+    ensureCaptionFullLeadTitle(captionShort, rawCaptionFull),
+    CAPTION_FULL_MAX,
+  );
+
   if (captionFull.length < 60) return null;
   if (hasLongVerbatimOverlap(captionFull, sourceText)) return null;
   if (hasBadRssBriefStyle(captionFull)) return null;
-
-  const captionShort = clampCaption(draft.captionShort || captionFull.split('\n')[0] || captionFull, CAPTION_SHORT_MAX);
-  if (captionShort.length < 12) return null;
-  if (hasBadRssBriefStyle(captionShort)) return null;
 
   const hashtags = Array.isArray(draft.hashtags)
     ? draft.hashtags.map(h => String(h).replace(/^#/, '').trim()).filter(Boolean).slice(0, 5)
