@@ -221,6 +221,21 @@ export async function attachTranslations(
 // مرحله ۱ — Claude Scoring
 // ══════════════════════════════════════════════════════════════
 
+function itemScoringText(item: NormalizedItem, useExpandedRssText: boolean, maxTextChars: number): string {
+  const baseMax = Number.isFinite(maxTextChars) && maxTextChars > 0 ? maxTextChars : 400;
+
+  if (!useExpandedRssText || item.platform !== 'rss') {
+    return String(item.text ?? '').slice(0, baseMax);
+  }
+
+  const rssMax = Math.max(baseMax, 1200);
+  return [item.text, item.fullText]
+    .map(v => String(v ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .slice(0, rssMax);
+}
+
 async function runScoring(
   env: Env,
   cfg: Config,
@@ -268,6 +283,20 @@ async function runScoring(
     ? (getAudienceProfileGuidance(primaryAudienceKey(cfg.languageTargets)) ?? '')
     : '';
 
+  const isTrustedCryptoRssScoring = isCryptoCategory(category) && items.some(it => it.platform === 'rss');
+  const trustedCryptoRssGuidance = isTrustedCryptoRssScoring
+    ? [
+        'Trusted RSS crypto news policy:',
+        'For trusted RSS crypto news sources, default to publish=true for fresh, factual crypto news unless it is clearly duplicate, non-crypto, obvious marketing, scam-risk, pump-risk, or too minor.',
+        'Do NOT require direct Iran-specific impact for trusted RSS news. Persian crypto readers follow global crypto markets.',
+        'Iran/Persian-market relevance is a plus, not a requirement.',
+        'Publish standard news about Bitcoin, Ethereum, major altcoins, ETFs, stablecoins, regulation, MiCA, SEC/CFTC/CME, exchange risk, exploits, bridge hacks, DeFi, RWA/tokenization, institutional treasury activity, mining, staking, crypto tax, macro events explicitly tied to BTC/crypto, and major token price moves.',
+        'Do not reject BTC/ETH/XRP/SOL market analysis solely because it is price-related. Reject only if it is pure unsupported prediction, financial advice, pump language, or low-context chart noise.',
+        'Use score 60-85 for normal publishable crypto news, 85+ for breaking or highly important news, and below 55 only for weak/minor items.',
+        'Use publish=false only when the item is clearly not worth publishing, unsafe, duplicate, promotional, or unrelated to crypto.',
+      ].join('\n')
+    : '';
+
   // Phase 6K (observe-only): when enabled, also ask for structured story fields.
   // Default off → JSON contract unchanged.
   const storyIntelEnabled = isStoryIntelligenceEnabled(env);
@@ -285,6 +314,7 @@ async function runScoring(
     scoringEditorialPolicy,
     categoryScoringPolicy,
     audienceGuidance,
+    trustedCryptoRssGuidance,
     storyIntelInstr,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
@@ -316,7 +346,7 @@ async function runScoring(
     account: it.sourceAccount,
     in_whitelist: whitelist.includes(it.sourceAccount),
     published_at: new Date(it.publishedAt * 1000).toISOString(),
-    text: it.text.slice(0, cfg.maxTextChars),
+    text: itemScoringText(it, isTrustedCryptoRssScoring, cfg.maxTextChars),
     likes: it.engagementLikes,
     shares: it.engagementShares,
     views: it.engagementViews,
