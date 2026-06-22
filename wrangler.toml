@@ -91,12 +91,12 @@ workers_dev = true
 [env.production.vars]
 ENVIRONMENT   = "production"
 LOG_LEVEL     = "info"
-APIFY_CURATION_ENABLED = "true"
+APIFY_CURATION_ENABLED = "false"
 APIFY_CURATION_DRY_RUN = "false"
 APIFY_SCHEDULED_CURATION_ENABLED = "false"
 APIFY_MAX_ITEMS_PER_SOURCE = "40"
 APIFY_RAW_FETCH_LIMIT_PER_SOURCE = "120"
-APIFY_ROTATION_ENABLED = "true"
+APIFY_ROTATION_ENABLED = "false"
 APIFY_ROTATION_INTERVAL_HOURS = "3"
 APIFY_ROTATION_WAIT_FOR_FINISH_SECONDS = "60"
 APIFY_ROTATION_MAX_SOURCES_PER_TICK = "2"
@@ -109,6 +109,7 @@ AI_MAX_CANDIDATES_PER_RUN     = "10"
 AI_MAX_TEXT_CHARS_PER_ITEM    = "400"
 AI_MAX_OUTPUT_TOKENS          = "4096"
 AI_MAX_RETRIES                = "2"
+CLAUDE_SCORING_DISABLED = "true"
 
 # ── AI Candidate Backlog (Phase 1) ────────────────────────────
 # Production: enabled explicitly so fresh items are queued and drained safely.
@@ -124,9 +125,9 @@ AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER = "6"
 
 # ── Phase 6F: Adaptive rotation + queue-health controller + scheduler ──
 # All default to current behavior. Roll out one flag at a time per channel.
-APIFY_ROTATION_CONTINUOUS_ENABLED = "true"
+APIFY_ROTATION_CONTINUOUS_ENABLED = "false"
 APIFY_ROTATION_SLOT_MINUTES = "240"     # one designated source per 240-min slot (3 enabled sources / 3h, evenly)
-QUEUE_HEALTH_CONTROLLER_ENABLED = "true"
+QUEUE_HEALTH_CONTROLLER_ENABLED = "false"
 QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H  = "3"      # healthy floor for scheduled posts in next 6h
 QUEUE_HEALTH_STARVING_MAX_BATCHES   = "3"      # scoring batches per tick while starving (normal stays AI_MAX_SCORING_BATCHES_PER_RUN)
 QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS = "50"
@@ -162,7 +163,7 @@ JINA_MIN_CONTENT_CHARS = "500"
 JINA_MAX_CALLS_PER_DAY = "120"
 RSS_BRIEF_MAX_CALLS_PER_DAY = "120"
 RSS_BRIEF_TIMEOUT_SEC = "25"
-DUPLICATE_AI_JUDGE_ENABLED = "true"
+DUPLICATE_AI_JUDGE_ENABLED = "false"
 DUPLICATE_AI_JUDGE_BATCH_SIZE = "5"
 DUPLICATE_AI_JUDGE_MAX_PRIORS = "20"
 DUPLICATE_AI_JUDGE_WINDOW_HOURS = "72"

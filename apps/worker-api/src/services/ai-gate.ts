@@ -156,11 +156,30 @@ export async function scoreItems(
     return items.map(item => mockResult(item, category, cfg.translationTargets));
   }
 
+  const claudeScoringDisabled = String((env as any).CLAUDE_SCORING_DISABLED ?? '').toLowerCase() === 'true';
+
   const localResults: Array<AIGateResult | null> = items.map(item =>
     shouldUseLocalMustCoverScoring(item, category)
       ? buildLocalMustCoverScoringResult(item)
       : null,
   );
+
+  if (claudeScoringDisabled) {
+    return items.map((item, index) => {
+      const local = localResults[index];
+      if (local) return local;
+
+      return {
+        publish: false,
+        score: 0,
+        riskLevel: 'medium' as const,
+        riskFlags: ['claude_scoring_disabled'],
+        topicFingerprint: `scoring-disabled-${item.postId}`,
+        publishPriority: 'low' as const,
+        translations: {},
+      };
+    });
+  }
 
   if (localResults.every(Boolean)) {
     return localResults as AIGateResult[];
