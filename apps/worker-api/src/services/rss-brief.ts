@@ -164,9 +164,32 @@ export function sanitizeBrief(
   return { captionShort, captionFull, hashtags };
 }
 
+
+function firstMeaningfulPersianCaptionChar(text: string): string {
+  for (const ch of Array.from(String(text ?? '').trim())) {
+    if (!ch.trim()) continue;
+
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0xfe0f || cp === 0x200c || cp === 0x200d) continue;
+    if (cp >= 0x1f000 || (cp >= 0x2600 && cp <= 0x27bf)) continue;
+    if (/^[\s"'“”‘’«»()[\]{}<>.,:;،؛.!?؟\-–—_+*=|\\/@#$]+$/u.test(ch)) continue;
+
+    return ch;
+  }
+
+  return '';
+}
+
+function hasValidPersianRtlLead(text: string): boolean {
+  const ch = firstMeaningfulPersianCaptionChar(text);
+  if (!ch) return true;
+  return /\p{Script=Arabic}/u.test(ch);
+}
+
 function hasBadRssBriefStyle(text: string): boolean {
   const t = String(text ?? '').trim();
   if (!t) return true;
+  if (!hasValidPersianRtlLead(t)) return true;
 
   // RSS posts must look like the normal Telegram caption style, not a legal memo
   // pretending to be a crypto post.
@@ -192,6 +215,14 @@ function buildBriefSystem(): string {
     '- Do not write legal/corporate Persian. Use clear Iranian Persian that a normal crypto reader understands on first read.',
     '- Avoid awkward literal terms. Examples: write «ارائه‌دهنده خدمات رمزارزی» instead of CASP jargon; write «قرارداد دائمی» for perpetual; explain dense terms briefly if needed.',
     '- Banned Persian wording: کاسپ، اختیار‌دهی، به‌عهده‌دهند، رانندگی‌های ارائه‌دهنده، نشان‌دهندهٔ، نشان‌دهنده.',
+    '',
+    'Persian RTL + emoji rules:',
+    '- captionShort and captionFull must start cleanly for Persian Telegram rendering.',
+    '- Optional leading emoji is allowed only if formal and directly relevant; do not force emoji.',
+    '- If an emoji is used, use exactly one formal emoji from this set only: 📌 📊 ⚖️ 🏦 🔐 🚨 🔎.',
+    '- The first real word after any emoji/spacing MUST be Persian.',
+    '- Never start captionShort or captionFull with an English word, Latin brand name, ticker, number, @handle, URL, hashtag, or punctuation-led English phrase.',
+    '- Do not use a fixed/static Persian prefix. Rewrite naturally. Example: use «صندوق UBS ...» not «UBS ...».',
     '',
     'Required format:',
     '- captionShort: a clean Persian title, 45–110 chars.',

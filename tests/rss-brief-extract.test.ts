@@ -78,6 +78,32 @@ describe('sanitizeBrief', () => {
     expect(draft!.captionFull).not.toContain('منبع:');
   });
 
+  it('accepts one formal leading emoji when the first real word is Persian', () => {
+    const draft = sanitizeBrief(
+      {
+        captionShort: '🔐 هشدار امنیتی تازه درباره کیف‌پول‌های رمزارزی منتشر شد',
+        captionFull: '🔐 هشدار امنیتی تازه درباره کیف‌پول‌های رمزارزی منتشر شد\\n\\nمایکروسافت درباره بدافزاری هشدار داده که کلیدهای خصوصی و عبارات بازیابی را هدف می‌گیرد. کاربران باید آدرس‌ها را قبل از ارسال دارایی بررسی کنند و عبارت بازیابی را از سیستم‌های روزمره جدا نگه دارند.',
+        hashtags: ['crypto', 'security'],
+      },
+      source,
+    );
+
+    expect(draft).not.toBeNull();
+  });
+
+  it('rejects RSS briefs that start with a Latin brand before Persian text', () => {
+    const draft = sanitizeBrief(
+      {
+        captionShort: 'UBS صندوق توکن‌شده را برای وثیقه معاملات آزمایش کرد',
+        captionFull: 'UBS صندوق توکن‌شده را برای وثیقه معاملات آزمایش کرد\\n\\nاین خبر درباره استفاده از صندوق پول‌بازار توکن‌شده در معاملات صرافی است و نشان می‌دهد ساختارهای مالی سنتی آرام‌آرام وارد زیرساخت رمزارز می‌شوند.',
+        hashtags: ['crypto', 'rwa'],
+      },
+      source,
+    );
+
+    expect(draft).toBeNull();
+  });
+
   it('rejects when caption is too short', () => {
     expect(sanitizeBrief({ captionFull: 'کوتاه' }, source)).toBeNull();
   });
