@@ -73,19 +73,20 @@ function getRssBriefConfig(env: Env): RssBriefConfig {
   };
 }
 
-async function countBriefCallsToday(env: Env): Promise<number> {
+async function countBriefCallsToday(env: Env, cfg: RssBriefConfig): Promise<number> {
   if (!env.DB) return 0;
   try {
-    // Count only real model calls (success + failed). Daily-cap "skipped" entries
-    // record no API call — counting them would self-inflate the budget counter
-    // and lock the cap open past midnight (each cap-hit emits one skipped, which
-    // then appears in the count the next tick, perpetuating the cap).
+    // Count only real calls for the active RSS brief provider/model. Claude outage
+    // history must not block Gemini fallback tests, and vice versa. Daily-cap
+    // "skipped" entries record no API call and are intentionally excluded.
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM ai_usage
-      WHERE purpose = 'rss_brief'
+      WHERE provider = ?
+        AND purpose = 'rss_brief'
+        AND model = ?
         AND status IN ('success','failed')
         AND created_at > datetime('now','-1 day')
-    `).first<{ count: number }>();
+    `).bind(cfg.provider, cfg.model).first<{ count: number }>();
     return Number(row?.count ?? 0);
   } catch {
     return 0;
@@ -116,7 +117,7 @@ export async function getRssBriefBudgetState(env: Env): Promise<RssBriefBudgetSt
   if (cfg.maxCallsPerDay <= 0) {
     return { unlimited: true, exhausted: false, callsToday: 0, maxCallsPerDay: 0, remaining: Infinity };
   }
-  const callsToday = await countBriefCallsToday(env);
+  const callsToday = await countBriefCallsToday(env, cfg);
   const remaining = Math.max(0, cfg.maxCallsPerDay - callsToday);
   return { unlimited: false, exhausted: remaining <= 0, callsToday, maxCallsPerDay: cfg.maxCallsPerDay, remaining };
 }
@@ -402,7 +403,7 @@ export async function enrichAndBriefRssSurvivors(
   const capDeferredIndexes: number[] = [];
   let capLogged = false;
 
-  let callsToday = await countBriefCallsToday(env);
+  let callsToday = await countBriefCallsToday(env, briefCfg);
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
