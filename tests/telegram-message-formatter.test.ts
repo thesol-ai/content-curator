@@ -304,3 +304,18 @@ describe('RSS title rendering in Telegram captions', () => {
     expect(result.html).not.toContain('رسید..');
   });
 });
+
+describe('RSS single-newline title rendering', () => {
+  it('renders a Persian first-line title as bold even with a single newline separator', () => {
+    const result = formatTelegramMessage({
+      body: `بازار دارایی‌های توکنی شده به ۵۱ میلیارد دلار رسید
+سرمایه‌گذاری در دارایی‌های واقعی توکنی شده در سال گذشته رشد کرده است.`,
+      sourceUrl: 'https://example.com',
+      language: 'fa',
+      channel: channel({ source_enabled: 0 }),
+      maxLength: 4096,
+    });
+
+    expect(result.html).toContain('<b>بازار دارایی‌های توکنی شده به ⁦۵۱⁩ میلیارد دلار رسید.</b>\n\nسرمایه‌گذاری');
+  });
+});

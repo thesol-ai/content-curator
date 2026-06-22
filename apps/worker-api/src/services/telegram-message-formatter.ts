@@ -33,7 +33,7 @@ const DEFAULT_SOURCE_LABELS: Record<string, string> = {
 
 const ELLIPSIS = '…';
 const FOOTER_SEPARATOR = '\n\n';
-const TITLE_SEPARATOR_RE = /^([^\n]{12,180})\n\s*\n([\s\S]{20,})$/u;
+const TITLE_SEPARATOR_RE = /^([^\n]{12,180})\n+\s*([\s\S]{20,})$/u;
 
 // Telegram clients can visually reorder decimal/percent numbers inside Persian RTL text.
 // Example: "۲.۵ درصد" may be rendered as "۵.۲" on some clients.
