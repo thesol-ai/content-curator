@@ -770,7 +770,7 @@ function isContinuousRotationEnabled(env: Env): boolean {
 
 export function getRotationSlotMinutes(env: Env): number {
   const value = Number((env as any).APIFY_ROTATION_SLOT_MINUTES ?? 30);
-  return Number.isFinite(value) && value > 0 ? Math.min(Math.max(Math.floor(value), 5), 180) : 30;
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.max(Math.floor(value), 5), 240) : 30;
 }
 
 function getContinuousSourcesPerSlot(env: Env): number {
