@@ -221,6 +221,54 @@ export async function attachTranslations(
 // مرحله ۱ — Claude Scoring
 // ══════════════════════════════════════════════════════════════
 
+const MUST_COVER_TICKER_RE =
+  /\$?(?:USDT|USDC|BTC|ETH|BNB|SOL|DOGE|ADA|XRP|TRX|HYPE|TON)\b/u;
+
+const MUST_COVER_NAME_RE =
+  /\b(?:Bitcoin|Ethereum|Tether|USD Coin|Circle USD|BNB Chain|Solana|Dogecoin|Cardano|Ripple|XRP Ledger|Tron|TRON|Hyperliquid|Toncoin|Telegram Open Network|Gram)\b/iu;
+
+export function hasMustCoverCryptoAsset(item: NormalizedItem): boolean {
+  const text = [item.text, item.fullText, item.sourceUrl, item.postId]
+    .map(v => String(v ?? ''))
+    .join('\n');
+
+  return MUST_COVER_TICKER_RE.test(text) || MUST_COVER_NAME_RE.test(text);
+}
+
+function hasUnsafeMustCoverRisk(result: AIGateResult): boolean {
+  const flags = (result.riskFlags ?? []).join(' ').toLowerCase();
+
+  return result.riskLevel === 'high'
+    || /scam|pump|pump_and_dump|market_manipulation|financial_advice|sponsored_content|unverified_claims/.test(flags);
+}
+
+export function applyMustCoverCryptoAssetOverride(
+  results: AIGateResult[],
+  items: NormalizedItem[],
+  category: CategoryRow,
+): AIGateResult[] {
+  if (!isCryptoCategory(category)) return results;
+
+  return results.map((result, index) => {
+    const item = items[index];
+    if (!item || item.platform !== 'rss') return result;
+    if (!hasMustCoverCryptoAsset(item)) return result;
+    if (hasUnsafeMustCoverRisk(result)) return result;
+
+    const flags = new Set(result.riskFlags ?? []);
+    flags.add('must_cover_crypto_asset');
+
+    return {
+      ...result,
+      publish: true,
+      score: Math.max(result.score ?? 0, 75),
+      riskLevel: result.riskLevel === 'high' ? 'medium' : result.riskLevel,
+      riskFlags: Array.from(flags).slice(0, 10),
+      publishPriority: result.publishPriority === 'low' ? 'normal' : result.publishPriority,
+    };
+  });
+}
+
 function itemScoringText(item: NormalizedItem, useExpandedRssText: boolean, maxTextChars: number): string {
   const baseMax = Number.isFinite(maxTextChars) && maxTextChars > 0 ? maxTextChars : 400;
 
@@ -297,6 +345,17 @@ async function runScoring(
       ].join('\n')
     : '';
 
+  const hasMustCoverAssetsInBatch = isCryptoCategory(category) && items.some(hasMustCoverCryptoAsset);
+  const mustCoverCryptoAssetGuidance = hasMustCoverAssetsInBatch
+    ? [
+        'Must-cover crypto asset policy:',
+        'The following assets are priority assets for the Persian/Iran crypto audience: USDT, USDC, BTC, ETH, BNB, SOL, DOGE, ADA, XRP, TRX, HYPE, TON, Gram.',
+        'If an item is fresh factual RSS news about any must-cover asset, set publish=true unless it is clearly unsafe, scam/pump, duplicate, or unrelated.',
+        'Do not reject must-cover asset news merely because it is market analysis, price movement, ETF/fund flow, regulation, stablecoin, exchange, security, DeFi, custody, institutional treasury, mining, staking, or macro news tied to crypto.',
+        'For must-cover asset news, use score at least 75 for ordinary publishable news and higher for important/breaking news.',
+      ].join('\n')
+    : '';
+
   // Phase 6K (observe-only): when enabled, also ask for structured story fields.
   // Default off → JSON contract unchanged.
   const storyIntelEnabled = isStoryIntelligenceEnabled(env);
@@ -315,6 +374,7 @@ async function runScoring(
     categoryScoringPolicy,
     audienceGuidance,
     trustedCryptoRssGuidance,
+    mustCoverCryptoAssetGuidance,
     storyIntelInstr,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
@@ -344,6 +404,7 @@ async function runScoring(
     post_id: it.postId,
     platform: it.platform,
     account: it.sourceAccount,
+    must_cover_asset: hasMustCoverCryptoAsset(it),
     in_whitelist: whitelist.includes(it.sourceAccount),
     published_at: new Date(it.publishedAt * 1000).toISOString(),
     text: itemScoringText(it, isTrustedCryptoRssScoring, cfg.maxTextChars),
@@ -408,7 +469,9 @@ async function runScoring(
       const parsed = extractJsonObject(text);
       if (!parsed) { lastErr = 'No valid JSON in response'; continue; }
       if (!Array.isArray(parsed.items)) { lastErr = 'Missing items array in JSON'; continue; }
-      return applyPostScoringHardGate(mapScoringResults(parsed.items, items), items, category);
+      const mappedResults = mapScoringResults(parsed.items, items);
+      const hardGatedResults = applyPostScoringHardGate(mappedResults, items, category);
+      return applyMustCoverCryptoAssetOverride(hardGatedResults, items, category);
     } catch (e) { lastErr = e instanceof Error ? e.message : String(e); }
   }
 

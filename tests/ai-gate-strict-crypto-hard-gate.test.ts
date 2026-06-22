@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyPostScoringHardGate } from '../apps/worker-api/src/services/ai-gate';
+import { applyMustCoverCryptoAssetOverride, applyPostScoringHardGate, hasMustCoverCryptoAsset } from '../apps/worker-api/src/services/ai-gate';
 
 const cryptoCategory = {
   id: 'crypto',
@@ -73,5 +73,60 @@ describe('AI strict crypto hard gate', () => {
 
     expect(result.publish).toBe(true);
     expect(result.score).toBe(92);
+  });
+});
+
+
+describe('must-cover crypto assets', () => {
+  it('detects priority crypto assets in RSS item text', () => {
+    expect(hasMustCoverCryptoAsset(item({
+      platform: 'rss',
+      text: 'USDT liquidity on Tron increased while BTC stayed range-bound.',
+    }))).toBe(true);
+
+    expect(hasMustCoverCryptoAsset(item({
+      platform: 'rss',
+      text: 'A generic fintech hiring update with no major crypto asset mentioned.',
+    }))).toBe(false);
+  });
+
+  it('restores publish for safe must-cover asset news rejected by scoring', () => {
+    const [result] = applyMustCoverCryptoAssetOverride([
+      ai({
+        publish: false,
+        score: 0,
+        riskLevel: 'medium',
+        riskFlags: ['ai_not_publish'],
+        publishPriority: 'low',
+      }),
+    ], [
+      item({
+        platform: 'rss',
+        text: 'USDC and USDT flows on exchanges rose as BTC volatility increased.',
+      }),
+    ], cryptoCategory);
+
+    expect(result.publish).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(75);
+    expect(result.riskFlags).toContain('must_cover_crypto_asset');
+    expect(result.publishPriority).toBe('normal');
+  });
+
+  it('does not override high-risk must-cover asset content', () => {
+    const [result] = applyMustCoverCryptoAssetOverride([
+      ai({
+        publish: false,
+        score: 0,
+        riskLevel: 'high',
+        riskFlags: ['pump_and_dump'],
+      }),
+    ], [
+      item({
+        platform: 'rss',
+        text: 'DOGE pump campaign promises guaranteed returns.',
+      }),
+    ], cryptoCategory);
+
+    expect(result.publish).toBe(false);
   });
 });

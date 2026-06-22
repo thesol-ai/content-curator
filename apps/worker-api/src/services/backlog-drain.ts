@@ -1,5 +1,5 @@
 import type { Env, AICandidateRow, AICandidateStatus, AIGateResult, CategoryRow, ChannelRow, NormalizedItem } from '../types';
-import { attachTranslations, runAIGate, scoreItems } from './ai-gate';
+import { attachTranslations, hasMustCoverCryptoAsset, runAIGate, scoreItems } from './ai-gate';
 import { recordDedupeKeys } from './dedupe';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { runRuleGate } from './rule-gate';
@@ -270,6 +270,25 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   return result;
 }
 
+function hasUnsafeMustCoverAiRisk(ai: AIGateResult): boolean {
+  const flags = (ai.riskFlags ?? []).join(' ').toLowerCase();
+
+  return ai.riskLevel === 'high'
+    || /scam|pump|pump_and_dump|market_manipulation|financial_advice|sponsored_content|unverified_claims/.test(flags);
+}
+
+function isSafeMustCoverRssCandidate(item: NormalizedItem, ai?: AIGateResult): boolean {
+  if (item.platform !== 'rss') return false;
+  if (!hasMustCoverCryptoAsset(item)) return false;
+  if (ai && hasUnsafeMustCoverAiRisk(ai)) return false;
+  return true;
+}
+
+function shouldBypassPreAiRejectForMustCover(item: NormalizedItem, reason: string): boolean {
+  if (!isSafeMustCoverRssCandidate(item)) return false;
+  return !/scam|pump|promotional|campaign|marketing|non_crypto/i.test(reason);
+}
+
 async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCallBonus = 0): Promise<{
   scored: number;
   selected: number;
@@ -328,7 +347,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     }
 
     const preAiReject = getPreAiContentRejectReason(parsed.item, category);
-    if (preAiReject) {
+    if (preAiReject && !shouldBypassPreAiRejectForMustCover(parsed.item, preAiReject)) {
       const itemId = itemIdForCandidate(row.id);
       const ai = buildPolicyRejectAiResult(parsed.item, preAiReject);
       await saveDiscoveryItem(env, itemId, row.run_id ?? 'backlog', row.category_id, parsed.item, ai, 'ai_rejected', preAiReject);
@@ -736,13 +755,17 @@ function resolveCandidateRejectReason(
   item: NormalizedItem,
   similarTopicRejected: boolean,
 ): string | null {
+  const mustCover = isSafeMustCoverRssCandidate(item, ai);
+  const themeReject = mustCover ? null : ev.themeCapRejectReason;
+  const audienceReject = mustCover ? null : ev.audienceRejectReason;
+
   return ev.recentTopicDuplicate
     ? 'similar_topic_recent_channel'
     : ev.recentStoryClusterDuplicate
       ? 'similar_story_cluster_recent_channel'
       : ev.storyKeyRejectReason
-        ?? ev.themeCapRejectReason
-        ?? ev.audienceRejectReason
+        ?? themeReject
+        ?? audienceReject
         ?? getItemRejectReason(ai, category, item, similarTopicRejected);
 }
 
