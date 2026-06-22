@@ -28,10 +28,27 @@ const BAD_RSS_BRIEF_PHRASES = [
   'نشان‌دهنده',
 ];
 
+type RssBriefProvider = 'anthropic' | 'gemini';
+
 interface RssBriefConfig {
+  provider: RssBriefProvider;
   model: string;
   maxCallsPerDay: number;
   timeoutMs: number;
+}
+
+function normalizeRssBriefProvider(env: Env): RssBriefProvider {
+  const explicit = String((env as any).RSS_BRIEF_PROVIDER ?? '').trim().toLowerCase();
+  if (explicit === 'gemini') return 'gemini';
+  if (explicit === 'anthropic' || explicit === 'claude') return 'anthropic';
+
+  const claudeScoringDisabled = String((env as any).CLAUDE_SCORING_DISABLED ?? '').toLowerCase() === 'true';
+  if (claudeScoringDisabled) {
+    const translationProvider = String((env as any).TRANSLATION_PROVIDER ?? 'gemini').trim().toLowerCase();
+    if (translationProvider === 'gemini') return 'gemini';
+  }
+
+  return 'anthropic';
 }
 
 function getRssBriefConfig(env: Env): RssBriefConfig {
@@ -39,10 +56,20 @@ function getRssBriefConfig(env: Env): RssBriefConfig {
     const x = Math.floor(Number(v));
     return Number.isFinite(x) ? x : d;
   };
+
+  const provider = normalizeRssBriefProvider(env);
+  const model = String(
+    (env as any).RSS_BRIEF_MODEL
+      || (provider === 'gemini'
+        ? ((env as any).TRANSLATION_MODEL || 'gemini-2.5-flash-lite')
+        : ((env as any).DUPLICATE_AI_JUDGE_MODEL || (env as any).AI_SCORING_MODEL || 'claude-haiku-4-5-20251001'))
+  );
+
   return {
-    model: env.RSS_BRIEF_MODEL || env.DUPLICATE_AI_JUDGE_MODEL || env.AI_SCORING_MODEL,
-    maxCallsPerDay: Math.max(0, n(env.RSS_BRIEF_MAX_CALLS_PER_DAY, 20)),
-    timeoutMs: Math.max(5000, n(env.RSS_BRIEF_TIMEOUT_SEC, 25) * 1000),
+    provider,
+    model,
+    maxCallsPerDay: Math.max(0, n((env as any).RSS_BRIEF_MAX_CALLS_PER_DAY, 20)),
+    timeoutMs: Math.max(5000, n((env as any).RSS_BRIEF_TIMEOUT_SEC, 25) * 1000),
   };
 }
 
@@ -55,7 +82,7 @@ async function countBriefCallsToday(env: Env): Promise<number> {
     // then appears in the count the next tick, perpetuating the cap).
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM ai_usage
-      WHERE provider = 'anthropic' AND purpose = 'rss_brief'
+      WHERE purpose = 'rss_brief'
         AND status IN ('success','failed')
         AND created_at > datetime('now','-1 day')
     `).first<{ count: number }>();
@@ -243,26 +270,72 @@ function extractJson(text: string): any | null {
   try { return JSON.parse(cleaned.slice(first, last + 1)); } catch { return null; }
 }
 
-async function recordBriefUsage(env: Env, model: string, inT: number, outT: number, status: string, note?: string): Promise<void> {
+async function recordBriefUsage(env: Env, provider: RssBriefProvider, model: string, inT: number, outT: number, status: string, note?: string): Promise<void> {
   if (!env.DB) return;
   try {
     const id = `rss_brief_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     await env.DB.prepare(`
       INSERT INTO ai_usage (id, provider, purpose, model, input_tokens, output_tokens, status, error_message)
-      VALUES (?, 'anthropic', 'rss_brief', ?, ?, ?, ?, ?)
-    `).bind(id, model, Math.max(0, inT), Math.max(0, outT), status, note ?? null).run();
+      VALUES (?, ?, 'rss_brief', ?, ?, ?, ?, ?)
+    `).bind(id, provider, model, Math.max(0, inT), Math.max(0, outT), status, note ?? null).run();
   } catch { /* best-effort */ }
 }
 
-async function callBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
-  if (!env.ANTHROPIC_API_KEY) return null;
+function extractGeminiBriefUsage(body: any): { inputTokens: number; outputTokens: number } {
+  const u = body?.usageMetadata ?? {};
+  return {
+    inputTokens: Number(u.promptTokenCount ?? 0) || 0,
+    outputTokens: Number(u.candidatesTokenCount ?? 0) || 0,
+  };
+}
+
+async function callGeminiBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
+  const apiKey = String((env as any).GEMINI_API_KEY ?? '').trim();
+  const model = cfg.model;
+  if (!apiKey) {
+    await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', 'GEMINI_API_KEY not configured');
+    return null;
+  }
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: buildBriefSystem() }] },
+        contents: [{ role: 'user', parts: [{ text: `SOURCE ARTICLE:\n${sourceText.slice(0, RSS_BRIEF_SOURCE_MAX_CHARS)}` }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 700 },
+      }),
+      signal: AbortSignal.timeout(cfg.timeoutMs),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', `http_${res.status}:${errText.slice(0, 160)}`);
+      return null;
+    }
+
+    const body = await res.json() as any;
+    const usage = extractGeminiBriefUsage(body);
+    await recordBriefUsage(env, 'gemini', model, usage.inputTokens, usage.outputTokens, 'success');
+
+    const text = String((body?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join('\n'));
+    return extractJson(text);
+  } catch (err) {
+    await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', err instanceof Error ? err.message.slice(0, 160) : 'error');
+    return null;
+  }
+}
+
+async function callAnthropicBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
+  if (!(env as any).ANTHROPIC_API_KEY) return null;
   const model = cfg.model;
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': env.ANTHROPIC_API_KEY,
+        'x-api-key': (env as any).ANTHROPIC_API_KEY,
         'anthropic-version': ANTHROPIC_VER,
       },
       body: JSON.stringify({
@@ -273,17 +346,25 @@ async function callBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string)
       }),
       signal: AbortSignal.timeout(cfg.timeoutMs),
     });
+
     if (!res.ok) {
-      await recordBriefUsage(env, model, 0, 0, 'failed', `http_${res.status}`);
+      const errText = await res.text();
+      await recordBriefUsage(env, 'anthropic', model, 0, 0, 'failed', `http_${res.status}:${errText.slice(0, 160)}`);
       return null;
     }
+
     const body = await res.json() as any;
-    await recordBriefUsage(env, model, Number(body?.usage?.input_tokens ?? 0), Number(body?.usage?.output_tokens ?? 0), 'success');
+    await recordBriefUsage(env, 'anthropic', model, Number(body?.usage?.input_tokens ?? 0), Number(body?.usage?.output_tokens ?? 0), 'success');
     return extractJson(String(body?.content?.[0]?.text ?? ''));
   } catch (err) {
-    await recordBriefUsage(env, model, 0, 0, 'failed', err instanceof Error ? err.message.slice(0, 120) : 'error');
+    await recordBriefUsage(env, 'anthropic', model, 0, 0, 'failed', err instanceof Error ? err.message.slice(0, 160) : 'error');
     return null;
   }
+}
+
+async function callBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
+  if (cfg.provider === 'gemini') return callGeminiBriefModel(env, cfg, sourceText);
+  return callAnthropicBriefModel(env, cfg, sourceText);
 }
 
 export interface RssBriefOutcome {
@@ -333,7 +414,7 @@ export async function enrichAndBriefRssSurvivors(
     // decrementAttempt and excludes RSS for the rest of the tick.
     if (briefCfg.maxCallsPerDay > 0 && callsToday >= briefCfg.maxCallsPerDay) {
       if (!capLogged) {
-        await recordBriefUsage(env, briefCfg.model, 0, 0, 'skipped', `daily_cap_${callsToday}/${briefCfg.maxCallsPerDay}`);
+        await recordBriefUsage(env, briefCfg.provider, briefCfg.model, 0, 0, 'skipped', `daily_cap_${callsToday}/${briefCfg.maxCallsPerDay}`);
         capLogged = true;
       }
       capDeferredIndexes.push(i);
