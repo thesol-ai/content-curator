@@ -56,7 +56,7 @@ TRANSLATION_PROVIDER = "gemini"
 TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 
 # ── Telegram ──────────────────────────────────────────────────
-TELEGRAM_FINAL_PUBLISH_ENABLED = "false"
+TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
 TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
 TELEGRAM_PUBLISH_DUE_LIMIT         = "4"
 
@@ -125,7 +125,7 @@ AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER = "6"
 # ── Phase 6F: Adaptive rotation + queue-health controller + scheduler ──
 # All default to current behavior. Roll out one flag at a time per channel.
 APIFY_ROTATION_CONTINUOUS_ENABLED = "true"
-APIFY_ROTATION_SLOT_MINUTES         = "60"     # one designated source per 60-min slot (3 enabled sources / 3h, evenly)
+APIFY_ROTATION_SLOT_MINUTES         = "240"     # one designated source per 240-min slot (3 enabled sources / 3h, evenly)
 QUEUE_HEALTH_CONTROLLER_ENABLED = "true"
 QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H  = "3"      # healthy floor for scheduled posts in next 6h
 QUEUE_HEALTH_STARVING_MAX_BATCHES   = "3"      # scoring batches per tick while starving (normal stays AI_MAX_SCORING_BATCHES_PER_RUN)
@@ -150,12 +150,12 @@ STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED = "true"
 STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED = "false"  # keep hand-tuned semantic heuristic from rejecting
 STORY_INTELLIGENCE_RETENTION_DAYS = "30"
 # ── RSS feed ingestion (independent, zero-Apify-cost; default OFF for dark launch) ──
-RSS_INGEST_ENABLED = "false"
+RSS_INGEST_ENABLED = "true"
 RSS_FEED_PROBE_ONLY = "false"
 RSS_INGEST_INTERVAL_MIN = "30"
-RSS_MAX_ITEMS_PER_FEED = "4"
-RSS_MAX_NEW_ITEMS_PER_RUN = "12"
-RSS_MAX_NEW_ITEMS_PER_DAY = "80"
+RSS_MAX_ITEMS_PER_FEED = "30"
+RSS_MAX_NEW_ITEMS_PER_RUN = "4"
+RSS_MAX_NEW_ITEMS_PER_DAY = "12"
 RSS_FEED_TIMEOUT_SEC = "10"
 JINA_READER_ENABLED = "false"
 JINA_MIN_CONTENT_CHARS = "500"
