@@ -12,7 +12,21 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VER = '2023-06-01';
 
 const CAPTION_FULL_MAX = 900;
-const CAPTION_SHORT_MAX = 220;
+const CAPTION_SHORT_MAX = 180;
+const RSS_BRIEF_SOURCE_MAX_CHARS = 3000;
+
+const BAD_RSS_BRIEF_PHRASES = [
+  'کاسپ',
+  'اختیار‌دهی',
+  'اختیارد‌هی',
+  'به‌عهده‌دهند',
+  'به عهده دهند',
+  'رانندگی‌های ارائه‌دهنده',
+  'رانندگی ارائه‌دهنده',
+  'تابعیت کاسپ',
+  'نشان‌دهندهٔ',
+  'نشان‌دهنده',
+];
 
 interface RssBriefConfig {
   model: string;
@@ -135,31 +149,57 @@ export function sanitizeBrief(
   sourceText: string,
 ): BriefDraft | null {
   const captionFull = clampCaption(draft.captionFull, CAPTION_FULL_MAX);
-  if (captionFull.length < 40) return null;
+  if (captionFull.length < 60) return null;
   if (hasLongVerbatimOverlap(captionFull, sourceText)) return null;
+  if (hasBadRssBriefStyle(captionFull)) return null;
 
-  const captionShort = clampCaption(draft.captionShort || captionFull, CAPTION_SHORT_MAX);
+  const captionShort = clampCaption(draft.captionShort || captionFull.split('\n')[0] || captionFull, CAPTION_SHORT_MAX);
+  if (captionShort.length < 12) return null;
+  if (hasBadRssBriefStyle(captionShort)) return null;
+
   const hashtags = Array.isArray(draft.hashtags)
-    ? draft.hashtags.map(h => String(h)).filter(Boolean).slice(0, 6)
+    ? draft.hashtags.map(h => String(h).replace(/^#/, '').trim()).filter(Boolean).slice(0, 5)
     : [];
 
   return { captionShort, captionFull, hashtags };
 }
 
+function hasBadRssBriefStyle(text: string): boolean {
+  const t = String(text ?? '').trim();
+  if (!t) return true;
+
+  // RSS posts must look like the normal Telegram caption style, not a legal memo
+  // pretending to be a crypto post.
+  if (/(^|\n)\s*[•*-]\s+/u.test(t)) return true;
+  if (/https?:\/\//i.test(t)) return true;
+  if (/\b(source|منبع)\b\s*[:：-]/iu.test(t)) return true;
+
+  const normalized = t.replace(/\s+/g, ' ');
+  return BAD_RSS_BRIEF_PHRASES.some(phrase => normalized.includes(phrase));
+}
+
 function buildBriefSystem(): string {
   return [
-    'You write original Persian (Farsi) news briefs for a crypto Telegram channel.',
-    'You are given an English source article. Produce an ANALYTICAL Persian brief — NOT a translation.',
-    'Hard rules (copyright):',
-    '- Do NOT translate the article. Do NOT reconstruct its chronology or sentence order.',
-    '- Do NOT include ANY direct quote from the article (zero quotes).',
-    '- Mention only 3–5 key facts and analyze them; do not retell the whole article.',
-    'Format:',
-    '- captionFull: 3–5 short analytical bullet lines (what happened, why it matters, likely market impact). Under ~700 chars.',
-    '- Natural Persian. Numbers and entities accurate.',
-    'Return ONLY JSON: {"captionShort":"...","captionFull":"...","hashtags":["#..."]}',
-    'captionFull is the channel post body (no source link — it is appended automatically).',
-    'captionShort is a one-line teaser. No markdown fences.',
+    'You write short Persian Telegram crypto posts from English RSS news articles.',
+    'You are NOT translating line by line. You rewrite the article into one clear channel post.',
+    '',
+    'Hard rules:',
+    '- Use only facts present in the source article.',
+    '- Do not add predictions, investment advice, hype, or unsupported market impact.',
+    '- Do not quote the article. Do not preserve its sentence order.',
+    '- Do not include source URLs, source labels, signatures, channel IDs, @handles, or footer text. The publisher adds those later.',
+    '- Do not use bullet lists, numbered lists, markdown, HTML, or hashtags inside captionFull.',
+    '- Do not write legal/corporate Persian. Use clear Iranian Persian that a normal crypto reader understands on first read.',
+    '- Avoid awkward literal terms. Examples: write «ارائه‌دهنده خدمات رمزارزی» instead of CASP jargon; write «قرارداد دائمی» for perpetual; explain dense terms briefly if needed.',
+    '- Banned Persian wording: کاسپ، اختیار‌دهی، به‌عهده‌دهند، رانندگی‌های ارائه‌دهنده، نشان‌دهندهٔ، نشان‌دهنده.',
+    '',
+    'Required format:',
+    '- captionShort: a clean Persian title, 45–110 chars.',
+    '- captionFull: first line must be the same title or a close title; then one blank line; then 1–2 short Persian paragraphs. Total under ~750 chars.',
+    '- The caption must feel like the existing X/Twitter Telegram posts: short, direct, useful, readable.',
+    '- hashtags: 3–5 relevant tags WITHOUT # prefix.',
+    '',
+    'Return ONLY JSON: {"captionShort":"...","captionFull":"...","hashtags":["..."]}',
   ].join('\n');
 }
 
@@ -195,9 +235,9 @@ async function callBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string)
       },
       body: JSON.stringify({
         model,
-        max_tokens: 900,
+        max_tokens: 600,
         system: buildBriefSystem(),
-        messages: [{ role: 'user', content: `SOURCE ARTICLE:\n${sourceText.slice(0, 6000)}` }],
+        messages: [{ role: 'user', content: `SOURCE ARTICLE:\n${sourceText.slice(0, RSS_BRIEF_SOURCE_MAX_CHARS)}` }],
       }),
       signal: AbortSignal.timeout(cfg.timeoutMs),
     });
@@ -239,7 +279,7 @@ export async function enrichAndBriefRssSurvivors(
   scoreResults: AIGateResult[],
   _category: CategoryRow,
   channels: ChannelRow[],
-  labels: string[],
+  _labels: string[],
 ): Promise<RssBriefOutcome> {
   const extractCfg = getRssExtractorConfig(env);
   const briefCfg = getRssBriefConfig(env);
@@ -279,7 +319,7 @@ export async function enrichAndBriefRssSurvivors(
         continue;
       }
 
-      const captionFull = withAttribution(draft.captionFull, labels[i] || item.sourceAccount, item.sourceUrl);
+      const captionFull = draft.captionFull;
       const translation: TranslationOutput = {
         captionShort: draft.captionShort,
         captionFull,
