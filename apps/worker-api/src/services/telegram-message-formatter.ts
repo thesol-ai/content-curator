@@ -33,6 +33,7 @@ const DEFAULT_SOURCE_LABELS: Record<string, string> = {
 
 const ELLIPSIS = '…';
 const FOOTER_SEPARATOR = '\n\n';
+const TITLE_SEPARATOR_RE = /^([^\n]{12,180})\n\s*\n([\s\S]{20,})$/u;
 
 // Telegram clients can visually reorder decimal/percent numbers inside Persian RTL text.
 // Example: "۲.۵ درصد" may be rendered as "۵.۲" on some clients.
@@ -75,7 +76,7 @@ export function formatTelegramMessage(input: TelegramMessageFormatInput): Telegr
   // Do not inject Unicode direction marks.
   // Telegram boxes, numeric tables, tickers, links, and @handles can break badly when the whole message is forced RTL.
   // Persian captions should instead start with natural Persian wording at generation time.
-  const escapedBody = escapeHtml(cleanedBody);
+  const escapedBody = formatBodyWithBoldLeadTitle(cleanedBody, input.language);
   const footerHtml = footer.html;
 
   if (!footerHtml) {
@@ -112,6 +113,36 @@ export function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+function formatBodyWithBoldLeadTitle(text: string, language: string): string {
+  const raw = String(text ?? '').trim();
+  const lang = String(language ?? '').trim().toLowerCase();
+
+  // RSS Persian briefs are generated as:
+  // title
+  //
+  // body
+  //
+  // When that structure is present, render the first line as a real Telegram HTML
+  // title. Do this in the formatter, not in model output, because this module owns
+  // Telegram-safe HTML escaping.
+  if (lang === 'fa' || lang === 'ar') {
+    const m = raw.match(TITLE_SEPARATOR_RE);
+    if (m) {
+      const title = ensureTitleEndsWithPeriod(m[1]!.trim());
+      const body = m[2]!.trim();
+      return `<b>${escapeHtml(title)}</b>\n\n${escapeHtml(body)}`;
+    }
+  }
+
+  return escapeHtml(raw);
+}
+
+function ensureTitleEndsWithPeriod(title: string): string {
+  const cleaned = String(title ?? '').trim().replace(/[.。؟?!،؛:]+$/u, '').trim();
+  return cleaned ? `${cleaned}.` : cleaned;
+}
+
 
 export function escapeHtmlAttr(text: string): string {
   return escapeHtml(text)
