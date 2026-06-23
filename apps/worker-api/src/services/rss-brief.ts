@@ -7,6 +7,7 @@
 import type { AIGateResult, CategoryRow, ChannelRow, Env, NormalizedItem, TranslationOutput } from '../types';
 import { channelTranslationKey } from './ai-gate';
 import { extractFullTextForBrief, getRssExtractorConfig } from './rss-content-extractor';
+import { getGeminiKeyPool, shouldTryNextGeminiKey } from './gemini-key-pool';
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VER = '2023-06-01';
@@ -291,40 +292,52 @@ function extractGeminiBriefUsage(body: any): { inputTokens: number; outputTokens
 }
 
 async function callGeminiBriefModel(env: Env, cfg: RssBriefConfig, sourceText: string): Promise<{ captionShort?: unknown; captionFull?: unknown; hashtags?: unknown } | null> {
-  const apiKey = String((env as any).GEMINI_API_KEY ?? '').trim();
+  const keyPool = getGeminiKeyPool(env);
   const model = cfg.model;
-  if (!apiKey) {
-    await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', 'GEMINI_API_KEY not configured');
+  if (keyPool.length === 0) {
+    await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', 'GEMINI_API_KEY or GEMINI_API_KEY_POOL not configured');
     return null;
   }
 
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: buildBriefSystem() }] },
-        contents: [{ role: 'user', parts: [{ text: `SOURCE ARTICLE:\n${sourceText.slice(0, RSS_BRIEF_SOURCE_MAX_CHARS)}` }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 700 },
-      }),
-      signal: AbortSignal.timeout(cfg.timeoutMs),
-    });
+  let lastErr = '';
 
-    if (!res.ok) {
-      const errText = await res.text();
-      await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', `http_${res.status}:${errText.slice(0, 160)}`);
-      return null;
+  try {
+    for (const keyRef of keyPool) {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': keyRef.key,
+        },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: buildBriefSystem() }] },
+          contents: [{ role: 'user', parts: [{ text: `SOURCE ARTICLE:\n${sourceText.slice(0, RSS_BRIEF_SOURCE_MAX_CHARS)}` }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 700 },
+        }),
+        signal: AbortSignal.timeout(cfg.timeoutMs),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        lastErr = `http_${res.status}_via_${keyRef.name}:${errText.slice(0, 140)}`;
+        if (shouldTryNextGeminiKey(res.status, errText)) {
+          console.warn(`[RSSBrief][Gemini] ${keyRef.name} failed with HTTP ${res.status}; trying next configured key`);
+          continue;
+        }
+        await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', lastErr.slice(0, 160));
+        return null;
+      }
+
+      const body = await res.json() as any;
+      const usage = extractGeminiBriefUsage(body);
+      await recordBriefUsage(env, 'gemini', model, usage.inputTokens, usage.outputTokens, 'success');
+
+      const text = String((body?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join('\n'));
+      return extractJson(text);
     }
 
-    const body = await res.json() as any;
-    const usage = extractGeminiBriefUsage(body);
-    await recordBriefUsage(env, 'gemini', model, usage.inputTokens, usage.outputTokens, 'success');
-
-    const text = String((body?.candidates?.[0]?.content?.parts ?? []).map((p: any) => p?.text ?? '').join('\n'));
-    return extractJson(text);
+    await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', (lastErr || 'all Gemini keys failed').slice(0, 160));
+    return null;
   } catch (err) {
     await recordBriefUsage(env, 'gemini', model, 0, 0, 'failed', err instanceof Error ? err.message.slice(0, 160) : 'error');
     return null;

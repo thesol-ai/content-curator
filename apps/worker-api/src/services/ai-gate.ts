@@ -15,6 +15,7 @@ import {
   primaryAudienceKey,
 } from './audience-profile';
 import { buildStoryKey, isStoryIntelligenceEnabled, parseStoryFields } from './story-intelligence';
+import { getGeminiKeyPool, shouldTryNextGeminiKey } from './gemini-key-pool';
 
 // ── Provider configs ──────────────────────────────────────────
 
@@ -1569,37 +1570,48 @@ function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarge
 // ── Provider callers ──────────────────────────────────────────
 
 async function callGemini(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
-  const apiKey = env.GEMINI_API_KEY?.trim();
-  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+  const keyPool = getGeminiKeyPool(env);
+  if (keyPool.length === 0) throw new Error('GEMINI_API_KEY or GEMINI_API_KEY_POOL not configured');
 
   const url = GEMINI_URL(model);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: cfgMaxOutputTokens(env) },
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
+  let lastErr = '';
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini ${res.status}: ${errText.slice(0, 200)}`);
+  for (const keyRef of keyPool) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': keyRef.key,
+      },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: user }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: cfgMaxOutputTokens(env) },
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      lastErr = `Gemini ${res.status} via ${keyRef.name}: ${errText.slice(0, 200)}`;
+      if (shouldTryNextGeminiKey(res.status, errText)) {
+        console.warn(`[Gemini] ${keyRef.name} failed with HTTP ${res.status}; trying next configured key`);
+        continue;
+      }
+      throw new Error(lastErr);
+    }
+
+    const body = await res.json() as any;
+    const usage = extractGeminiUsage(body);
+    const usageId = await recordAIUsage(env, {
+      provider: 'gemini', purpose: 'translation', model,
+      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
+    });
+    onUsage?.({ ...usage, usageId });
+    return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   }
 
-  const body = await res.json() as any;
-  const usage = extractGeminiUsage(body);
-  const usageId = await recordAIUsage(env, {
-    provider: 'gemini', purpose: 'translation', model,
-    inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
-  });
-  onUsage?.({ ...usage, usageId });
-  return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  throw new Error(lastErr || 'Gemini failed for all configured keys');
 }
 
 async function callOpenAI(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {

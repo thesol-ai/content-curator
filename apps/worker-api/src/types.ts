@@ -11,6 +11,10 @@ export interface Env {
   APIFY_TOKEN: string;
   ANTHROPIC_API_KEY: string;
   GEMINI_API_KEY: string;
+  GEMINI_API_KEY_2?: string;
+  GEMINI_API_KEY_3?: string;
+  GEMINI_API_KEY_4?: string;
+  GEMINI_API_KEY_POOL?: string;
   OPENAI_API_KEY: string;
   TELEGRAM_BOT_TOKEN: string;
   INTERNAL_API_SECRET: string;
