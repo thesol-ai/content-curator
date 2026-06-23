@@ -299,9 +299,12 @@ async function callGeminiBriefModel(env: Env, cfg: RssBriefConfig, sourceText: s
   }
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
       body: JSON.stringify({
         system_instruction: { parts: [{ text: buildBriefSystem() }] },
         contents: [{ role: 'user', parts: [{ text: `SOURCE ARTICLE:\n${sourceText.slice(0, RSS_BRIEF_SOURCE_MAX_CHARS)}` }] }],

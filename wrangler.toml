@@ -140,7 +140,7 @@ AI_TRANSLATION_MAX_TEXT_CHARS       = "400"    # INERT default (== AI_MAX_TEXT_C
 # ── Phase 6H: cost — run cheap dedupe/audience gates before paid translation ──
 BACKLOG_TRANSLATE_AFTER_GATES_ENABLED = "true"
 # ── Phase 6I: enforce per-source daily cap (channels.max_posts_per_source_per_day) ──
-PUBLISH_ENFORCE_SOURCE_DAILY_CAP_ENABLED = "false"
+PUBLISH_ENFORCE_SOURCE_DAILY_CAP_ENABLED = "true"
 # ── Phase 6J: audience-aware scoring guidance (Iranian/Persian now; ar/en/ru later) ──
 AUDIENCE_PROFILE_SCORING_ENABLED = "true"
 # ── Phase 6K: story intelligence (OBSERVE-ONLY; structured story_key) ──

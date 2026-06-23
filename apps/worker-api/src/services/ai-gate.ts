@@ -1572,10 +1572,13 @@ async function callGemini(env: Env, model: string, system: string, user: string,
   const apiKey = env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
-  const url = GEMINI_URL(model) + `?key=${apiKey}`;
+  const url = GEMINI_URL(model);
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
