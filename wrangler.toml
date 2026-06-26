@@ -58,13 +58,13 @@ TRANSLATION_MODEL    = "gemini-2.5-flash-lite"
 # ── Telegram ──────────────────────────────────────────────────
 TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
 TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
-TELEGRAM_PUBLISH_DUE_LIMIT = "4"
+TELEGRAM_PUBLISH_DUE_LIMIT = "1"
 
 # ── Media Processing ──────────────────────────────────────────
 # direct_url    → URL مستقیم به Telegram (سریع، برای تست)
 # binary_upload → دانلود + multipart upload (توصیه برای production)
 # r2_storage    → دانلود → R2 → URL پایدار (بهترین قابلیت اطمینان)
-MEDIA_PROCESSING_MODE     = "direct_url"
+MEDIA_PROCESSING_MODE = "direct_url"
 MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED = "true"
 MEDIA_MAX_DOWNLOAD_MB     = "50"
 MEDIA_DOWNLOAD_TIMEOUT_SEC = "60"
@@ -201,7 +201,7 @@ TRANSLATION_BATCH_SIZE = "3"
 TRANSLATION_DEBUG_ENABLED = "false"
 TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
 TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"
-TELEGRAM_PUBLISH_DUE_LIMIT = "4"
+TELEGRAM_PUBLISH_DUE_LIMIT = "1"
 PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES = "20"
 PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES = "10"
 PUBLISH_DELAY_LOW_MINUTES = "45"
@@ -211,7 +211,7 @@ PUBLISH_DELAY_BREAKING_MINUTES = "5"
 PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES = "60"
 
 # در production از binary_upload استفاده کنید
-MEDIA_PROCESSING_MODE      = "binary_upload"
+MEDIA_PROCESSING_MODE = "direct_url"
 MEDIA_GROUP_PARTIAL_PUBLISH_ENABLED = "true"
 MEDIA_MAX_DOWNLOAD_MB      = "50"
 MEDIA_DOWNLOAD_TIMEOUT_SEC = "90"
