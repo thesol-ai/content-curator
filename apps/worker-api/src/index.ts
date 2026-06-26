@@ -38,6 +38,7 @@ import {
   isQueueQualityControllerEnabled,
 } from './services/observability-reports';
 import { cleanupStoryIntelligenceEvents } from './services/story-intelligence';
+import { isCronCoordinatorEnabled, pickCoordinatorPhase, shouldRunCoordinatorHousekeeping, shouldRunHeavyPhaseAfterPublish } from './services/cron-coordinator';
 
 export default {
 
@@ -83,6 +84,11 @@ export default {
           return;
         }
 
+
+        if (isCronCoordinatorEnabled(env)) {
+          await runRssFallbackCoordinatorTick(env, _controller.scheduledTime ?? Date.now());
+          return;
+        }
         // 1. Scheduled curation is intentionally opt-in.
         // Webhooks should drive fresh Apify dataset ingestion; cron should not
         // repeatedly reprocess old datasets and risk unnecessary AI spend.
@@ -294,6 +300,87 @@ export default {
     })());
   },
 } satisfies ExportedHandler<Env>;
+
+
+async function runRssFallbackCoordinatorTick(env: Env, scheduledTimeMs: number): Promise<void> {
+  const publishResult = await publishDueItems(env, { limit: 1 });
+  console.log('[Scheduled] Coordinator publish:', publishResult);
+
+  if (!shouldRunHeavyPhaseAfterPublish(publishResult)) {
+    console.log('[Scheduled] Coordinator: publish active, skipping heavy phases');
+    await runCoordinatorHousekeeping(env, scheduledTimeMs);
+    return;
+  }
+
+  const phase = pickCoordinatorPhase(scheduledTimeMs);
+  console.log(`[Scheduled] Coordinator: publish idle, phase = ${phase}`);
+
+  if (phase === 'rss') {
+    if (String(env.RSS_INGEST_ENABLED ?? '').toLowerCase() === 'true') {
+      try {
+        const rss = await runRssIngestion(env);
+        if (!rss.skipped) {
+          console.log('[Scheduled] Coordinator RSS ingestion:', { enqueued: rss.totalEnqueued, feeds: rss.feeds });
+        }
+      } catch (err) {
+        console.error('[Scheduled] Coordinator RSS ingestion failed:', err instanceof Error ? err.message : String(err));
+      }
+    } else {
+      console.log('[Scheduled] Coordinator RSS skipped: RSS_INGEST_ENABLED is not true');
+    }
+
+    await runCoordinatorHousekeeping(env, scheduledTimeMs);
+    return;
+  }
+
+  if (phase === 'ai_drain') {
+    if (isCandidateBacklogEnabled(env)) {
+      try {
+        const recovered = await recoverStaleScoringCandidates(env);
+        const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);
+        const skippedStale = await skipStaleCandidates(env);
+        const drainResult = await drainAICandidateQueue(env, {
+          recoverStale: false,
+          skipStale: false,
+          maxBatches: 1,
+        });
+
+        console.log('[Scheduled] Coordinator AI candidate backlog:', {
+          recovered,
+          failedMaxAttempts,
+          skippedStale,
+          drainResult,
+        });
+      } catch (err) {
+        console.error('[Scheduled] Coordinator AI candidate backlog failed:', err instanceof Error ? err.message : String(err));
+      }
+    } else {
+      console.log('[Scheduled] Coordinator AI skipped: AI_CANDIDATE_BACKLOG_ENABLED is not true');
+    }
+
+    await runCoordinatorHousekeeping(env, scheduledTimeMs);
+    return;
+  }
+
+  await runCoordinatorHousekeeping(env, scheduledTimeMs);
+}
+
+async function runCoordinatorHousekeeping(env: Env, scheduledTimeMs: number): Promise<void> {
+  if (!shouldRunCoordinatorHousekeeping(scheduledTimeMs)) return;
+
+  const cleaned = await cleanupOldDedupeKeys(env);
+  if (cleaned > 0) console.log(`[Scheduled] Coordinator cleaned ${cleaned} old dedupe keys`);
+
+  const rotationCleanup = await cleanupOldRotationClaims(env);
+  if (rotationCleanup.deleted > 0) console.log(`[Scheduled] Coordinator cleaned ${rotationCleanup.deleted} stale rotation claim keys`);
+
+  const rssClaimCleanup = await cleanupOldRssIngestClaims(env);
+  if (rssClaimCleanup.deleted > 0) console.log(`[Scheduled] Coordinator cleaned ${rssClaimCleanup.deleted} stale RSS slot claim keys`);
+
+  await cleanupAiUsageAttribution(env);
+  await cleanupStoryIntelligenceEvents(env);
+}
+
 
 // ── Route dispatcher ──────────────────────────────────────────
 

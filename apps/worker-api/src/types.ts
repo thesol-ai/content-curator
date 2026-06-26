@@ -120,6 +120,7 @@ export interface Env {
   STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED?: string; // default: "false" — allow heuristic semantic story blocking
   STORY_INTELLIGENCE_RETENTION_DAYS?: string;       // default: "30" — retention for story_intelligence_events
   // ── RSS feed ingestion (independent, zero-Apify-cost source) ──
+  RSS_FALLBACK_CRON_COORDINATOR_ENABLED?: string;      // default: "false" — fallback-only publish-first cron coordinator
   RSS_INGEST_ENABLED?: string;                      // default: "false" — master switch for RSS polling
   RSS_FEED_PROBE_ONLY?: string;                     // default: "false" — fetch+parse+log only, no enqueue
   RSS_INGEST_INTERVAL_MIN?: string;                 // default: "30" — per-feed poll interval
