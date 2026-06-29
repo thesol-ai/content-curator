@@ -602,55 +602,79 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
 
     // ── RSS survivors: copyright-safe Persian brief (isolated failure) ──
     if (rssSurvivorIdx.length > 0) {
-      const items = rssSurvivorIdx.map(i => prepared[i]!.item);
-      const ais = rssSurvivorIdx.map(i => decisions[i]!.ai);
-      const labels = rssSurvivorIdx.map(i => prepared[i]!.item.sourceAccount);
-      try {
-        const { results: briefed, failedIndexes, capDeferredIndexes } = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
-        rssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = briefed[k]!; });
+      const rssBriefableIdx: number[] = [];
 
-        // Per-item brief failures: release ONLY those candidates to pending and
-        // drop them from this tick's decisions so they are not persisted (which
-        // would record dedupe_keys and never retry). Local index k → original i.
-        if (failedIndexes.length > 0) {
-          const failedOriginalIdx = failedIndexes.map(k => rssSurvivorIdx[k]!);
-          await releaseClaimedCandidatesToPending(
-            env,
-            failedOriginalIdx.map(i => prepared[i]!.row.id),
-            'rss_brief_unavailable',
-            { decrementAttempt: true },
-          );
-          failedOriginalIdx.forEach(i => { decisions[i] = null; });
-          skipped += failedOriginalIdx.length;
-        }
+      // Cost guard: do not spend RSS brief tokens on items that cannot reach the
+      // publish queue because of deterministic channel capacity gates.
+      for (const i of rssSurvivorIdx) {
+        const decision = decisions[i];
+        if (!decision || decision.rejectReason !== null) continue;
 
-        // Daily-cap-deferred survivors: release to pending with the attempt
-        // DECREMENTED so repeated deferral never burns attempt_count toward
-        // max-attempts (which would falsely 'fail' a healthy article). They are
-        // not persisted (no premature dedupe_keys) and retry once budget frees.
-        if (capDeferredIndexes.length > 0) {
-          const deferredOriginalIdx = capDeferredIndexes.map(k => rssSurvivorIdx[k]!);
-          await releaseClaimedCandidatesToPending(
-            env,
-            deferredOriginalIdx.map(i => prepared[i]!.row.id),
-            'rss_brief_daily_cap',
-            { decrementAttempt: true },
-          );
-          deferredOriginalIdx.forEach(i => { decisions[i] = null; });
-          skipped += deferredOriginalIdx.length;
-          rssBriefCapHit = true;
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn('[BacklogDrain] RSS brief failed; releasing RSS survivors to retry:', msg);
-        await releaseClaimedCandidatesToPending(
+        const preflightReject = await getRssBriefPreflightRejectReason(
           env,
-          rssSurvivorIdx.map(i => prepared[i]!.row.id),
-          `rss_brief_error: ${msg}`,
-          { decrementAttempt: true },
+          channels,
+          decision.candidate,
+          decision.ai,
         );
-        rssSurvivorIdx.forEach(i => { decisions[i] = null; });
-        skipped += rssSurvivorIdx.length;
+
+        if (preflightReject) {
+          decision.rejectReason = preflightReject;
+        } else {
+          rssBriefableIdx.push(i);
+        }
+      }
+
+      if (rssBriefableIdx.length > 0) {
+        const items = rssBriefableIdx.map(i => prepared[i]!.item);
+        const ais = rssBriefableIdx.map(i => decisions[i]!.ai);
+        const labels = rssBriefableIdx.map(i => prepared[i]!.item.sourceAccount);
+        try {
+          const { results: briefed, failedIndexes, capDeferredIndexes } = await enrichAndBriefRssSurvivors(env, items, ais, category, channels, labels);
+          rssBriefableIdx.forEach((i, k) => { decisions[i]!.ai = briefed[k]!; });
+
+          // Per-item brief failures: release ONLY those candidates to pending and
+          // drop them from this tick's decisions so they are not persisted (which
+          // would record dedupe_keys and never retry). Local index k → original i.
+          if (failedIndexes.length > 0) {
+            const failedOriginalIdx = failedIndexes.map(k => rssBriefableIdx[k]!);
+            await releaseClaimedCandidatesToPending(
+              env,
+              failedOriginalIdx.map(i => prepared[i]!.row.id),
+              'rss_brief_unavailable',
+              { decrementAttempt: true },
+            );
+            failedOriginalIdx.forEach(i => { decisions[i] = null; });
+            skipped += failedOriginalIdx.length;
+          }
+
+          // Daily-cap-deferred survivors: release to pending with the attempt
+          // DECREMENTED so repeated deferral never burns attempt_count toward
+          // max-attempts (which would falsely 'fail' a healthy article). They are
+          // not persisted (no premature dedupe_keys) and retry once budget frees.
+          if (capDeferredIndexes.length > 0) {
+            const deferredOriginalIdx = capDeferredIndexes.map(k => rssBriefableIdx[k]!);
+            await releaseClaimedCandidatesToPending(
+              env,
+              deferredOriginalIdx.map(i => prepared[i]!.row.id),
+              'rss_brief_daily_cap',
+              { decrementAttempt: true },
+            );
+            deferredOriginalIdx.forEach(i => { decisions[i] = null; });
+            skipped += deferredOriginalIdx.length;
+            rssBriefCapHit = true;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn('[BacklogDrain] RSS brief failed; releasing RSS survivors to retry:', msg);
+          await releaseClaimedCandidatesToPending(
+            env,
+            rssBriefableIdx.map(i => prepared[i]!.row.id),
+            `rss_brief_error: ${msg}`,
+            { decrementAttempt: true },
+          );
+          rssBriefableIdx.forEach(i => { decisions[i] = null; });
+          skipped += rssBriefableIdx.length;
+        }
       }
     }
   }
@@ -746,6 +770,67 @@ async function evaluateCandidateDb(
   }
 
   return { itemId, storyClusterKey, themeKey, recentTopicDuplicate, recentStoryClusterDuplicate, themeCapRejectReason, audienceRejectReason, storyKey, storyKeyRejectReason };
+}
+
+
+async function getRssBriefPreflightRejectReason(
+  env: Env,
+  channels: ChannelRow[],
+  candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
+  ai: AIGateResult,
+): Promise<string | null> {
+  if (candidate.item.platform !== 'rss') return null;
+
+  const enabledChannels = channels.filter(channel => channel.enabled);
+  if (enabledChannels.length === 0) return 'rss_brief_preflight_blocked:no_enabled_channel';
+
+  let lastReason = 'no_publish_capacity';
+  const placeholder = {
+    captionShort: 'RSS preflight placeholder',
+    captionFull: 'RSS preflight placeholder',
+    hashtags: [] as string[],
+  };
+
+  for (const channel of enabledChannels) {
+    const translationKey = channelTranslationKey(channel.id);
+    const probeAi: AIGateResult = {
+      ...ai,
+      translations: {
+        ...(ai.translations ?? {}),
+        [channel.language]: placeholder,
+        [translationKey]: placeholder,
+      },
+    };
+
+    const rule = await runRuleGate(env, probeAi, channel, candidate.item.mediaUrlExpiresSoon);
+    if (!rule.approved || !rule.scheduledAt) {
+      lastReason = rule.reason ? `rule_gate:${rule.reason}` : 'rule_gate_rejected';
+      continue;
+    }
+
+    if (normalizeAccount(candidate.item.sourceAccount) === 'whale_alert') {
+      const alreadyQueued = await countRecentWhaleAlertQueueItems(env, channel.id);
+      if (alreadyQueued >= 2) {
+        lastReason = 'whale_alert_daily_cap';
+        continue;
+      }
+    }
+
+    if (isSourceDailyCapEnabled(env) && channel.max_posts_per_source_per_day != null) {
+      const cap = Number(channel.max_posts_per_source_per_day);
+      if (Number.isFinite(cap) && cap > 0) {
+        const alreadyFromSource = await countTodaysQueueItemsForSource(env, channel.id, candidate.item.sourceAccount);
+        if (alreadyFromSource >= cap) {
+          lastReason = 'source_daily_cap';
+          continue;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  return `rss_brief_preflight_blocked:${lastReason}`;
 }
 
 function resolveCandidateRejectReason(

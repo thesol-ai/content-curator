@@ -11,6 +11,12 @@ export interface Env {
   APIFY_TOKEN: string;
   ANTHROPIC_API_KEY: string;
   GEMINI_API_KEY: string;
+  GEMINI_API_KEY_2?: string;
+  GEMINI_API_KEY_3?: string;
+  GEMINI_API_KEY_4?: string;
+  GEMINI_API_KEY_5?: string;
+  GEMINI_API_KEY_6?: string;
+  GEMINI_API_KEY_POOL?: string;
   OPENAI_API_KEY: string;
   TELEGRAM_BOT_TOKEN: string;
   INTERNAL_API_SECRET: string;
@@ -114,6 +120,7 @@ export interface Env {
   STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED?: string; // default: "false" — allow heuristic semantic story blocking
   STORY_INTELLIGENCE_RETENTION_DAYS?: string;       // default: "30" — retention for story_intelligence_events
   // ── RSS feed ingestion (independent, zero-Apify-cost source) ──
+  RSS_FALLBACK_CRON_COORDINATOR_ENABLED?: string;      // default: "false" — fallback-only publish-first cron coordinator
   RSS_INGEST_ENABLED?: string;                      // default: "false" — master switch for RSS polling
   RSS_FEED_PROBE_ONLY?: string;                     // default: "false" — fetch+parse+log only, no enqueue
   RSS_INGEST_INTERVAL_MIN?: string;                 // default: "30" — per-feed poll interval

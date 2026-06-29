@@ -18,6 +18,7 @@ vi.mock('../apps/worker-api/src/services/ai-gate', () => ({
   scoreItems: vi.fn(),
   attachTranslations: vi.fn(),
   channelTranslationKey: (channelId: string) => `channel:${channelId}`,
+  hasMustCoverCryptoAsset: vi.fn((item: any) => item?.platform === 'rss'),
 }));
 
 import { makeTestDb, type FakeD1 } from './helpers/fake-d1';

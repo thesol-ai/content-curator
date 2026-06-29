@@ -15,6 +15,7 @@ import {
   primaryAudienceKey,
 } from './audience-profile';
 import { buildStoryKey, isStoryIntelligenceEnabled, parseStoryFields } from './story-intelligence';
+import { getGeminiKeyPool, shouldTryNextGeminiKey } from './gemini-key-pool';
 
 // ── Provider configs ──────────────────────────────────────────
 
@@ -158,11 +159,7 @@ export async function scoreItems(
 
   const claudeScoringDisabled = String((env as any).CLAUDE_SCORING_DISABLED ?? '').toLowerCase() === 'true';
 
-  const localResults: Array<AIGateResult | null> = items.map(item =>
-    shouldUseLocalMustCoverScoring(item, category)
-      ? buildLocalMustCoverScoringResult(item)
-      : null,
-  );
+  const localResults: Array<AIGateResult | null> = buildLocalFallbackResults(env, items, category, claudeScoringDisabled);
 
   if (claudeScoringDisabled) {
     return items.map((item, index) => {
@@ -363,6 +360,109 @@ function buildLocalMustCoverScoringResult(item: NormalizedItem): AIGateResult {
     publishPriority: 'normal',
     translations: {},
   };
+}
+
+function isRssFallbackSelectorEnabled(env: Env): boolean {
+  return String((env as any).RSS_FALLBACK_SELECTOR_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+function rssFallbackTestLimit(env: Env): number {
+  const n = Math.floor(Number((env as any).RSS_FALLBACK_TEST_LIMIT ?? 0));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function fallbackText(item: NormalizedItem): string {
+  return [item.text, item.fullText, item.sourceUrl, item.postId]
+    .map(v => String(v ?? ''))
+    .join(' ');
+}
+
+function isUnsafeOrLowValueFallbackRss(item: NormalizedItem): boolean {
+  const text = fallbackText(item).toLowerCase();
+
+  if (/\b(scam|giveaway|airdrop claim|promo code|voucher|guaranteed return|guaranteed profit|risk-free|pump signal|pump group|trading competition)\b/i.test(text)) return true;
+  if (/\b(what happened in crypto today|today in crypto|daily roundup|weekly roundup)\b/i.test(text)) return true;
+
+  return false;
+}
+
+function fallbackHighSignalScore(item: NormalizedItem): number {
+  const text = fallbackText(item).toLowerCase();
+  let score = 0;
+
+  if (hasMustCoverCryptoAsset(item)) score += 50;
+
+  if (/\b(etf|stablecoin|usdt|usdc|sec|cftc|cme|fed|federal reserve|mica|regulation|lawsuit|court|hack|exploit|bridge|phishing|stolen|blacklist|freeze|exchange|custody|treasury|mining|staking|defi|rwa|tokenized|tokenization|liquidity|liquidation)\b/i.test(text)) {
+    score += 25;
+  }
+
+  const source = String(item.sourceAccount ?? '').toLowerCase();
+  if (['coindesk', 'cointelegraph', 'beincrypto', 'protos'].includes(source)) score += 15;
+
+  const ageHours = (Date.now() / 1000 - Number(item.publishedAt ?? 0)) / 3600;
+  if (Number.isFinite(ageHours) && ageHours >= 0 && ageHours <= 6) score += 10;
+  if (Number.isFinite(ageHours) && ageHours > 48) score -= 25;
+
+  if (/\b(price prediction|could reach|will reach|altseason|technical analysis|chart pattern)\b/i.test(text) && !hasMustCoverCryptoAsset(item)) score -= 20;
+  if (/\b(launches app|announces integration|partnership|campaign)\b/i.test(text) && !hasMustCoverCryptoAsset(item)) score -= 20;
+
+  return score;
+}
+
+function fallbackTopicFingerprint(item: NormalizedItem): string {
+  const text = String(item.text || item.postId || item.sourceUrl || 'rss')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 90);
+
+  return `rss-fallback-${text || item.postId || 'item'}`;
+}
+
+function buildRuleBasedRssFallbackResult(item: NormalizedItem, category: CategoryRow): AIGateResult | null {
+  if (!isCryptoCategory(category)) return null;
+  if (item.platform !== 'rss') return null;
+  if (isUnsafeOrLowValueFallbackRss(item)) return null;
+
+  const score = Math.max(
+    shouldUseLocalMustCoverScoring(item, category) ? 82 : 0,
+    fallbackHighSignalScore(item),
+  );
+
+  if (score < 65) return null;
+
+  const flags = new Set<string>();
+  flags.add('rss_fallback_selector');
+  if (hasMustCoverCryptoAsset(item)) flags.add('must_cover_crypto_asset');
+
+  return {
+    publish: true,
+    score: Math.min(Math.max(score, 65), 95),
+    riskLevel: 'low',
+    riskFlags: Array.from(flags),
+    topicFingerprint: fallbackTopicFingerprint(item),
+    publishPriority: score >= 85 ? 'high' : 'normal',
+    translations: {},
+  };
+}
+
+function buildLocalFallbackResults(env: Env, items: NormalizedItem[], category: CategoryRow, claudeScoringDisabled: boolean): Array<AIGateResult | null> {
+  const fallbackEnabled = claudeScoringDisabled && isRssFallbackSelectorEnabled(env);
+  const limit = fallbackEnabled ? rssFallbackTestLimit(env) : 0;
+  let accepted = 0;
+
+  return items.map(item => {
+    const result = fallbackEnabled
+      ? buildRuleBasedRssFallbackResult(item, category)
+      : (shouldUseLocalMustCoverScoring(item, category) ? buildLocalMustCoverScoringResult(item) : null);
+
+    if (!result) return null;
+    if (fallbackEnabled && limit > 0 && accepted >= limit) return null;
+
+    accepted++;
+    return result;
+  });
 }
 
 function itemScoringText(item: NormalizedItem, useExpandedRssText: boolean, maxTextChars: number): string {
@@ -1470,34 +1570,48 @@ function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarge
 // ── Provider callers ──────────────────────────────────────────
 
 async function callGemini(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
-  const apiKey = env.GEMINI_API_KEY?.trim();
-  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+  const keyPool = getGeminiKeyPool(env);
+  if (keyPool.length === 0) throw new Error('GEMINI_API_KEY or GEMINI_API_KEY_POOL not configured');
 
-  const url = GEMINI_URL(model) + `?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: cfgMaxOutputTokens(env) },
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
+  const url = GEMINI_URL(model);
+  let lastErr = '';
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini ${res.status}: ${errText.slice(0, 200)}`);
+  for (const keyRef of keyPool) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': keyRef.key,
+      },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: user }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: cfgMaxOutputTokens(env) },
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      lastErr = `Gemini ${res.status} via ${keyRef.name}: ${errText.slice(0, 200)}`;
+      if (shouldTryNextGeminiKey(res.status, errText)) {
+        console.warn(`[Gemini] ${keyRef.name} failed with HTTP ${res.status}; trying next configured key`);
+        continue;
+      }
+      throw new Error(lastErr);
+    }
+
+    const body = await res.json() as any;
+    const usage = extractGeminiUsage(body);
+    const usageId = await recordAIUsage(env, {
+      provider: 'gemini', purpose: 'translation', model,
+      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
+    });
+    onUsage?.({ ...usage, usageId });
+    return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   }
 
-  const body = await res.json() as any;
-  const usage = extractGeminiUsage(body);
-  const usageId = await recordAIUsage(env, {
-    provider: 'gemini', purpose: 'translation', model,
-    inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
-  });
-  onUsage?.({ ...usage, usageId });
-  return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  throw new Error(lastErr || 'Gemini failed for all configured keys');
 }
 
 async function callOpenAI(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
