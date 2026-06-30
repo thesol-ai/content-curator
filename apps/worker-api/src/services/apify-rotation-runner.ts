@@ -735,7 +735,21 @@ async function sleepWithBackoff(attempt: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, base + jitter));
 }
 
+function parseRotationSourceAllowlist(env: Env): Set<string> | null {
+  const raw = String((env as any).APIFY_ROTATION_SOURCE_ALLOWLIST ?? '').trim();
+  if (!raw) return null;
+
+  const ids = raw
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
 async function loadRotationSources(env: Env, onlySourceId?: string): Promise<SourceRow[]> {
+  const allowlist = parseRotationSourceAllowlist(env);
+
   const rows = await env.DB.prepare(`
     SELECT id, label, category_id, platform, apify_task_id
     FROM apify_sources
@@ -744,6 +758,7 @@ async function loadRotationSources(env: Env, onlySourceId?: string): Promise<Sou
   `).all<SourceRow>();
 
   return (rows.results ?? [])
+    .filter(row => !allowlist || allowlist.has(row.id))
     .filter(row => getCategorySourceStrategy(row.category_id).canHandleSource(row))
     .filter(row => !onlySourceId || row.id === onlySourceId);
 }
