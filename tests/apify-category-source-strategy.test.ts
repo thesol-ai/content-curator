@@ -25,9 +25,18 @@ const DISCOVERY_ROTATION_SOURCE_IDS = [
   'src_crypto_x_discovery_latest',
   'src_crypto_x_discovery_top',
 ];
+
+const V2_ROTATION_SOURCE_IDS = [
+  'crypto_v2_news_a',
+  'crypto_v2_news_b',
+  'crypto_v2_market',
+  'crypto_v2_analysts',
+];
+
 const ALL_REGISTERED_ROTATION_SOURCE_IDS = [
   ...CURRENT_ROTATION_SOURCE_IDS,
   ...DISCOVERY_ROTATION_SOURCE_IDS,
+  ...V2_ROTATION_SOURCE_IDS,
 ];
 
 function source(id: string, overrides: Partial<any> = {}) {

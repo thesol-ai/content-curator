@@ -16,6 +16,12 @@ export const CRYPTO_ROTATION_SOURCE_IDS = new Set([
   // IMPROVEMENT #2: discovery lanes (need matching apify_sources rows to fire).
   'src_crypto_x_discovery_latest',
   'src_crypto_x_discovery_top',
+
+  // V2 profile lanes. Old sources remain in DB/code for archival/reuse.
+  'crypto_v2_news_a',
+  'crypto_v2_news_b',
+  'crypto_v2_market',
+  'crypto_v2_analysts',
 ]);
 
 const NEWS_COHORTS = [
@@ -127,6 +133,24 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
 
   if (id === 'src_market_trending_x_text') {
     return buildMarketImpactPlan(source, bucket + 6, 'text', 20);
+  }
+
+  // V2 profile lanes: short source ids, two accounts per lane, text+media together.
+  // No filter:media and no -filter:media, so the actor can return both text-only and media tweets.
+  if (id === 'crypto_v2_news_a') {
+    return buildFixedProfilePlan(source, ['Cointelegraph', 'CoinDesk'], 'v2_news_a', 24, 12);
+  }
+
+  if (id === 'crypto_v2_news_b') {
+    return buildFixedProfilePlan(source, ['WuBlockchain', 'cryptodotnews'], 'v2_news_b', 24, 12);
+  }
+
+  if (id === 'crypto_v2_market') {
+    return buildFixedProfilePlan(source, ['CryptoRank_io', 'WhaleFactor'], 'v2_market', 24, 12);
+  }
+
+  if (id === 'crypto_v2_analysts') {
+    return buildFixedProfilePlan(source, ['cryptomanran', 'CryptoMichNL'], 'v2_analysts', 24, 12);
   }
 
   // IMPROVEMENT #2: discovery lanes — top/trending across the whole timeline.
@@ -265,6 +289,26 @@ export function buildCryptoRotationAttempts(plan: ApifyRotationPlan): ApifyRotat
   }
 
   return attempts;
+}
+
+function buildFixedProfilePlan(
+  source: ApifyRotationSourceRow,
+  accounts: string[],
+  lane: string,
+  maxItems = 24,
+  hoursBack = 12,
+): ApifyRotationPlan {
+  return {
+    source,
+    cohortName: lane,
+    cohortIndex: null,
+    accounts,
+    inputOverride: buildSearchInputOverride(
+      buildCleanProfileSearchTerms(accounts, 'default'),
+      maxItems,
+      hoursBack,
+    ),
+  };
 }
 
 function buildCohortPlan(

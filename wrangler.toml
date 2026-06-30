@@ -130,6 +130,7 @@ AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER = "6"
 # ── Phase 6F: Adaptive rotation + queue-health controller + scheduler ──
 # All default to current behavior. Roll out one flag at a time per channel.
 APIFY_ROTATION_CONTINUOUS_ENABLED = "false"
+APIFY_ROTATION_SOURCE_ALLOWLIST = "crypto_v2_news_a,crypto_v2_news_b,crypto_v2_market,crypto_v2_analysts"
 APIFY_ROTATION_SLOT_MINUTES = "240"     # one designated source per 240-min slot (3 enabled sources / 3h, evenly)
 QUEUE_HEALTH_CONTROLLER_ENABLED = "false"
 QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H  = "3"      # healthy floor for scheduled posts in next 6h
