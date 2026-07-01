@@ -52,7 +52,7 @@ describe('category policy registry', () => {
     expect(getCategoryPolicy(null).id).toBe('default');
   });
 
-  it('keeps crypto pre-AI behavior available through the content-policy delegation path', () => {
+  it('keeps crypto pre-AI delegation available without broad relevance filtering', () => {
     const cryptoCategory = { ...baseCategory, id: 'crypto', text_only_policy: 'penalize' } as any;
     const movieCategory = { ...baseCategory, id: 'unregistered' } as any;
 
@@ -62,7 +62,7 @@ describe('category policy registry', () => {
     });
 
     expect(getPreAiContentRejectReason(genericCybersecurity, cryptoCategory))
-      .toBe('pre_ai_generic_software_security');
+      .toBeNull();
 
     expect(getPreAiContentRejectReason(genericCybersecurity, movieCategory))
       .toBeNull();

@@ -30,153 +30,77 @@ function item(overrides: Partial<any>) {
 }
 
 describe('crypto pre-AI content gate', () => {
-  it('rejects generic AI news before Claude', () => {
+  it('rejects empty text before Claude', () => {
     expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: 'Microsoft President Asks Graduates to Stop Fearing AI and Start Adapting',
-    }), cryptoCategory)).toBe('pre_ai_generic_ai_news');
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: 'OpenAI Wants a Price War With Anthropic',
-    }), cryptoCategory)).toBe('pre_ai_generic_ai_news');
+      sourceAccount: 'CoinDesk',
+      text: '',
+    }), cryptoCategory)).toBe('pre_ai_empty_text');
   });
 
-  it('allows AI items with a clear crypto connection', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: 'Coinbase launches tool for AI agents to trade crypto and make stablecoin payments',
-    }), cryptoCategory)).toBeNull();
-  });
-
-  it('rejects generic software supply-chain security even from crypto security accounts', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'SlowMist_Team',
-      text: 'Shai-Hulud Hades malware spreads through malicious PyPI packages like openai_mcp-2.41.2 and bramin-0.0.4, injects .pth files, and continues execution when Bun is detected.',
-    }), cryptoCategory)).toBe('pre_ai_generic_software_security');
-  });
-
-  it('allows security incidents only when explicitly connected to crypto assets, wallets, protocols, or on-chain funds', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'SlowMist_Team',
-      text: 'A DeFi protocol exploit on Ethereum drained user wallets and moved stolen funds on-chain through a crypto bridge.',
-    }), cryptoCategory)).toBeNull();
-  });
-
-  it('rejects generic cyberattack statistics without explicit crypto-security impact even from DefiLlama', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DefiLlama',
-      text: 'The second half of 2026 saw around 70 cyberattacks, the highest number of attacks in a quarter. Despite attacks doubling, total losses were below previous peaks.',
-    }), cryptoCategory)).toBe('pre_ai_generic_software_security');
-  });
-
-  it('strictly rejects broad non-crypto news domains even from crypto-native accounts', () => {
+  it('allows broad AI, security, geopolitics, stock, and market commentary to reach Claude scoring', () => {
     const cases = [
       {
-        sourceAccount: 'DefiLlama',
-        text: 'A major cloud outage affected API availability for thousands of developers worldwide.',
+        sourceAccount: 'DecryptMedia',
+        text: 'Microsoft President Asks Graduates to Stop Fearing AI and Start Adapting',
       },
       {
         sourceAccount: 'SlowMist_Team',
-        text: 'A ransomware campaign targeted hospitals and public agencies after a data breach.',
-      },
-      {
-        sourceAccount: 'DecryptMedia',
-        text: 'OpenAI released a new model for coding and general productivity tasks.',
-      },
-      {
-        sourceAccount: 'CoinDesk',
-        text: 'SpaceX is reportedly preparing a new tender offer at a higher valuation.',
-      },
-      {
-        sourceAccount: 'WatcherGuru',
-        text: 'Tesla shares climbed after strong quarterly vehicle delivery numbers.',
-      },
-      {
-        sourceAccount: 'Cointelegraph',
-        text: 'A celebrity lawsuit drew attention after new court documents were released.',
-      },
-      {
-        sourceAccount: 'TheBlock__',
-        text: 'A national election poll showed a shift in voter sentiment.',
+        text: 'Shai-Hulud Hades malware spreads through malicious PyPI packages and injects .pth files.',
       },
       {
         sourceAccount: 'DefiLlama',
         text: 'The second half of 2026 saw around 70 cyberattacks and lower total losses than previous peaks.',
       },
+      {
+        sourceAccount: 'WatcherGuru',
+        text: "Iran says the Strait of Hormuz is still closed despite President Trump's claims.",
+      },
+      {
+        sourceAccount: 'WatcherGuru',
+        text: 'JUST IN: $1.15 trillion added to the US stock market today.',
+      },
+      {
+        sourceAccount: 'Cointelegraph',
+        text: 'BTC 80K or 50K? Which are you watching?',
+      },
+      {
+        sourceAccount: 'glassnode',
+        text: 'Bitcoin options data gives a broader view of market sentiment and what traders may expect next.',
+      },
     ];
 
     for (const row of cases) {
-      expect(getPreAiContentRejectReason(item(row), cryptoCategory), row.text).not.toBeNull();
+      expect(getPreAiContentRejectReason(item(row), cryptoCategory), row.text).toBeNull();
     }
   });
 
-  it('does not allow source reputation to replace explicit crypto relevance', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'SlowMist_Team',
-      text: 'Researchers found malicious Python packages using .pth injection and Bun runtime checks.',
-    }), cryptoCategory)).not.toBeNull();
+  it('allows mixed-domain stories to reach Claude whether the crypto connection is explicit or ambiguous', () => {
+    const cases = [
+      {
+        sourceAccount: 'DecryptMedia',
+        text: 'Coinbase launches tool for AI agents to trade crypto and make stablecoin payments',
+      },
+      {
+        sourceAccount: 'DecryptMedia',
+        text: 'OpenAI-linked tokenized equity products are expanding across crypto trading venues.',
+      },
+      {
+        sourceAccount: 'SlowMist_Team',
+        text: 'A GitHub supply-chain attack targeted developers and may affect wallet infrastructure.',
+      },
+      {
+        sourceAccount: 'Pentosh1',
+        text: 'Iran tensions pushed Bitcoin lower as oil and crypto liquidity concerns hit risk assets.',
+      },
+      {
+        sourceAccount: 'DecryptMedia',
+        text: "Crypto platforms broaden access to Elon Musk's SpaceX through tokenized equity and RWA rails",
+      },
+    ];
 
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DefiLlama',
-      text: 'A weekly cybersecurity report counted dozens of attacks but did not mention digital assets.',
-    }), cryptoCategory)).not.toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: 'A gaming company announced layoffs after weaker quarterly revenue.',
-    }), cryptoCategory)).not.toBeNull();
-  });
-
-  it('allows mixed-domain stories only when the crypto connection is explicit in the source text', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: 'GameStop extended support for Bitcoin payments across selected online purchases.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: 'Crypto platforms cancelled a tokenized SpaceX equity product tied to RWA markets.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'SlowMist_Team',
-      text: 'A DeFi protocol exploit drained on-chain funds from user wallets through a bridge attack.',
-    }), cryptoCategory)).toBeNull();
-  });
-
-
-  it('rejects generic equity, SpaceX, and stock-market items without crypto rails', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'WatcherGuru',
-      text: 'JUST IN: $1.15 trillion added to the US stock market today.',
-    }), cryptoCategory)).toBe('pre_ai_generic_equity_or_spacex');
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'WatcherGuru',
-      text: "JUST IN: Elon Musk's SpaceX projected to trade above $2 trillion valuation tomorrow.",
-    }), cryptoCategory)).toBe('pre_ai_generic_equity_or_spacex');
-  });
-
-  it('allows tokenized equity or RWA stories with crypto rails', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'DecryptMedia',
-      text: "Crypto platforms broaden access to Elon Musk's SpaceX through tokenized equity and RWA rails",
-    }), cryptoCategory)).toBeNull();
-  });
-
-  it('rejects generic geopolitics without a crypto or digital-asset market angle', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'WatcherGuru',
-      text: "Iran says the Strait of Hormuz is still closed despite President Trump's claims.",
-    }), cryptoCategory)).toBe('pre_ai_generic_geopolitics');
-  });
-
-  it('allows geopolitics when the text explicitly connects to crypto markets', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'Pentosh1',
-      text: 'Iran tensions pushed Bitcoin lower as oil and crypto liquidity concerns hit risk assets.',
-    }), cryptoCategory)).toBeNull();
+    for (const row of cases) {
+      expect(getPreAiContentRejectReason(item(row), cryptoCategory), row.text).toBeNull();
+    }
   });
 
   it('rejects whale-alert unknown-to-unknown spam before Claude', () => {
@@ -184,25 +108,6 @@ describe('crypto pre-AI content gate', () => {
       sourceAccount: 'whale_alert',
       text: '314,843,159 USDC transferred from unknown wallet to unknown wallet',
     }), cryptoCategory)).toBe('pre_ai_whale_unknown_to_unknown');
-  });
-
-  it('rejects price engagement bait before Claude', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'Cointelegraph',
-      text: 'BTC 80K or 50K? Which are you watching?',
-    }), cryptoCategory)).toBe('pre_ai_engagement_bait');
-  });
-
-  it('allows clear crypto regulation and ETF items', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'BitcoinMagazine',
-      text: 'CFTC Chair says the Clarity Act will help future-proof Bitcoin and crypto regulation.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'EricBalchunas',
-      text: 'New spot Bitcoin ETF filing appears on the SEC website.',
-    }), cryptoCategory)).toBeNull();
   });
 
   it('allows only high-signal whale alert events before Claude', () => {
@@ -243,61 +148,4 @@ describe('crypto pre-AI content gate', () => {
       text: '52,000,000 USD of BTC transferred from Coinbase Institutional to unknown wallet',
     }), cryptoCategory)).toBe('pre_ai_whale_institution_to_unknown');
   });
-
-  it('rejects low-substance crypto market commentary without a concrete signal or takeaway', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'glassnode',
-      text: 'Bitcoin recently broke its February low and bounced from its June low. Glassnode options data offers a deeper picture of trader positioning, expectations for future volatility, and overall market sentiment, which may provide clues about Bitcoin short-term and medium-term trend.',
-    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'santimentfeed',
-      text: 'Ethereum market sentiment is shifting as derivatives positioning gives analysts a deeper picture of what traders expect next.',
-    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'cryptoquant_com',
-      text: 'Our latest Bitcoin report explores volatility expectations, trader positioning, and the broader market picture for the coming weeks.',
-    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
-  });
-
-  it('allows crypto market analysis only when it includes a concrete signal, number, level, flow, or conclusion', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'glassnode',
-      text: 'Bitcoin options implied volatility rose to 62% while open interest increased 18%, suggesting traders are pricing a larger BTC move after spot ETF outflows.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'CoinGlass',
-      text: 'Bitcoin fell below $100,000 and triggered $420 million in crypto liquidations over 24 hours.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'EricBalchunas',
-      text: 'Spot Bitcoin ETFs saw $90 million in net outflows while Ethereum ETFs lost $11 million in a single trading day.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'CryptoQuant',
-      text: 'Bitcoin funding rate turned negative and open interest fell after BTC rejected resistance near $104,000.',
-    }), cryptoCategory)).toBeNull();
-  });
-
-  it('does not reject concrete non-market crypto news while filtering vague analysis teasers', () => {
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'CoinDesk',
-      text: 'A DeFi protocol exploit on Ethereum drained $48 million in stolen funds from user wallets.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'TheBlock__',
-      text: 'New spot Bitcoin ETF filing appears on the SEC website.',
-    }), cryptoCategory)).toBeNull();
-
-    expect(getPreAiContentRejectReason(item({
-      sourceAccount: 'Glassnode',
-      text: 'Bitcoin options data gives a broader view of market sentiment and what traders may expect next.',
-    }), cryptoCategory)).toBe('pre_ai_low_substance_market_commentary');
-  });
-
 });

@@ -32,7 +32,7 @@ function item(overrides: Partial<any>) {
 }
 
 describe('crypto editorial substance hard gate after AI scoring', () => {
-  it('overrides Claude publish=true for vague crypto market commentary', () => {
+  it('does not override Claude publish=true for vague crypto market commentary', () => {
     const result = applyPostScoringHardGate([{
       publish: true,
       score: 92,
@@ -45,10 +45,10 @@ describe('crypto editorial substance hard gate after AI scoring', () => {
       text: 'Bitcoin recently broke its February low and bounced from its June low. Glassnode options data offers a deeper picture of trader positioning, expectations for future volatility, and overall market sentiment, which may provide clues about Bitcoin short-term and medium-term trend.',
     })], cryptoCategory)[0];
 
-    expect(result.publish).toBe(false);
-    expect(result.score).toBe(0);
-    expect(result.riskFlags).toContain('hard_gate_after_ai');
-    expect(result.riskFlags).toContain('pre_ai_low_substance_market_commentary');
+    expect(result.publish).toBe(true);
+    expect(result.score).toBe(92);
+    expect(result.riskFlags).not.toContain('hard_gate_after_ai');
+    expect(result.riskFlags).not.toContain('pre_ai_low_substance_market_commentary');
   });
 
   it('keeps concrete crypto market analysis publishable after AI scoring', () => {

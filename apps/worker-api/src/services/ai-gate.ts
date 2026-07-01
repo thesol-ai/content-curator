@@ -7,6 +7,7 @@
 
 import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from '../types';
 import { getPreAiContentRejectReason } from './content-policy';
+import { getHardPreAiCryptoAudienceRejectReason } from './story-quality-guard';
 import { getCategoryPolicy } from '../categories/registry';
 import { applyPersianCaptionQualityGuard } from './story-quality-guard';
 import {
@@ -712,13 +713,15 @@ export function applyPostScoringHardGate(
     const item = items[index];
     if (!item) return result;
 
-    const hardRejectReason = getPreAiContentRejectReason(item, category);
+    // Post-scoring hard gate mirrors the new crypto pre-AI rule:
+    // only obvious scams/promotions are forcibly blocked here.
+    // Relevance and editorial quality are Claude scoring responsibilities.
+    const hardRejectReason = getHardPreAiCryptoAudienceRejectReason(item);
     if (!hardRejectReason) return result;
 
     const flags = new Set(result.riskFlags ?? []);
     flags.add('hard_gate_after_ai');
     flags.add(hardRejectReason);
-    flags.add('missing_explicit_crypto_relevance');
 
     return {
       ...result,

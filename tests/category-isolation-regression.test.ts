@@ -71,14 +71,14 @@ function ai(overrides: Partial<any> = {}) {
 }
 
 describe('category isolation regression safety net', () => {
-  it('keeps crypto-only pre-AI relevance policy scoped to the crypto category', () => {
+  it('does not apply broad crypto relevance filtering before AI scoring', () => {
     const genericCybersecurity = item({
       sourceAccount: 'DefiLlama',
       text: 'A weekly cybersecurity report counted dozens of cyberattacks and lower total losses than previous peaks.',
     });
 
     expect(getPreAiContentRejectReason(genericCybersecurity, cryptoCategory))
-      .toBe('pre_ai_generic_software_security');
+      .toBeNull();
 
     expect(getPreAiContentRejectReason(genericCybersecurity, movieCategory))
       .toBeNull();
@@ -99,7 +99,7 @@ describe('category isolation regression safety net', () => {
     expect(result.riskFlags).toEqual(['kept_by_non_crypto_category']);
   });
 
-  it('still overrides AI approval for the same item in the crypto category', () => {
+  it('does not override AI approval for broad relevance in the crypto category', () => {
     const [result] = applyPostScoringHardGate([
       ai(),
     ], [
@@ -109,10 +109,8 @@ describe('category isolation regression safety net', () => {
       }),
     ], cryptoCategory);
 
-    expect(result.publish).toBe(false);
-    expect(result.score).toBe(0);
-    expect(result.riskFlags).toContain('hard_gate_after_ai');
-    expect(result.riskFlags).toContain('pre_ai_generic_software_security');
-    expect(result.riskFlags).toContain('missing_explicit_crypto_relevance');
+    expect(result.publish).toBe(true);
+    expect(result.score).toBe(91);
+    expect(result.riskFlags).not.toContain('hard_gate_after_ai');
   });
 });

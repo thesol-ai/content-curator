@@ -3,6 +3,7 @@ import {
   applyPersianCaptionQualityGuard,
   buildCryptoStoryClusterKey,
   buildCryptoThemeKey,
+  getHardPreAiCryptoAudienceRejectReason,
   getSourceAudienceRejectReason,
   repairPersianCaptionText,
 } from '../apps/worker-api/src/services/story-quality-guard';
@@ -52,6 +53,38 @@ describe('story quality guard', () => {
       sourceAccount: 'CoinDesk',
       text: 'Ethereum ETF sees $200M in net inflows today according to @CoinDesk data. #Ethereum #ETF',
     })).not.toBe('iran_audience_promotional_campaign');
+  });
+
+  it('keeps crypto pre-AI limited to obvious scams and promotions only', () => {
+    expect(getHardPreAiCryptoAudienceRejectReason({
+      sourceAccount: 'CoinDesk',
+      text: 'Iran tensions pushed traders to cut risk across Bitcoin and crypto markets.',
+    })).toBeNull();
+
+    expect(getHardPreAiCryptoAudienceRejectReason({
+      sourceAccount: 'Cointelegraph',
+      text: 'OpenAI-linked tokenized equity products are expanding across crypto trading venues.',
+    })).toBeNull();
+
+    expect(getHardPreAiCryptoAudienceRejectReason({
+      sourceAccount: 'CoinDesk',
+      text: 'A GitHub supply-chain attack targeted developers and may affect wallet infrastructure.',
+    })).toBeNull();
+
+    expect(getHardPreAiCryptoAudienceRejectReason({
+      sourceAccount: 'Cointelegraph',
+      text: 'What Crypto Sectors in the UAE Are Drawing the Most Capital? [Ft. MidChains CEO] #CHAINREACTION',
+    })).toBeNull();
+
+    expect(getHardPreAiCryptoAudienceRejectReason({
+      sourceAccount: 'Cointelegraph',
+      text: '⚡ QUESTION: hypothetically... Bitcoin just dropped to $30,000. What are you doing?',
+    })).toBeNull();
+
+    expect(getHardPreAiCryptoAudienceRejectReason({
+      sourceAccount: 'binance',
+      text: 'Introducing the bStocks Trading Competition. $240,000 in token vouchers. Trade tokenized stocks to claim your share.',
+    })).toBe('iran_audience_promotional_campaign');
   });
 
   it('repairs common Persian spacing defects', () => {

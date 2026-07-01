@@ -44,8 +44,8 @@ function ai(overrides: Partial<any> = {}) {
   } as any;
 }
 
-describe('AI strict crypto hard gate', () => {
-  it('overrides AI approval when explicit crypto relevance is missing', () => {
+describe('AI crypto post-scoring hard gate', () => {
+  it('does not override AI approval for broad relevance after scoring', () => {
     const [result] = applyPostScoringHardGate([
       ai(),
     ], [
@@ -55,10 +55,25 @@ describe('AI strict crypto hard gate', () => {
       }),
     ], cryptoCategory);
 
+    expect(result.publish).toBe(true);
+    expect(result.score).toBe(92);
+    expect(result.riskFlags).not.toContain('hard_gate_after_ai');
+  });
+
+  it('still overrides AI approval for obvious promotional campaigns', () => {
+    const [result] = applyPostScoringHardGate([
+      ai(),
+    ], [
+      item({
+        sourceAccount: 'binance',
+        text: 'Introducing the bStocks Trading Competition. $240,000 in token vouchers. Trade tokenized stocks to claim your share.',
+      }),
+    ], cryptoCategory);
+
     expect(result.publish).toBe(false);
     expect(result.score).toBe(0);
     expect(result.riskFlags).toContain('hard_gate_after_ai');
-    expect(result.riskFlags).toContain('missing_explicit_crypto_relevance');
+    expect(result.riskFlags).toContain('iran_audience_promotional_campaign');
   });
 
   it('keeps AI approval when the text has explicit crypto relevance', () => {

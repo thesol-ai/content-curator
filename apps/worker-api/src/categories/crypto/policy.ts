@@ -13,33 +13,12 @@ function getCryptoPreAiRejectReason(item: NormalizedItem): string | null {
   const account = normalizeAccount(item.sourceAccount);
 
   if (!body) return 'pre_ai_empty_text';
-  if (isEngagementBait(body)) return 'pre_ai_engagement_bait';
-  if (isWeakCryptoAdjacentPrivateAssetStory(body)) return 'pre_ai_weak_crypto_adjacent_private_asset';
 
+  // Keep Whale Alert's own hard-noise filter, because it is source-specific spam
+  // control. Do not use pre-AI to judge crypto relevance or editorial quality.
   if (account === 'whale_alert') {
     return getWhaleAlertRejectReason(body);
   }
-
-  if (mentionsGenericSoftwareSecurity(body) && !hasExplicitCryptoSecurityRelevance(body)) {
-    return 'pre_ai_generic_software_security';
-  }
-
-  if (mentionsGenericAi(body) && !hasCryptoRelevance(body, account)) {
-    return 'pre_ai_generic_ai_news';
-  }
-
-  if (mentionsGenericEquityOrSpaceX(body) && !hasCryptoRelevance(body, account)) {
-    return 'pre_ai_generic_equity_or_spacex';
-  }
-
-  if (mentionsGenericGeopolitics(body) && !hasCryptoRelevance(body, account)) {
-    return 'pre_ai_generic_geopolitics';
-  }
-
-  if (!hasCryptoRelevance(body, account)) return 'pre_ai_non_crypto';
-
-  const editorialSubstanceRejectReason = getCryptoEditorialSubstanceRejectReason(body);
-  if (editorialSubstanceRejectReason) return editorialSubstanceRejectReason;
 
   return null;
 }

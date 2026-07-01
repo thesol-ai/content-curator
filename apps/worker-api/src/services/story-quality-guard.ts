@@ -65,6 +65,31 @@ export function getSourceAudienceRejectReason(
   return null;
 }
 
+export function getHardPreAiCryptoAudienceRejectReason(
+  item: Pick<NormalizedItem, 'sourceAccount' | 'text'>,
+): string | null {
+  const account = normalizeAccount(item.sourceAccount);
+  const body = normalizeText(item.text);
+
+  if (!body) return 'iran_audience_empty_context';
+
+  // Pre-AI is intentionally NOT an editorial or relevance judge. It should only
+  // remove obvious scams, prize campaigns, and hard promotional shill patterns.
+  if (isExplicitScamOrPrizeCampaign(body)) return 'iran_audience_promotional_campaign';
+
+  if (isProjectShillThread(item.text)) return 'iran_audience_promotional_campaign';
+
+  if (account === 'binance' && isExchangeMarketing(body)) {
+    return 'iran_audience_exchange_marketing';
+  }
+
+  if (PROMOTIONAL_SOURCE_ACCOUNTS.has(account) && isProjectMarketing(body)) {
+    return 'iran_audience_project_marketing';
+  }
+
+  return null;
+}
+
 export function buildCryptoStoryClusterKey(
   topicFingerprint: unknown,
   text: unknown,

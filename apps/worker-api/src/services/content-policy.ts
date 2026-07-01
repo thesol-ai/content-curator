@@ -1,6 +1,6 @@
 import type { AIGateResult, CategoryRow, NormalizedItem } from '../types';
 import { getCategoryPolicy } from '../categories/registry';
-import { getSourceAudienceRejectReason } from './story-quality-guard';
+import { getHardPreAiCryptoAudienceRejectReason } from './story-quality-guard';
 
 export function findSimilarTopicInRunRejections(
   items: Pick<NormalizedItem, 'sourceAccount'>[],
@@ -49,7 +49,7 @@ export function getPreAiContentRejectReason(item: NormalizedItem, category: Cate
   if (categoryRejectReason) return categoryRejectReason;
 
   if (String(category.id ?? '').trim().toLowerCase() === 'crypto') {
-    const audienceRejectReason = getSourceAudienceRejectReason(item);
+    const audienceRejectReason = getHardPreAiCryptoAudienceRejectReason(item);
     if (audienceRejectReason) return audienceRejectReason;
   }
 
