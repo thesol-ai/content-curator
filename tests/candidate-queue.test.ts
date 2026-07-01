@@ -467,6 +467,30 @@ describe('fetchPendingCandidates', () => {
     await fetchPendingCandidates(env, 5, 'cat-crypto');
     expect(capturedSql).toContain('category_id');
   });
+  it('passes platform allowlist to query when provided', async () => {
+    let capturedSql = '';
+    let capturedBinds: unknown[] = [];
+    const mockDB = makeMockDB();
+    mockDB.prepare = vi.fn((sql: string) => {
+      capturedSql = sql;
+      return {
+        bind: vi.fn(function (this: unknown, ...args: unknown[]) {
+          capturedBinds = args;
+          return { all: vi.fn(async () => ({ results: [] })) };
+        }),
+        run: vi.fn(),
+        all: vi.fn(async () => ({ results: [] })),
+        first: vi.fn(async () => null),
+      };
+    });
+    const env = makeEnv({ DB: mockDB as unknown as D1Database });
+
+    await fetchPendingCandidates(env, 5, 'crypto', undefined, ['x']);
+
+    expect(capturedSql).toContain('platform IN (?)');
+    expect(capturedBinds).toContain('x');
+  });
+
 });
 
 // ── countPendingCandidates ────────────────────────────────────

@@ -10,6 +10,7 @@ import {
   fetchPendingCandidates,
   hasPendingCandidatesForPlatform,
   getCandidateBacklogDrainLimit,
+  getCandidateDrainPlatformAllowlist,
   getFairSourcePickerPoolMultiplier,
   getMaxScoringBatchesPerRun,
   getScoringBatchSize,
@@ -137,19 +138,16 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   const drainLimit = Math.max(baseDrainLimit, maxBatches * scoringBatchSize);
   const batchSize = Math.max(1, Math.min(scoringBatchSize, drainLimit));
 
-  // RSS brief budget gating. `rssBudgetExhausted` (no calls left) makes the rest
-  // of this tick exclude RSS at the SQL level so the cap defers ONLY RSS — non-RSS
-  // candidates keep draining. Pre-checking up front also stops RSS from being
-  // claimed/scored just to be deferred at the brief step, which would burn AI
-  // scoring / duplicate-judge budget every tick (cost churn). When the budget is
-  // only PARTLY spent, each RSS-bearing batch is trimmed so no more than the
-  // remaining brief calls' worth of RSS is claimed (the surplus would be scored
-  // only to be cap-deferred). `rssDeferredThisRun` records whether real RSS work
-  // was actually set aside (distinct from the mere budget state).
-  let rssBudgetExhausted = (await getRssBriefBudgetState(env)).exhausted;
+  const platformAllowlist = getCandidateDrainPlatformAllowlist(env);
+  const rssDrainAllowed = platformAllowlist.length === 0 || platformAllowlist.includes('rss');
+
+  // RSS brief budget gating. Disabled when the drain platform allowlist excludes
+  // RSS. For the current crypto production path, X/Apify is the only active source
+  // we want spending scoring/brief budget.
+  let rssBudgetExhausted = rssDrainAllowed ? (await getRssBriefBudgetState(env)).exhausted : false;
   let rssDeferredThisRun = false;
   const rssDeferralWarnings = new Set<string>();
-  if (rssBudgetExhausted) {
+  if (rssDrainAllowed && rssBudgetExhausted) {
     rssDeferredThisRun = await hasPendingCandidatesForPlatform(env, 'rss', options.categoryId);
     if (rssDeferredThisRun) rssDeferralWarnings.add('rss_brief_daily_cap');
   }
@@ -160,7 +158,13 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     const poolLimit = fairPickerEnabled
       ? Math.min(Math.max(batchSize * getFairSourcePickerPoolMultiplier(env), batchSize), 200)
       : Math.min(batchSize, remaining);
-    const pendingPool = await fetchPendingCandidates(env, poolLimit, options.categoryId, rssBudgetExhausted ? 'rss' : undefined);
+    const pendingPool = await fetchPendingCandidates(
+      env,
+      poolLimit,
+      options.categoryId,
+      rssBudgetExhausted ? 'rss' : undefined,
+      platformAllowlist,
+    );
     if (pendingPool.length === 0) break;
 
     const selection = selectCandidateBatchForScoring(pendingPool, Math.min(batchSize, remaining), fairPickerEnabled);
@@ -171,7 +175,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     // Re-read the brief budget (cheap COUNT) so RSS claimed ACROSS batches in this
     // tick never exceeds what brief can serve. If it just got exhausted, drop RSS
     // from this batch and continue (next fetch excludes RSS at the SQL level).
-    if (!rssBudgetExhausted && pending.some(c => c.platform === 'rss')) {
+    if (rssDrainAllowed && !rssBudgetExhausted && pending.some(c => c.platform === 'rss')) {
       const briefState = await getRssBriefBudgetState(env);
       let trimmedRssThisBatch = false;
 
@@ -199,6 +203,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
             Math.max(targetSize * 2, targetSize),
             options.categoryId,
             'rss',
+            platformAllowlist,
           );
           const refillSelection = selectCandidateBatchForScoring(
             refillPool.filter(c => !usedIds.has(c.id)),

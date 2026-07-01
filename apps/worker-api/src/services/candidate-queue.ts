@@ -25,6 +25,16 @@ export function getFairSourcePickerPoolMultiplier(env: Env): number {
   return Math.max(1, Math.min(Math.floor(v), 20));
 }
 
+
+export function getCandidateDrainPlatformAllowlist(env: Env): string[] {
+  const raw = String((env as any).AI_BACKLOG_DRAIN_PLATFORM_ALLOWLIST ?? '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map(v => v.trim().toLowerCase())
+    .filter(v => /^[a-z0-9_-]+$/.test(v));
+}
+
 export function getScoringBatchSize(env: Env): number {
   const v = parseInt(env.AI_SCORING_BATCH_SIZE ?? '10', 10);
   return isNaN(v) || v <= 0 ? 10 : v;
@@ -196,6 +206,7 @@ export async function fetchPendingCandidates(
   limit: number,
   categoryId?: string,
   excludePlatform?: string,
+  platformAllowlist: string[] = [],
 ): Promise<AICandidateRow[]> {
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
@@ -205,6 +216,11 @@ export async function fetchPendingCandidates(
     const conds = ["status IN ('pending', 'needs_translation')", 'created_at > ?', 'attempt_count < ?'];
     const binds: unknown[] = [cutoff, maxAttempts];
     if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
+    if (platformAllowlist.length > 0) {
+      const placeholders = platformAllowlist.map(() => '?').join(', ');
+      conds.push(`platform IN (${placeholders})`);
+      binds.push(...platformAllowlist);
+    }
     // When a per-platform brief budget is exhausted for the rest of a drain tick,
     // exclude that platform at the SQL level. Even with RSS priority normalized to
     // the same 0-100-ish scale as other sources, budget-exhausted RSS should not be
