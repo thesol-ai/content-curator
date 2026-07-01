@@ -1083,12 +1083,152 @@ async function processSingleSource(
 }
 
 
-function computeCandidatePriorityScore(item: NormalizedItem): number {
+export function computeCandidatePriorityScore(item: NormalizedItem): number {
+  const text = String(item.text ?? '');
+  const haystack = `${item.sourceAccount ?? ''} ${text}`.toLowerCase();
+
+  let score = 20;
+
+  score += engagementPriorityScore(item);
+  score += freshnessPriorityScore(item);
+  score += mediaPriorityScore(item);
+  score += cryptoAssetPriorityScore(haystack);
+  score += cryptoEventPriorityScore(haystack);
+  score += sourcePriorityScore(item.sourceAccount);
+  score -= noisePenaltyScore(haystack, item);
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function engagementPriorityScore(item: NormalizedItem): number {
   const views = Math.max(0, Number(item.engagementViews) || 0);
   const likes = Math.max(0, Number(item.engagementLikes) || 0);
   const shares = Math.max(0, Number(item.engagementShares) || 0);
-  const mediaBoost = item.media.length > 0 ? 5 : 0;
-  return Math.round(Math.log10(views + 10) * 10 + Math.log10(likes + shares * 2 + 10) * 5 + mediaBoost);
+
+  const viewBoost = Math.min(18, Math.log10(views + 10) * 3);
+  const reactionBoost = Math.min(14, Math.log10(likes + shares * 2 + 10) * 4);
+
+  return viewBoost + reactionBoost;
+}
+
+function freshnessPriorityScore(item: NormalizedItem): number {
+  const ageSeconds = Math.max(0, Math.floor(Date.now() / 1000) - Number(item.publishedAt || 0));
+  const ageHours = ageSeconds / 3600;
+
+  if (ageHours <= 1) return 10;
+  if (ageHours <= 3) return 8;
+  if (ageHours <= 6) return 6;
+  if (ageHours <= 12) return 4;
+  if (ageHours <= 24) return 2;
+  return 0;
+}
+
+function mediaPriorityScore(item: NormalizedItem): number {
+  if (!item.media || item.media.length === 0) return 0;
+
+  const hasVideo = item.media.some(m => m.type === 'video');
+  const hasImage = item.media.some(m => m.type === 'image');
+
+  if (hasVideo) return 8;
+  if (hasImage) return 6;
+  return 4;
+}
+
+function cryptoAssetPriorityScore(haystack: string): number {
+  const patterns = [
+    /\bbitcoin\b|\bbtc\b/,
+    /\bethereum\b|\beth\b/,
+    /\bsolana\b|\bsol\b/,
+    /\bxrp\b|\bripple\b/,
+    /\bbnb\b|\bbinance coin\b/,
+    /\bdoge\b|\bdogecoin\b/,
+    /\bcardano\b|\bada\b/,
+    /\btron\b|\btrx\b/,
+    /\bhype\b|\bhyperliquid\b/,
+    /\bton\b|\btoncoin\b|\bgram\b/,
+    /\busdt\b|\btether\b/,
+    /\busdc\b|\bcircle\b/,
+  ];
+
+  const matches = patterns.filter(pattern => pattern.test(haystack)).length;
+  if (matches === 0) return 0;
+
+  return Math.min(24, 14 + (matches - 1) * 3);
+}
+
+function cryptoEventPriorityScore(haystack: string): number {
+  const highImpactPatterns = [
+    /\bhack\b|\bexploit\b|\bdrain\b|\bwallet drain\b|\bbreach\b|\bvulnerability\b/,
+    /\bbridge\b|\bsmart contract\b|\bprotocol bug\b/,
+    /\betf\b|\bspot etf\b|\bflows?\b|\binflows?\b|\boutflows?\b/,
+    /\bsec\b|\bcftc\b|\bmica\b|\bregulat\w*\b|\blawsuit\b|\bsettlement\b/,
+    /\bstablecoin\b|\bdepeg\b|\breserve\b|\battestation\b/,
+    /\bliquidation\w*\b|\bfunding rate\b|\bopen interest\b|\bvolatility\b/,
+    /\bexchange\b|\bdelist\w*\b|\blist\w*\b|\bcustody\b|\binsolvenc\w*\b/,
+    /\btreasury\b|\binstitutional\b|\bmining\b|\bstaking\b/,
+    /\brwa\b|\btokeni[sz]ation\b|\bon-chain\b|\bdefi\b/,
+  ];
+
+  const matches = highImpactPatterns.filter(pattern => pattern.test(haystack)).length;
+  if (matches === 0) return 0;
+
+  return Math.min(26, 12 + (matches - 1) * 4);
+}
+
+function sourcePriorityScore(sourceAccount: string): number {
+  const account = String(sourceAccount ?? '').trim().toLowerCase().replace(/^@/, '');
+
+  const highTrust = new Set([
+    'coindesk',
+    'cointelegraph',
+    'theblock__',
+    'theblock',
+    'decryptmedia',
+    'decrypt',
+    'wublockchain',
+    'watcherguru',
+    'lookonchain',
+    'arkham',
+    'whale_alert',
+    'slowmist_team',
+    'zachxbt',
+    'defillama',
+    'glassnode',
+    'cryptoquant_com',
+    'santimentfeed',
+  ]);
+
+  if (highTrust.has(account)) return 8;
+
+  if (/coin|crypto|btc|eth|sol|defi|blockchain|onchain|chain|whale|market|research|security/.test(account)) {
+    return 4;
+  }
+
+  return 0;
+}
+
+function noisePenaltyScore(haystack: string, item: NormalizedItem): number {
+  let penalty = 0;
+
+  if (/\bgiveaway\b|\bairdrop\b|\bcompetition\b|\bvoucher\b|\breward\b|\bclaim\b|\breferral\b|\bwhitelist\b|\bpresale\b/.test(haystack)) {
+    penalty += 40;
+  }
+
+  if (/\b100x\b|\bguaranteed\b|\brisk[- ]?free\b|\bfree money\b|\bprofit\b/.test(haystack)) {
+    penalty += 28;
+  }
+
+  if (/comment below|drop your|tag.*friend|who wants|which coin|are you bullish|gm\b/.test(haystack)) {
+    penalty += 14;
+  }
+
+  if (item.isRetweet) penalty += 10;
+  if (item.isReply) penalty += 8;
+  if (String(item.text ?? '').trim().length < 40 && (!item.media || item.media.length === 0)) {
+    penalty += 8;
+  }
+
+  return penalty;
 }
 
 
