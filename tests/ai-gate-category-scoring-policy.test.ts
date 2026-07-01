@@ -109,18 +109,19 @@ describe('category scoring policy registry', () => {
   });
 
   it('exposes the crypto scoring policy through the category registry only for crypto', () => {
-    expect(buildCryptoScoringPolicy()).toContain('CRYPTO HARD GATE');
-    expect(getCategoryPolicy('crypto').buildScoringPolicy?.(category())).toContain('CRYPTO HARD GATE');
+    expect(buildCryptoScoringPolicy()).toContain('CRYPTO SCORING RUBRIC');
+    expect(getCategoryPolicy('crypto').buildScoringPolicy?.(category())).toContain('CRYPTO SCORING RUBRIC');
     expect(getCategoryPolicy('unregistered').buildScoringPolicy?.(category({ id: 'unregistered', label: 'Unregistered' })) ?? '').toBe('');
   });
 
   it('injects the crypto scoring policy into scoring prompts for crypto categories', async () => {
     const system = await captureScoringSystem(category());
 
-    expect(system).toContain('CRYPTO HARD GATE');
-    expect(system).toContain('EDITORIAL SUBSTANCE GATE');
-    expect(system).toContain('missing_explicit_crypto_relevance');
+    expect(system).toContain('CRYPTO SCORING RUBRIC');
+    expect(system).toContain('SCORING BANDS');
+    expect(system).toContain('missing_crypto_audience_value');
     expect(system).toContain('low_substance_market_commentary');
+    expect(system).toContain('media_context_needed');
   });
 
   it('does not inject the crypto scoring policy for non-crypto categories', async () => {
@@ -130,8 +131,8 @@ describe('category scoring policy registry', () => {
       prompt_profile: 'default_editorial',
     }));
 
-    expect(system).not.toContain('CRYPTO HARD GATE');
-    expect(system).not.toContain('EDITORIAL SUBSTANCE GATE');
+    expect(system).not.toContain('CRYPTO SCORING RUBRIC');
+    expect(system).not.toContain('SCORING BANDS');
   });
 
   it('preserves category custom_prompt priority while appending category scoring policy', async () => {
@@ -140,6 +141,6 @@ describe('category scoring policy registry', () => {
     }));
 
     expect(system).toContain('CUSTOM PROFILE SENTINEL');
-    expect(system).toContain('CRYPTO HARD GATE');
+    expect(system).toContain('CRYPTO SCORING RUBRIC');
   });
 });
