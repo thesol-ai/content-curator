@@ -117,7 +117,7 @@ GEMINI_API_KEY_POOL = "GEMINI_API_KEY"
 
 # ── AI Candidate Backlog (Phase 1) ────────────────────────────
 # Production: enabled explicitly so fresh items are queued and drained safely.
-AI_CANDIDATE_BACKLOG_ENABLED = "false"
+AI_CANDIDATE_BACKLOG_ENABLED = "true"
 AI_FAIR_SOURCE_PICKER_ENABLED = "true"
 AI_SCORING_BATCH_SIZE = "8"
 AI_MAX_SCORING_BATCHES_PER_RUN = "2"
