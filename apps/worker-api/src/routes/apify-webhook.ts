@@ -59,7 +59,7 @@ export async function handleApifyWebhook(
   // پردازش واقعی async با waitUntil
   // datasetId پاس می‌شود تا فقط source مرتبط پردازش شود
   ctx.waitUntil(
-    runCuration(env, { datasetId, sourceId: sourceId ?? undefined }).then(results => {
+    runCuration(env, { datasetId, sourceId: sourceId ?? undefined }, { forceCurationEnabled: true }).then(results => {
       console.log('[Webhook] Curation complete:', results.map(r => ({
         category: r.categoryId,
         platform: r.platform,
