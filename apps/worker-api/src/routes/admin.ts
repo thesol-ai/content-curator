@@ -6,7 +6,7 @@
 // - SQL همیشه parameterized است
 // ══════════════════════════════════════════════════════════════
 
-import type { Env, ChannelRow } from '../types';
+import type { Env, ChannelRow, CategoryRow, NormalizedItem, AIGateResult } from '../types';
 import { publishDueItems, publishQueueItem, runCuration } from '../services/curation-orchestrator';
 import { getStreamTranscodeState } from '../services/stream-config';
 import { getRuntimeConfig } from '../services/runtime-config';
@@ -42,6 +42,10 @@ import {
   isCandidateBacklogEnabled,
   isFairSourcePickerEnabled,
 } from '../services/candidate-queue';
+
+import { attachTranslations } from '../services/ai-gate';
+import { runRuleGate } from '../services/rule-gate';
+import { resolveMedia, extractMediaTypes } from '../services/media-resolver';
 
 // ID validation — فقط alphanumeric و underscore و dash
 function isValidId(id: string | undefined): id is string {
@@ -105,6 +109,12 @@ export async function handleAdmin(
 
     if (path === '/internal/backlog/drain' && m === 'POST') {
       return triggerBacklogDrain(req, env);
+    }
+
+    // TEMP RECOVERY ONLY: repair ai_selected candidates that never reached publish_queue.
+    // Gemini translation + queue only. No Claude scoring. Revert after recovery.
+    if (path === '/internal/backlog/repair-selected' && m === 'POST') {
+      return repairSelectedWithoutQueue(req, env);
     }
 
     if (path === '/internal/backlog/repair-cap-blocked-selected' && m === 'POST') {
@@ -1521,6 +1531,324 @@ async function markDiscoveryRunFailedForDebug(req: Request, env: Env, runId: str
     cutoff_utc: cutoffUtc,
     reason,
   });
+}
+
+
+
+async function repairSelectedWithoutQueue(req: Request, env: Env): Promise<Response> {
+  const body: any = await req.json().catch(() => ({}));
+
+  const limit = clamp(num(body.limit === undefined || body.limit === null ? null : String(body.limit), 5), 1, 10);
+  const dryRun = body.dryRun !== false && body.dry_run !== false && body.dryRun !== 'false' && body.dry_run !== 'false';
+
+  const allowedSourceIds = [
+    'crypto_v2_news_a',
+    'crypto_v2_news_b',
+    'crypto_v2_market',
+    'crypto_v2_analysts',
+  ];
+
+  const placeholders = allowedSourceIds.map(() => '?').join(',');
+  const rows = await env.DB.prepare(`
+    SELECT
+      c.*,
+      d.ai_score,
+      d.ai_risk,
+      d.ai_priority,
+      d.risk_flags,
+      d.topic_fingerprint
+    FROM ai_candidate_queue c
+    LEFT JOIN discovery_items d
+      ON d.id = ('item_' || c.id)
+    LEFT JOIN publish_queue q
+      ON q.candidate_id = c.id
+    WHERE c.status = 'ai_selected'
+      AND q.id IS NULL
+      AND c.source_id IN (${placeholders})
+    ORDER BY c.scored_at ASC, c.created_at ASC
+    LIMIT ?
+  `).bind(...allowedSourceIds, limit).all<any>();
+
+  const candidates = rows.results ?? [];
+  if (candidates.length === 0) {
+    return ok({
+      ok: true,
+      temporary_recovery_endpoint: true,
+      dry_run: dryRun,
+      candidates_found: 0,
+      translated: 0,
+      queued: 0,
+      message: 'No ai_selected candidates without publish_queue rows found.',
+    });
+  }
+
+  const categoryIds = Array.from(new Set(candidates.map(row => String(row.category_id ?? '').trim()).filter(Boolean)));
+  if (categoryIds.length !== 1) {
+    return Response.json({
+      ok: false,
+      error: 'mixed_or_missing_category_ids',
+      category_ids: categoryIds,
+    }, { status: 409 });
+  }
+
+  const categoryId = categoryIds[0]!;
+  const category = await env.DB
+    .prepare('SELECT * FROM categories WHERE id=? AND enabled=1')
+    .bind(categoryId)
+    .first<CategoryRow>();
+
+  if (!category) {
+    return Response.json({ ok: false, error: 'category_not_found', category_id: categoryId }, { status: 404 });
+  }
+
+  const channelRows = await env.DB
+    .prepare('SELECT * FROM channels WHERE category_id=? AND enabled=1')
+    .bind(categoryId)
+    .all<ChannelRow>();
+  const channels = channelRows.results ?? [];
+
+  if (channels.length === 0) {
+    return Response.json({ ok: false, error: 'no_enabled_channels', category_id: categoryId }, { status: 409 });
+  }
+
+  const parsed: Array<{ row: any; item: NormalizedItem; ai: AIGateResult }> = [];
+
+  for (const row of candidates) {
+    let item: NormalizedItem | null = null;
+    try {
+      item = JSON.parse(String(row.normalized_item_json ?? '')) as NormalizedItem;
+    } catch {
+      item = null;
+    }
+
+    if (!item || !item.sourceUrl || !item.postId) continue;
+
+    const riskFlags = safeJsonParse(row.risk_flags, []);
+    const rawScore = Number(row.ai_score ?? row.priority_score ?? category.score_threshold ?? 75);
+    const thresholdScore = Number(category.score_threshold ?? 75);
+    const effectiveScore = Math.max(
+      Number.isFinite(rawScore) ? rawScore : 0,
+      Number.isFinite(thresholdScore) ? thresholdScore : 75,
+    );
+
+    const ai: AIGateResult = {
+      publish: true,
+      // TEMP RECOVERY ONLY: these rows are already ai_selected, so do not let the
+      // current category threshold silently skip translation for older selected rows.
+      // This does NOT call Claude; it only allows attachTranslations to run Gemini.
+      score: effectiveScore,
+      riskLevel: ['low', 'medium', 'high'].includes(String(row.ai_risk ?? ''))
+        ? String(row.ai_risk) as any
+        : 'low',
+      riskFlags: Array.isArray(riskFlags) ? riskFlags.filter((x: any) => typeof x === 'string').slice(0, 10) : [],
+      topicFingerprint: String(row.topic_fingerprint ?? '').trim() || `repair-${String(row.post_id ?? row.id).slice(0, 80)}`,
+      publishPriority: ['breaking', 'high', 'normal', 'low'].includes(String(row.ai_priority ?? ''))
+        ? String(row.ai_priority) as any
+        : 'normal',
+      translations: {},
+    };
+
+    parsed.push({ row, item, ai });
+  }
+
+  if (dryRun) {
+    return ok({
+      ok: true,
+      temporary_recovery_endpoint: true,
+      dry_run: true,
+      candidates_found: candidates.length,
+      candidates_parseable: parsed.length,
+      limit,
+      category_id: categoryId,
+      channels: channels.map(ch => ({ id: ch.id, language: ch.language, enabled: ch.enabled })),
+      candidates: parsed.map(x => ({
+        candidate_id: x.row.id,
+        source_id: x.row.source_id,
+        source_account: x.row.source_account,
+        score: x.ai.score,
+        source_url: x.item.sourceUrl,
+      })),
+      cost_note: 'dryRun=true does not call Gemini or Claude.',
+    });
+  }
+
+  const attribution = parsed.map(x => ({
+    sourceAccount: x.item.sourceAccount,
+    sourceId: x.row.source_id ?? null,
+    candidateId: x.row.id,
+    discoveryItemId: repairItemIdForCandidate(x.row.id),
+    channelId: channels[0]?.id ?? null,
+  }));
+
+  const translated = await attachTranslations(
+    env,
+    parsed.map(x => x.item),
+    parsed.map(x => x.ai),
+    category,
+    channels,
+    attribution,
+  );
+
+  let queued = 0;
+  let translationMissing = 0;
+  let ruleRejected = 0;
+  let insertSkipped = 0;
+  const details: any[] = [];
+
+  for (let i = 0; i < parsed.length; i++) {
+    const candidate = parsed[i]!;
+    const ai = translated[i];
+    if (!ai) {
+      translationMissing++;
+      details.push({ candidate_id: candidate.row.id, status: 'missing_ai_after_translation' });
+      continue;
+    }
+
+    const itemId = repairItemIdForCandidate(candidate.row.id);
+    const mediaRes = resolveMedia(candidate.item.media, category.media_mode as any);
+    const mediaTypes = extractMediaTypes(candidate.item.media, category.media_mode as any);
+    let candidateQueued = 0;
+
+    for (const channel of channels.filter(ch => ch.enabled)) {
+      const translationKey = repairChannelTranslationKey(channel.id);
+      const translation = ai.translations?.[translationKey] ?? ai.translations?.[channel.language];
+
+      if (!translation) {
+        translationMissing++;
+        details.push({
+          candidate_id: candidate.row.id,
+          channel_id: channel.id,
+          status: 'translation_missing',
+          available_translation_keys: Object.keys(ai.translations ?? {}),
+          publish: ai.publish,
+          score: ai.score,
+          risk_flags: ai.riskFlags ?? [],
+        });
+        continue;
+      }
+
+      const rule = await runRuleGate(env, ai, channel, candidate.item.mediaUrlExpiresSoon);
+      if (!rule.approved || !rule.scheduledAt) {
+        ruleRejected++;
+        details.push({
+          candidate_id: candidate.row.id,
+          channel_id: channel.id,
+          status: 'rule_gate_rejected',
+          reason: rule.reason ?? 'rule_gate_rejected',
+        });
+        continue;
+      }
+
+      const inserted = await insertRepairQueueItem(env, {
+        candidateId: candidate.row.id,
+        itemId,
+        channelId: channel.id,
+        language: channel.language,
+        sourceUrl: candidate.item.sourceUrl,
+        captionShort: translation.captionShort,
+        captionFull: translation.captionFull,
+        hashtags: translation.hashtags,
+        method: mediaRes.method,
+        mediaUrls: mediaRes.mediaUrls,
+        thumbnailUrls: mediaRes.thumbnailUrls,
+        mediaTypes,
+        scheduledAt: rule.scheduledAt,
+      });
+
+      if (inserted) {
+        queued++;
+        candidateQueued++;
+        details.push({
+          candidate_id: candidate.row.id,
+          channel_id: channel.id,
+          status: 'queued',
+          scheduled_at: rule.scheduledAt,
+        });
+      } else {
+        insertSkipped++;
+        details.push({ candidate_id: candidate.row.id, channel_id: channel.id, status: 'insert_ignored' });
+      }
+    }
+
+    if (candidateQueued > 0) {
+      await env.DB.prepare(`
+        UPDATE ai_candidate_queue
+        SET status='queued',
+            last_error=NULL
+        WHERE id=?
+          AND status='ai_selected'
+      `).bind(candidate.row.id).run();
+    }
+  }
+
+  return ok({
+    ok: true,
+    temporary_recovery_endpoint: true,
+    dry_run: false,
+    candidates_found: candidates.length,
+    candidates_parseable: parsed.length,
+    translated: parsed.length,
+    queued,
+    translation_missing: translationMissing,
+    rule_rejected: ruleRejected,
+    insert_skipped: insertSkipped,
+    limit,
+    category_id: categoryId,
+    details,
+    cost_note: 'This endpoint calls Gemini translation only; it does not call Claude scoring.',
+  });
+}
+
+async function insertRepairQueueItem(env: Env, data: {
+  candidateId: string;
+  itemId: string;
+  channelId: string;
+  language: string;
+  sourceUrl: string;
+  captionShort: string;
+  captionFull: string;
+  hashtags: string[];
+  method: string;
+  mediaUrls: string[];
+  thumbnailUrls: string[];
+  mediaTypes: Array<'image' | 'video'>;
+  scheduledAt: number;
+}): Promise<boolean> {
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO publish_queue
+    (id,candidate_id,item_id,channel_id,language,source_url,caption_short,caption_full,hashtags,
+     telegram_method,media_urls,thumbnail_urls,media_types,scheduled_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    repairGenerateId('q'),
+    data.candidateId,
+    data.itemId,
+    data.channelId,
+    data.language,
+    data.sourceUrl,
+    data.captionShort,
+    data.captionFull,
+    JSON.stringify(data.hashtags ?? []),
+    data.method,
+    JSON.stringify(data.mediaUrls ?? []),
+    JSON.stringify(data.thumbnailUrls ?? []),
+    JSON.stringify(data.mediaTypes ?? []),
+    data.scheduledAt,
+  ).run();
+
+  return (result.meta.changes ?? 0) > 0;
+}
+
+function repairItemIdForCandidate(candidateId: string): string {
+  return `item_${candidateId}`.slice(0, 120);
+}
+
+function repairChannelTranslationKey(channelId: string): string {
+  return `channel:${channelId}`;
+}
+
+function repairGenerateId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 
