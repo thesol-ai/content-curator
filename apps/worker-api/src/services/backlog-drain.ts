@@ -474,16 +474,116 @@ export async function repairCapBlockedSelectedCandidates(
     const ai = translated[i] ?? candidate.ai;
 
     try {
-      const ev = await evaluateCandidateDb(env, channels, candidate, ai);
+      const itemId = itemIdForCandidate(candidate.row.id);
 
-      // Important: this is a paid recovery path. The item was already selected by Claude.
-      // Do not re-apply source_daily_cap as a rejection. That flag is now disabled in env.
-      const counts = await persistCandidateDecision(env, channels, category, candidate, ai, ev, null);
+      // Lightweight paid recovery path:
+      // The candidate was already Claude-selected and blocked only by the old
+      // source_daily_cap. Do NOT run evaluateCandidateDb/persistCandidateDecision
+      // again here; that path performs expensive duplicate/story/theme checks and
+      // can exceed Worker CPU after translation. Build the queue row directly.
+      await saveDiscoveryMedia(env, itemId, candidate.item);
 
-      if (counts.queued > 0) {
-        result.queued += counts.queued;
+      const mediaRes = resolveMedia(candidate.item.media, category.media_mode as any);
+      const mediaTypes = extractMediaTypes(candidate.item.media, category.media_mode as any);
+      const enabledChannels = channels.filter(channel => channel.enabled);
+
+      let candidateQueued = 0;
+      let missingTranslations = 0;
+      let blockedByRule = 0;
+
+      for (const channel of enabledChannels) {
+        const translationKey = channelTranslationKey(channel.id);
+        const translation = ai.translations[translationKey] ?? ai.translations[channel.language];
+
+        if (!translation) {
+          missingTranslations++;
+          await recordCandidateItemEvent(
+            env,
+            candidate.row,
+            itemId,
+            candidate.item,
+            'translation_missing',
+            'repair_translation_missing',
+            ai,
+            { channelId: channel.id, language: channel.language, repair: 'cap_blocked_selected' },
+          );
+          continue;
+        }
+
+        const rule = await runRuleGate(env, ai, channel, candidate.item.mediaUrlExpiresSoon);
+        if (!rule.approved || !rule.scheduledAt) {
+          blockedByRule++;
+          await recordCandidateItemEvent(
+            env,
+            candidate.row,
+            itemId,
+            candidate.item,
+            'rule_gate_rejected',
+            rule.reason ?? 'repair_rule_gate_rejected',
+            ai,
+            { channelId: channel.id, language: channel.language, repair: 'cap_blocked_selected' },
+          );
+          continue;
+        }
+
+        const scheduledAt = await adjustScheduledAtForFairSourceSpacing(
+          env,
+          channel,
+          candidate.item.sourceAccount,
+          rule.scheduledAt,
+        );
+
+        const inserted = await saveQueueItem(env, {
+          candidateId: candidate.row.id,
+          itemId,
+          channelId: channel.id,
+          language: channel.language,
+          sourceUrl: candidate.item.sourceUrl,
+          captionShort: translation.captionShort,
+          captionFull: translation.captionFull,
+          hashtags: translation.hashtags,
+          method: mediaRes.method,
+          mediaUrls: mediaRes.mediaUrls,
+          thumbnailUrls: mediaRes.thumbnailUrls,
+          mediaTypes,
+          scheduledAt,
+        });
+
+        if (inserted) {
+          candidateQueued++;
+          await recordCandidateItemEvent(
+            env,
+            candidate.row,
+            itemId,
+            candidate.item,
+            'queue_created',
+            null,
+            ai,
+            {
+              channelId: channel.id,
+              language: channel.language,
+              scheduledAt,
+              repair: 'cap_blocked_selected',
+            },
+          );
+        }
+      }
+
+      if (candidateQueued > 0) {
+        await updateCandidateStatus(env, candidate.row.id, 'queued', { lastError: 'repaired_from_source_daily_cap' });
+        result.queued += candidateQueued;
       } else {
         result.notQueued += 1;
+        await updateCandidateStatus(
+          env,
+          candidate.row.id,
+          missingTranslations > 0 ? 'needs_translation' : 'ai_selected',
+          {
+            lastError: missingTranslations > 0
+              ? `repair_translation_missing:${missingTranslations}/${enabledChannels.length}`
+              : `repair_not_queued:${blockedByRule}/${enabledChannels.length}`,
+          },
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
