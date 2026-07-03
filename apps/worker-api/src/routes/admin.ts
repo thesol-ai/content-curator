@@ -29,7 +29,7 @@ import {
   buildApifyQueryYieldReport,
   buildGapFillPreview,
 } from '../services/observability-reports';
-import { drainAICandidateQueue } from '../services/backlog-drain';
+import { drainAICandidateQueue, repairCapBlockedSelectedCandidates } from '../services/backlog-drain';
 import { buildSourceReputationPreview, runApifyRotation } from '../services/apify-rotation-runner';
 import {
   getCandidateBacklogDrainLimit,
@@ -100,6 +100,10 @@ export async function handleAdmin(
 
     if (path === '/internal/backlog/drain' && m === 'POST') {
       return triggerBacklogDrain(req, env);
+    }
+
+    if (path === '/internal/backlog/repair-cap-blocked-selected' && m === 'POST') {
+      return triggerCapBlockedSelectedRepair(req, env);
     }
 
     // ── Market snapshot preview/enqueue ─────────────────────────

@@ -275,6 +275,227 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
   return result;
 }
 
+
+export interface RepairCapBlockedSelectedOptions {
+  categoryId?: string;
+  limit?: number;
+  dryRun?: boolean;
+  sourceIds?: string[];
+}
+
+export async function repairCapBlockedSelectedCandidates(
+  env: Env,
+  options: RepairCapBlockedSelectedOptions = {},
+): Promise<{
+  ok: boolean;
+  dryRun: boolean;
+  categoryId: string;
+  sourceIds: string[];
+  found: number;
+  translated: number;
+  queued: number;
+  notQueued: number;
+  failed: number;
+  candidates: Array<{ id: string; sourceId: string | null; sourceAccount: string | null; sourceUrl: string; score: number | null }>;
+  errors: Array<{ id: string; error: string }>;
+}> {
+  const categoryId = options.categoryId ?? 'crypto';
+  const defaultSourceIds = [
+    'crypto_v2_news_a',
+    'crypto_v2_news_b',
+    'crypto_v2_market',
+    'crypto_v2_analysts',
+  ];
+  const sourceIds = (options.sourceIds && options.sourceIds.length > 0 ? options.sourceIds : defaultSourceIds)
+    .map(x => String(x ?? '').trim())
+    .filter(x => /^[\w-]{1,64}$/.test(x));
+
+  const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 20), 100));
+  const dryRun = options.dryRun !== false;
+  const placeholders = sourceIds.map(() => '?').join(',');
+
+  const empty = {
+    ok: true,
+    dryRun,
+    categoryId,
+    sourceIds,
+    found: 0,
+    translated: 0,
+    queued: 0,
+    notQueued: 0,
+    failed: 0,
+    candidates: [] as Array<{ id: string; sourceId: string | null; sourceAccount: string | null; sourceUrl: string; score: number | null }>,
+    errors: [] as Array<{ id: string; error: string }>,
+  };
+
+  if (sourceIds.length === 0) return { ...empty, ok: false };
+
+  const category = await loadCategory(env, categoryId);
+  if (!category) {
+    return { ...empty, ok: false, errors: [{ id: 'category', error: 'category_not_found' }] };
+  }
+
+  const channels = await loadChannels(env, categoryId);
+  if (channels.length === 0) {
+    return { ...empty, ok: false, errors: [{ id: 'channels', error: 'no_enabled_channels' }] };
+  }
+
+  const rows = await env.DB.prepare(`
+    SELECT
+      c.*,
+      e.ai_score AS repair_ai_score,
+      e.ai_risk AS repair_ai_risk,
+      e.metadata_json AS repair_metadata_json,
+      e.created_at AS repair_blocked_at
+    FROM ai_candidate_queue c
+    JOIN run_item_events e
+      ON json_extract(e.metadata_json, '$.candidateId') = c.id
+    WHERE c.category_id = ?
+      AND c.platform = 'x'
+      AND c.source_id IN (${placeholders})
+      AND c.status = 'ai_selected'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM publish_queue q
+        WHERE q.candidate_id = c.id
+      )
+      AND e.phase = 'ai_candidate_backlog'
+      AND e.status = 'rule_gate_rejected'
+      AND e.reject_reason = 'source_daily_cap'
+      AND e.id = (
+        SELECT e2.id
+        FROM run_item_events e2
+        WHERE json_extract(e2.metadata_json, '$.candidateId') = c.id
+          AND e2.phase = 'ai_candidate_backlog'
+          AND e2.status = 'rule_gate_rejected'
+          AND e2.reject_reason = 'source_daily_cap'
+        ORDER BY e2.created_at DESC
+        LIMIT 1
+      )
+    ORDER BY e.ai_score DESC, e.created_at ASC
+    LIMIT ?
+  `).bind(categoryId, ...sourceIds, limit).all<any>();
+
+  const candidates = rows.results ?? [];
+  const result = { ...empty, found: candidates.length };
+
+  for (const row of candidates) {
+    result.candidates.push({
+      id: row.id,
+      sourceId: row.source_id ?? null,
+      sourceAccount: row.source_account ?? null,
+      sourceUrl: row.source_url,
+      score: row.repair_ai_score == null ? null : Number(row.repair_ai_score),
+    });
+  }
+
+  if (dryRun || candidates.length === 0) return result;
+
+  const prepared: Array<{
+    row: AICandidateRow;
+    item: NormalizedItem;
+    keys: string[];
+    ai: AIGateResult;
+  }> = [];
+
+  for (const raw of candidates) {
+    const row = raw as AICandidateRow & {
+      repair_ai_score?: number | null;
+      repair_ai_risk?: string | null;
+      repair_metadata_json?: string | null;
+    };
+
+    const parsed = parseCandidateRow(row);
+    if (!parsed) {
+      result.failed++;
+      result.errors.push({ id: row.id, error: 'invalid_candidate_payload' });
+      continue;
+    }
+
+    let metadata: any = {};
+    try {
+      metadata = JSON.parse(String(row.repair_metadata_json ?? '{}'));
+    } catch {
+      metadata = {};
+    }
+
+    const score = Number(row.repair_ai_score ?? 0);
+    const rawRisk = String(row.repair_ai_risk ?? 'medium').toLowerCase();
+    const riskLevel = (rawRisk === 'low' || rawRisk === 'medium' || rawRisk === 'high') ? rawRisk : 'medium';
+
+    const ai: AIGateResult = {
+      publish: true,
+      score: Number.isFinite(score) && score > 0 ? score : 75,
+      riskLevel: riskLevel as any,
+      riskFlags: Array.isArray(metadata.riskFlags) ? metadata.riskFlags.slice(0, 20).map(String) : [],
+      topicFingerprint: String(metadata.topicFingerprint ?? '').slice(0, 240),
+      publishPriority: score >= 85 ? 'breaking' : score >= 78 ? 'high' : 'normal',
+      translations: {},
+      storyKey: typeof metadata.storyKey === 'string' ? metadata.storyKey : null,
+      storyFields: metadata.storyFields && typeof metadata.storyFields === 'object' ? metadata.storyFields : null,
+    };
+
+    prepared.push({ row, item: parsed.item, keys: parsed.keys, ai });
+  }
+
+  if (prepared.length === 0) return result;
+
+  let translated: AIGateResult[];
+  try {
+    translated = await attachTranslations(
+      env,
+      prepared.map(x => x.item),
+      prepared.map(x => x.ai),
+      category,
+      channels,
+      prepared.map(x => ({
+        sourceAccount: x.item.sourceAccount,
+        sourceId: x.row.source_id ?? null,
+        candidateId: x.row.id,
+        discoveryItemId: itemIdForCandidate(x.row.id),
+        channelId: channels[0]?.id ?? null,
+      })),
+    );
+    result.translated = translated.length;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      ...result,
+      ok: false,
+      errors: [
+        ...result.errors,
+        { id: 'translation', error: msg },
+      ],
+    };
+  }
+
+  for (let i = 0; i < prepared.length; i++) {
+    const candidate = prepared[i]!;
+    const ai = translated[i] ?? candidate.ai;
+
+    try {
+      const ev = await evaluateCandidateDb(env, channels, candidate, ai);
+
+      // Important: this is a paid recovery path. The item was already selected by Claude.
+      // Do not re-apply source_daily_cap as a rejection. That flag is now disabled in env.
+      const counts = await persistCandidateDecision(env, channels, category, candidate, ai, ev, null);
+
+      if (counts.queued > 0) {
+        result.queued += counts.queued;
+      } else {
+        result.notQueued += 1;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.failed++;
+      result.errors.push({ id: candidate.row.id, error: msg });
+    }
+  }
+
+  return result;
+}
+
+
 function hasUnsafeMustCoverAiRisk(ai: AIGateResult): boolean {
   const flags = (ai.riskFlags ?? []).join(' ').toLowerCase();
 
