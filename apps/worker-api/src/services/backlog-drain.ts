@@ -158,7 +158,7 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
           severity: 'info',
           message: reason,
           categoryId: options.categoryId,
-          metadata: queuePolicy,
+          metadata: { queuePolicy },
         });
 
         return result;
