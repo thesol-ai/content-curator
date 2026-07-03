@@ -100,6 +100,41 @@ export async function isDuplicate(env: Env, keys: string[]): Promise<boolean> {
 
 // ── Record keys ───────────────────────────────────────────────
 
+export async function findExistingDedupeKeys(env: Env, keys: string[]): Promise<Set<string>> {
+  const uniqueKeys = [...new Set(
+    keys
+      .map(key => String(key ?? '').trim())
+      .filter(Boolean)
+  )];
+
+  const found = new Set<string>();
+  if (uniqueKeys.length === 0) return found;
+
+  const windowHours = getDedupeWindowHours(env);
+  const chunkSize = 80;
+
+  for (let i = 0; i < uniqueKeys.length; i += chunkSize) {
+    const chunk = uniqueKeys.slice(i, i + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+
+    const rows = await env.DB
+      .prepare(`
+        SELECT key
+        FROM dedupe_keys
+        WHERE key IN (${placeholders})
+          AND created_at > datetime('now', '-${windowHours} hours')
+      `)
+      .bind(...chunk)
+      .all<{ key: string }>();
+
+    for (const row of rows.results ?? []) {
+      if (typeof row.key === 'string') found.add(row.key);
+    }
+  }
+
+  return found;
+}
+
 export async function recordDedupeKeys(
   env: Env,
   keys: string[],

@@ -5,7 +5,7 @@
 
 import type { Env, CategoryRow, ChannelRow, ApifySourceRow, NormalizedItem, PublishedMediaResult, AIGateResult } from '../types';
 import { fetchApifyDataset, filterApifyActorMockNoResultItems, normalizeItem } from './apify-client';
-import { computeDedupeKeys, isDuplicate, recordDedupeKeys } from './dedupe';
+import { computeDedupeKeys, findExistingDedupeKeys, recordDedupeKeys } from './dedupe';
 import { runAIGate } from './ai-gate';
 import { checkChannelPublishWindowAt, runRuleGate } from './rule-gate';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
@@ -596,9 +596,34 @@ async function processSingleSource(
     const freshnessCutoffTs = Math.floor(Date.now() / 1000) - category.freshness_hours * 3600;
     let staleBeforeAiCount = 0;
 
-    for (const item of normalizedBalanced) {
-      const keys = computeDedupeKeys(item);
-      if (await isDuplicate(env, keys)) {
+    const itemKeyPairs = normalizedBalanced.map(item => ({
+      item,
+      keys: computeDedupeKeys(item),
+    }));
+    const existingDedupeKeys = await findExistingDedupeKeys(
+      env,
+      itemKeyPairs.flatMap(pair => pair.keys),
+    );
+
+    await recordRunEvent(env, {
+      runId,
+      eventType: 'dedupe.bulk_lookup.completed',
+      phase: 'dedupe_check',
+      categoryId: category.id,
+      platform: source.platform,
+      sourceId: source.id,
+      datasetId: effectiveDatasetId,
+      durationMs: Date.now() - t0,
+      metadata: {
+        normalizedCount: normalizedBalanced.length,
+        totalKeys: itemKeyPairs.reduce((sum, pair) => sum + pair.keys.length, 0),
+        existingKeys: existingDedupeKeys.size,
+      },
+    });
+
+    for (const { item, keys } of itemKeyPairs) {
+      const duplicate = keys.some(key => existingDedupeKeys.has(key));
+      if (duplicate) {
         itemsDuplicate++;
         await recordRunItemEvent(env, {
           runId,
