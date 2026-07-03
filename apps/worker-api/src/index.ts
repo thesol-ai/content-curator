@@ -400,8 +400,41 @@ async function routeRequest(
     return handleStatus(request, env);
   }
 
-  // Maintenance mode check — blocks all non-health routes
   const runtime = await getRuntimeConfig(env);
+
+  // Internal admin endpoints — require x-internal-api-secret header.
+  // During maintenance, allow only a tiny authenticated control-plane subset so
+  // operators can recover ingestion without waking scheduled cron/backlog drain.
+  if (path.startsWith('/internal/')) {
+    const secret = request.headers.get('x-internal-api-secret');
+    if (!verifySecret(secret, env)) {
+      return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+    }
+
+    const maintenanceAllowedInternalPaths = new Set([
+      '/internal/admin/toggle',
+      '/internal/admin/settings',
+      '/internal/curation/trigger',
+    ]);
+
+    if (runtime.maintenanceMode && !maintenanceAllowedInternalPaths.has(path)) {
+      return Response.json(
+        { ok: false, error: 'maintenance_mode', message: 'System is in maintenance mode' },
+        { status: 503 }
+      );
+    }
+
+    // IMPROVEMENT #10: read-only pipeline health report (behind internal auth).
+    if (path === '/internal/pipeline-health') {
+      const hours = Number(url.searchParams.get('hours') ?? '6');
+      const category = url.searchParams.get('category') ?? undefined; // v4: optional scoping
+      const report = await buildPipelineHealthReport(env, Number.isFinite(hours) && hours > 0 ? hours : 6, category);
+      return Response.json(report);
+    }
+    return handleAdmin(request, env, ctx);
+  }
+
+  // Maintenance mode check — blocks all non-health, non-approved-internal routes.
   if (runtime.maintenanceMode) {
     return Response.json(
       { ok: false, error: 'maintenance_mode', message: 'System is in maintenance mode' },
@@ -424,22 +457,6 @@ async function routeRequest(
       return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
     }
     return handleApifyWebhook(request, env, ctx);
-  }
-
-  // Internal admin endpoints — require x-internal-api-secret header
-  if (path.startsWith('/internal/')) {
-    const secret = request.headers.get('x-internal-api-secret');
-    if (!verifySecret(secret, env)) {
-      return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-    }
-    // IMPROVEMENT #10: read-only pipeline health report (behind internal auth).
-    if (path === '/internal/pipeline-health') {
-      const hours = Number(url.searchParams.get('hours') ?? '6');
-      const category = url.searchParams.get('category') ?? undefined; // v4: optional scoping
-      const report = await buildPipelineHealthReport(env, Number.isFinite(hours) && hours > 0 ? hours : 6, category);
-      return Response.json(report);
-    }
-    return handleAdmin(request, env, ctx);
   }
 
   return Response.json({ ok: false, error: 'not_found' }, { status: 404 });
