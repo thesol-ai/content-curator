@@ -918,7 +918,8 @@ function buildRtlLeadRepairSystem(target: TranslationTarget): string {
     'Preserve the exact meaning, facts, names, numbers, entities, and tone.',
     'Do not add facts. Do not remove important details.',
     'Do not add a fixed or static prefix.',
-    'Fix only the opening phrasing when needed so the caption starts cleanly for RTL.',
+    'If the caption has a title line followed by a blank line, preserve that title/body structure.',
+    'Fix only the opening title/phrasing when needed so the caption starts cleanly for RTL.',
     'The first real word after any emoji/spacing MUST be in the target RTL language.',
     'The caption must never start with English, a Latin brand name, ticker, number, @handle, URL, hashtag, or punctuation-led English phrase.',
     target.language === 'fa'
@@ -951,7 +952,10 @@ function buildPersianCaptionStyleRepairSystem(): string {
     'Rewrite as a normal crypto channel news post.',
     'Do NOT address the reader or audience.',
     'Banned Persian phrases and close variants: برای کاربران کریپتو، برای کاربران، نکته مهم این است، معنی ساده‌اش، به زبان ساده، این خبر از جنس، این خبر بیشتر درباره، اگر این مدل‌ها، نه فقط معامله، یکی از کاربردهای واقعی، یکی از کاربردهای جدی، فقط یک ایده حاشیه‌ای، نشان‌دهنده.',
-    'Use concise, natural Iranian Persian. Start with a Persian word.',
+    'Use concise, natural Iranian Persian.',
+    'Required Persian format: exactly one relevant formal emoji + Persian hook title on the first line, then one blank line, then the body.',
+    'The first real word after the emoji must be Persian; never start with English, a ticker, a number, @handle, URL, or hashtag.',
+    'Make the title attractive but factual: no invented urgency, no exaggerated impact, no unsupported claims.',
   ].join('\n');
 }
 
@@ -1472,7 +1476,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
   }).join('\n');
 
   const exampleTranslations = targets.slice(0, Math.max(1, Math.min(2, targets.length)))
-    .map(t => `"${t.key}":{"caption_short":"≤${t.captionShortMaxChars} chars","caption_full":"≤${t.captionMaxChars} chars","hashtags":[]}`)
+    .map(t => `"${t.key}":{"caption_short":"ایموجی + تیتر فارسی قلاب‌دار\\n\\nمتن کوتاه ≤${t.captionShortMaxChars} chars","caption_full":"ایموجی + تیتر فارسی قلاب‌دار\\n\\nمتن کامل ≤${t.captionMaxChars} chars","hashtags":[]}`)
     .join(',');
 
   const categoryNotes = [
@@ -1484,6 +1488,14 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     'Crypto Persian caption writing mode:',
     '- Write for Persian-speaking crypto readers with mixed skill levels: beginners must understand it, professionals must not feel talked down to.',
     '- Use clear crypto language, not corporate/legal/research prose. The reader should understand the post on the first read.',
+    '- Every Persian crypto caption MUST start with a strong hook title on the first line, then exactly one blank line, then the news body.',
+    '- Required Persian format: "<one relevant emoji> <Persian hook title>\\n\\n<body>".',
+    '- The title must be attractive enough to pull the reader into the post, but it must remain factual, technically correct, source-backed, and trustworthy.',
+    '- The title must summarize the real editorial angle of the source tweet/news. Do not invent consequences, numbers, price impact, motives, or urgency.',
+    '- Title length: usually 6-14 Persian words. It should be sharp, concrete, and Telegram-native, not vague or corporate.',
+    '- The first real word after the emoji must be Persian. Never start the title with English, a Latin brand name, ticker, number, @handle, URL, hashtag, or punctuation.',
+    '- Use exactly one relevant formal emoji at the start of the Persian title. Choose intelligently from: 🚨 serious alert/security/breaking risk, 📊 market/data/flows, ⚖️ regulation/law/court, 🏦 banks/institutions/ETF/treasury, 🔐 hacks/security/privacy, 🔎 analysis/investigation, 📌 important general news.',
+    '- Avoid fake clickbait. Banned title behavior: exaggerating weak news, using shock words without source support, implying certainty from speculation, or writing titles that the body cannot prove.',
     '- Structure every Persian crypto caption as a normal Telegram news post: concrete fact first, then only source-backed context. Do NOT address the audience or explain that something is important “for users/readers”.',
     '- Explain crypto terms briefly when needed inside the sentence, not as a textbook aside. Examples: TVL = پولی که داخل پروتکل‌های دیفای قفل شده؛ ETF = صندوق قابل معامله در بورس؛ RWA = دارایی واقعی مثل طلا/سهام/اوراق که روی بلاکچین آمده؛ smart contract = قرارداد خودکار روی بلاکچین؛ liquidity = نقدینگی بازار؛ liquidation = بسته‌شدن اجباری معامله اهرمی.',
     '- Prefer short Telegram-native Persian: one concrete lead sentence, then one plain context sentence. caption_short should usually be 1-2 sentences; caption_full should usually be 2-4 short lines/paragraphs.',
@@ -1509,8 +1521,10 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     `{"items":[{"post_id":"...","url":"...","translations":{${exampleTranslations}}}]}`,
     '',
     'Strict rules:',
-    '- caption_short: concise, engaging 1-2 sentence summary for media captions; respect each target max chars',
-    '- caption_full: complete Telegram post with context; respect each target max chars',
+    '- caption_short: concise Telegram media caption; for Persian it MUST include the hook title, one blank line, then the short body; respect each target max chars',
+    '- caption_full: complete Telegram post with context; for Persian it MUST include the hook title, one blank line, then the full body; respect each target max chars',
+    '- Persian title rule: title first, body second. Format exactly as first line title, then one empty line, then body. Do not use a separator line like "---".',
+    '- Persian title quality rule: the title must be hooky, specific, technically accurate, and directly supported by the source text. It must not damage trust by overstating or inventing facts.',
     '- Persian (fa) captions must be in natural, fluent Farsi for an Iranian crypto audience — NOT a literal translation and NOT generic U.S. retail/investor copy',
     '- Persian captions must read like a normal crypto channel post, not a lesson addressed to the reader. Do not write "برای کاربران..." or "نکته مهم..." lines. If there is no concrete source-backed context, stop after the facts.',
     '- Avoid generic filler such as "نشان‌دهنده پذیرش نهادی", "گامی مهم", "می‌تواند تأثیرگذار باشد" unless the source gives a concrete reason.',
@@ -1519,12 +1533,13 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Bad (filler): "این خبر نشان‌دهنده پذیرش نهادی است و می‌تواند تأثیرگذار باشد." Good (concrete): "نوبیتکس در پی هک ۸۱.۷ میلیون دلار از دست داد؛ وجوه به آدرس‌های سوخت‌شده منتقل شد."',
     '- Prefer short, sharp, Telegram-native Persian: lead with the concrete fact, then at most one context line the source supports.',
     '- NO speculation: do NOT add hedging guesses such as "می‌تواند نشان‌دهنده ... باشد" / "ممکن است ... باشد" about why a transfer or move happened. For whale/transfer/on-chain-movement items, state ONLY the confirmed facts (amount, asset, from/to) and stop; do not guess motive or market impact unless the source states it.',
-    '- Persian (fa) caption_full and caption_short must start cleanly for RTL. Optional leading emoji is allowed, but the first real word after any emoji/spacing MUST be Persian.',
-    '- Persian (fa) captions must never start with an English word, Latin brand name, ticker such as $BTC, number, @handle, URL, or hashtag.',
-    '- Do not use a fixed or static prefix in Persian captions. Let the opening words be natural to the story while obeying the Persian-first rule.',
-    '- Do not force emojis. For Persian (fa), when it suits the story tone, prefer one formal relevant leading emoji, but only if directly relevant and natural.',
-    '- Approved Persian leading emoji examples: 📌 important note/news, 📊 markets/data, ⚖️ regulation, 🏦 banks/institutions, 🔐 security/hacks, 🚨 serious warning/alert, 🔎 analysis/review.',
-    '- If an emoji is used, use only one; it must be formal, sparse, and directly relevant to the story; avoid meme, hype, cheap, repeated, or decorative emojis.',
+    '- Persian (fa) caption_full and caption_short must start with exactly one relevant title emoji followed by a Persian hook title.',
+    '- After the title line, insert exactly one blank line, then write the body. This blank line is required so Telegram can render the first line as the visual title.',
+    '- The first real word after the emoji/spacing MUST be Persian.',
+    '- Persian titles and captions must never start with an English word, Latin brand name, ticker such as $BTC, number, @handle, URL, hashtag, or punctuation-led English phrase.',
+    '- Do not use a fixed or static Persian prefix. The title must be natural to the story while obeying the emoji + Persian-first rule.',
+    '- Approved title emojis: 🚨 serious alert/security/breaking risk, 📊 markets/data/flows, ⚖️ regulation/law/court, 🏦 banks/institutions/ETF/treasury, 🔐 hacks/security/privacy, 🔎 analysis/investigation, 📌 important general news.',
+    '- Use only one emoji, only at the start of the title. Avoid meme, hype, cheap, repeated, decorative, or unrelated emojis.',
     '- Arabic (ar) captions must be natural Arabic, not word-for-word translation',
     '- Avoid dry formulas like "X said in a new post" unless that framing is editorially necessary',
     '- Do NOT include source URLs or raw links. The publisher adds source attribution separately.',
