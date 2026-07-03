@@ -642,6 +642,42 @@ async function triggerCuration(req: Request, env: Env): Promise<Response> {
   return ok({ triggered: true, scope, runs: results });
 }
 
+
+async function triggerCapBlockedSelectedRepair(req: Request, env: Env): Promise<Response> {
+  const body: any = await req.json().catch(() => ({}));
+
+  const rawCategoryId = body.category_id ?? body.categoryId;
+  const categoryId = typeof rawCategoryId === 'string' && isValidId(rawCategoryId)
+    ? rawCategoryId
+    : 'crypto';
+
+  const limit = body.limit === undefined
+    ? 20
+    : clamp(num(String(body.limit), 20), 1, 100);
+
+  const dryRun = body.dryRun === false || body.dry_run === false ? false : true;
+
+  const rawSourceIds = Array.isArray(body.source_ids)
+    ? body.source_ids
+    : Array.isArray(body.sourceIds)
+      ? body.sourceIds
+      : undefined;
+
+  const sourceIds = rawSourceIds
+    ? rawSourceIds.map((x: unknown) => String(x ?? '').trim()).filter(isValidId).slice(0, 20)
+    : undefined;
+
+  const result = await repairCapBlockedSelectedCandidates(env, {
+    categoryId,
+    limit,
+    dryRun,
+    sourceIds,
+  });
+
+  return ok(result);
+}
+
+
 async function triggerPublishDue(req: Request, env: Env): Promise<Response> {
   const body: any = await req.json().catch(() => ({}));
   const limit = body?.limit === undefined
