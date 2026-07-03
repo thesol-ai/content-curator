@@ -4,6 +4,8 @@ export interface SourcePolicyRow {
   sourceAccount: string;
   scheduledNext24h: number;
   scheduledToday: number;
+  publishedToday: number;
+  usedToday: number;
   shareNext24h: number;
   full: boolean;
   throttled: boolean;
@@ -30,6 +32,16 @@ function num(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function boolEnv(env: Env, key: string, fallback: boolean): boolean {
+  const raw = String((env as any)[key] ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+export function isQueuePolicyEnforcementEnabled(env: Env): boolean {
+  return boolEnv(env, 'QUEUE_POLICY_ENFORCEMENT_ENABLED', true);
+}
+
 export function policyEnvNumber(env: Env, key: string, fallback: number): number {
   const value = (env as any)[key];
   return num(value, fallback);
@@ -45,7 +57,11 @@ export async function getQueuePolicyDecision(
 
   const targetNext24h = policyEnvNumber(env, 'QUEUE_POLICY_TARGET_NEXT_24H', 24);
   const softBrakeAt = policyEnvNumber(env, 'QUEUE_POLICY_SOFT_BRAKE_NEXT_24H', 40);
-  const hardBrakeAt = policyEnvNumber(env, 'QUEUE_POLICY_HARD_BRAKE_NEXT_24H', Math.max(56, Math.floor(maxPerDay * 0.875)));
+  const hardBrakeAt = policyEnvNumber(
+    env,
+    'QUEUE_POLICY_HARD_BRAKE_NEXT_24H',
+    Math.max(56, Math.floor(maxPerDay * 0.875)),
+  );
 
   const summary = await env.DB.prepare(`
     SELECT
@@ -68,37 +84,57 @@ export async function getQueuePolicyDecision(
   const rows = await env.DB.prepare(`
     SELECT
       COALESCE(d.source_account, c.source_account, 'unknown') AS source_account,
-      COUNT(*) AS scheduled_next_24h,
       SUM(CASE
-        WHEN date(datetime(q.scheduled_at, 'unixepoch', '+3 hours', '+30 minutes')) =
-             date(datetime('now', '+3 hours', '+30 minutes'))
+        WHEN q.status IN ('scheduled','retry')
+          AND q.scheduled_at <= unixepoch('now', '+24 hours')
         THEN 1 ELSE 0
-      END) AS scheduled_today
+      END) AS scheduled_next_24h,
+      SUM(CASE
+        WHEN q.status IN ('scheduled','retry')
+          AND date(datetime(q.scheduled_at, 'unixepoch', '+3 hours', '+30 minutes')) =
+              date(datetime('now', '+3 hours', '+30 minutes'))
+        THEN 1 ELSE 0
+      END) AS scheduled_today,
+      SUM(CASE
+        WHEN q.status = 'published'
+          AND date(datetime(q.scheduled_at, 'unixepoch', '+3 hours', '+30 minutes')) =
+              date(datetime('now', '+3 hours', '+30 minutes'))
+        THEN 1 ELSE 0
+      END) AS published_today
     FROM publish_queue q
     LEFT JOIN discovery_items d ON d.id = q.item_id
     LEFT JOIN ai_candidate_queue c ON c.id = q.candidate_id
     WHERE q.channel_id = ?
-      AND q.status IN ('scheduled','retry')
+      AND q.status IN ('scheduled','retry','published')
+      AND q.scheduled_at IS NOT NULL
+      AND q.scheduled_at >= unixepoch('now', '-36 hours')
       AND q.scheduled_at <= unixepoch('now', '+24 hours')
     GROUP BY COALESCE(d.source_account, c.source_account, 'unknown')
-    ORDER BY scheduled_next_24h DESC
+    HAVING scheduled_next_24h > 0 OR scheduled_today > 0 OR published_today > 0
+    ORDER BY (COALESCE(scheduled_today, 0) + COALESCE(published_today, 0)) DESC
   `).bind(channelId).all<{
     source_account: string;
-    scheduled_next_24h: number;
-    scheduled_today: number;
+    scheduled_next_24h: number | null;
+    scheduled_today: number | null;
+    published_today: number | null;
   }>();
 
   const sourcePolicy = (rows.results ?? []).map((row): SourcePolicyRow => {
     const scheduledForSourceNext24h = num(row.scheduled_next_24h, 0);
     const scheduledForSourceToday = num(row.scheduled_today, 0);
+    const publishedForSourceToday = num(row.published_today, 0);
+    const usedToday = scheduledForSourceToday + publishedForSourceToday;
     const shareNext24h = scheduledNext24h > 0 ? scheduledForSourceNext24h / scheduledNext24h : 0;
+
     return {
       sourceAccount: row.source_account,
       scheduledNext24h: scheduledForSourceNext24h,
       scheduledToday: scheduledForSourceToday,
+      publishedToday: publishedForSourceToday,
+      usedToday,
       shareNext24h,
-      full: scheduledForSourceToday >= sourceSoftCap,
-      throttled: scheduledForSourceToday >= Math.max(1, Math.floor(sourceSoftCap * 0.7)),
+      full: usedToday >= sourceSoftCap,
+      throttled: usedToday >= Math.max(1, Math.floor(sourceSoftCap * 0.7)),
     };
   });
 
