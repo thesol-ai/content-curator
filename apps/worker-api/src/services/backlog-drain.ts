@@ -35,6 +35,7 @@ import {
   getSourceAudienceRejectReason,
 } from './story-quality-guard';
 import { getStarvingMaxBatches } from './queue-health';
+import { getQueuePolicyDecision, isQueuePolicyEnforcementEnabled, isSourceBlockedByPolicy } from './queue-policy';
 import { runDuplicateAiJudgeForSurvivors } from './duplicate-ai-judge';
 import { enrichAndBriefRssSurvivors, getRssBriefBudgetState } from './rss-brief';
 import {
@@ -126,6 +127,45 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     result.candidatesSkipped += await skipStaleCandidates(env);
   }
 
+  let queuePolicy: Awaited<ReturnType<typeof getQueuePolicyDecision>> | null = null;
+  if (isQueuePolicyEnforcementEnabled(env)) {
+    const policyChannelId = String((env as any).QUEUE_HEALTH_CHANNEL_ID ?? 'crypto_fa_pilot');
+    const policyChannel = await env.DB.prepare(`
+      SELECT *
+      FROM channels
+      WHERE id = ?
+      LIMIT 1
+    `).bind(policyChannelId).first<ChannelRow>();
+
+    if (policyChannel) {
+      queuePolicy = await getQueuePolicyDecision(env, policyChannel);
+
+      if (!queuePolicy.shouldRunAi) {
+        const reason = `queue_policy_${queuePolicy.mode}`;
+        result.skipped = true;
+        result.reason = reason;
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `scheduled_next_24h:${queuePolicy.scheduledNext24h}`,
+          `soft_brake_at:${queuePolicy.softBrakeAt}`,
+          `hard_brake_at:${queuePolicy.hardBrakeAt}`,
+        ];
+
+        await recordRunEvent(env, {
+          runId: 'backlog_drain',
+          eventType: 'candidate.batch.queue_policy_stopped',
+          phase: 'ai_candidate_backlog',
+          severity: 'info',
+          message: reason,
+          categoryId: options.categoryId,
+          metadata: queuePolicy,
+        });
+
+        return result;
+      }
+    }
+  }
+
   // Phase 6F fix: when the queue-health controller passes an elevated
   // maxBatches (starving), clamp it against an INDEPENDENT hard cap — not the
   // normal per-run max — otherwise the controller's signal is silently lost.
@@ -158,14 +198,44 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
     const poolLimit = fairPickerEnabled
       ? Math.min(Math.max(batchSize * getFairSourcePickerPoolMultiplier(env), batchSize), 200)
       : Math.min(batchSize, remaining);
-    const pendingPool = await fetchPendingCandidates(
+    const rawPendingPool = await fetchPendingCandidates(
       env,
       poolLimit,
       options.categoryId,
       rssBudgetExhausted ? 'rss' : undefined,
       platformAllowlist,
     );
-    if (pendingPool.length === 0) break;
+    if (rawPendingPool.length === 0) break;
+
+    let pendingPool = rawPendingPool;
+    if (queuePolicy) {
+      const beforePolicy = pendingPool.length;
+      pendingPool = pendingPool.filter(candidate => !isSourceBlockedByPolicy(queuePolicy!, candidate.source_account));
+      const filteredByPolicy = beforePolicy - pendingPool.length;
+
+      if (filteredByPolicy > 0) {
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `queue_policy_source_filtered:${filteredByPolicy}`,
+        ];
+      }
+
+      if (pendingPool.length === 0) {
+        await recordRunEvent(env, {
+          runId: rawPendingPool[0]?.run_id ?? 'backlog_drain',
+          eventType: 'candidate.batch.queue_policy_sources_blocked',
+          phase: 'ai_candidate_backlog',
+          severity: 'info',
+          message: 'all fetched candidates belong to policy-blocked sources',
+          categoryId: options.categoryId,
+          metadata: {
+            filteredByPolicy,
+            sourcePolicy: queuePolicy.sourcePolicy,
+          },
+        });
+        break;
+      }
+    }
 
     const selection = selectCandidateBatchForScoring(pendingPool, Math.min(batchSize, remaining), fairPickerEnabled);
     let pending = selection.selected;
