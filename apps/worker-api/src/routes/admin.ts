@@ -30,6 +30,7 @@ import {
   buildGapFillPreview,
 } from '../services/observability-reports';
 import { drainAICandidateQueue, repairCapBlockedSelectedCandidates } from '../services/backlog-drain';
+import { getQueuePolicyDecision } from '../services/queue-policy';
 import { buildSourceReputationPreview, runApifyRotation } from '../services/apify-rotation-runner';
 import {
   getCandidateBacklogDrainLimit,
@@ -73,6 +74,10 @@ export async function handleAdmin(
   const m    = req.method;
 
   try {
+    if (path === '/internal/queue/policy' && m === 'GET') {
+      return getQueuePolicy(req, env);
+    }
+
     // ── Discovery runs ────────────────────────────────────────
     if (path === '/internal/runs' && m === 'GET') {
       return listRuns(env, url);
@@ -450,6 +455,27 @@ export async function handleAdmin(
 }
 
 // ── Handlers ──────────────────────────────────────────────────
+
+
+async function getQueuePolicy(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
+  const channelId = url.searchParams.get('channel_id') || 'crypto_fa_pilot';
+
+  const channel = await env.DB.prepare(`
+    SELECT *
+    FROM channels
+    WHERE id = ?
+    LIMIT 1
+  `).bind(channelId).first<any>();
+
+  if (!channel) {
+    return ok({ ok: false, error: 'channel_not_found', channelId });
+  }
+
+  const decision = await getQueuePolicyDecision(env, channel);
+  return ok({ ok: true, decision });
+}
+
 
 async function listRuns(env: Env, url: URL): Promise<Response> {
   const limit    = clamp(num(url.searchParams.get('limit'), 20), 1, 100);
