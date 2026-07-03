@@ -415,7 +415,6 @@ async function routeRequest(
       '/internal/admin/toggle',
       '/internal/admin/settings',
       '/internal/curation/trigger',
-      '/internal/backlog/repair-selected',
     ]);
 
     if (runtime.maintenanceMode && !maintenanceAllowedInternalPaths.has(path)) {
