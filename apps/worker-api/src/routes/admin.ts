@@ -184,6 +184,9 @@ export async function handleAdmin(
         force: body.force === true || body.force === 'true',
         dryRun: body.dryRun === true || body.dry_run === true || body.dryRun === 'true' || body.dry_run === 'true',
         onlySourceId: typeof body.onlySourceId === 'string' ? body.onlySourceId : undefined,
+        maxSources: Number.isFinite(Number(body.maxSources ?? body.max_sources)) ? Number(body.maxSources ?? body.max_sources) : undefined,
+        queueStarving: body.queueStarving === true || body.queue_starving === true || body.queueStarving === 'true' || body.queue_starving === 'true',
+        ignorePolicy: body.ignorePolicy === true || body.ignore_policy === true || body.ignorePolicy === 'true' || body.ignore_policy === 'true',
       });
       return ok(result);
     }

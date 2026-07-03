@@ -7,6 +7,7 @@ import type {
 import { getCategorySourceStrategy } from '../categories/registry';
 import { recordRunEvent } from './run-events';
 import { fetchApifyDataset, filterApifyActorMockNoResultItems } from './apify-client';
+import { getQueuePolicyDecision, isSourceBlockedByPolicy } from './queue-policy';
 
 const APIFY_API_BASE = 'https://api.apify.com/v2';
 
@@ -31,6 +32,8 @@ export interface ApifyRotationOptions {
   /** When true, the queue is starving → a single extra (second) paid attempt may
    *  fire if the daily second-attempt budget allows. Default false (cost-safe). */
   queueStarving?: boolean;
+  /** Bypass Apify pre-run queue/source policy. Use only for manual emergency runs. */
+  ignorePolicy?: boolean;
 }
 
 export interface ApifyRotationResult {
@@ -62,6 +65,15 @@ export interface ApifyRotationResult {
     }>;
     error?: string;
   }>;
+  policy?: Record<string, unknown>;
+  skippedPlans?: Array<{
+    sourceId: string;
+    cohortName: string;
+    accounts: string[];
+    reason: string;
+    blockedAccounts?: string[];
+    allowedAccounts?: string[];
+  }>;
 }
 
 export async function runApifyRotation(
@@ -81,13 +93,24 @@ export async function runApifyRotation(
       bucket,
       rotationRunId,
       plans: [],
+      policy: undefined,
+      skippedPlans: [],
     };
   }
 
   const sources = await loadRotationSources(env, options.onlySourceId);
-  const allPlans = sources
+  let allPlans = sources
     .map(source => buildRotationPlan(source, bucket))
     .filter((plan): plan is RotationPlan => Boolean(plan));
+
+  const policyState = options.ignorePolicy === true ? null : await loadApifyPreRunPolicy(env);
+  const skippedPlans: NonNullable<ApifyRotationResult['skippedPlans']> = [];
+
+  if (policyState) {
+    const applied = applyApifyPreRunPolicy(allPlans, policyState);
+    allPlans = applied.plans;
+    skippedPlans.push(...applied.skippedPlans);
+  }
 
   const continuous = isContinuousRotationEnabled(env);
 
@@ -145,10 +168,12 @@ export async function runApifyRotation(
     return {
       ok: true,
       skipped: true,
-      reason: 'rotation_bucket_sources_already_claimed',
+      reason: skippedPlans.length > 0 ? 'apify_pre_run_policy_skipped_all' : 'rotation_bucket_sources_already_claimed',
       bucket,
       rotationRunId,
       plans: [],
+      policy: policyState ? summarizeApifyPreRunPolicy(policyState) : undefined,
+      skippedPlans,
     };
   }
 
@@ -170,6 +195,8 @@ export async function runApifyRotation(
         cohortIndex: plan.cohortIndex,
         accounts: plan.accounts,
       })),
+      policy: policyState ? summarizeApifyPreRunPolicy(policyState) : undefined,
+      skippedPlans,
     },
   });
 
@@ -383,8 +410,223 @@ export async function runApifyRotation(
     bucket,
     rotationRunId,
     plans: results,
+    policy: policyState ? summarizeApifyPreRunPolicy(policyState) : undefined,
+    skippedPlans,
   };
 }
+
+
+interface ApifyPreRunPolicyState {
+  decision: Awaited<ReturnType<typeof getQueuePolicyDecision>>;
+  runsToday: number;
+  maxRunsPerDay: number;
+  remainingRunsToday: number;
+  stopReason: string | null;
+}
+
+function apifyPreRunBoolEnv(env: Env, key: string, fallback: boolean): boolean {
+  const raw = String((env as any)[key] ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+function apifyPreRunNumberEnv(env: Env, key: string, fallback: number): number {
+  const n = Number((env as any)[key]);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+async function loadApifyPreRunPolicy(env: Env): Promise<ApifyPreRunPolicyState | null> {
+  if (!apifyPreRunBoolEnv(env, 'APIFY_PRE_RUN_POLICY_ENABLED', true)) return null;
+
+  const channelId = String((env as any).QUEUE_HEALTH_CHANNEL_ID ?? 'crypto_fa_pilot');
+  const channel = await env.DB.prepare(`
+    SELECT *
+    FROM channels
+    WHERE id = ?
+    LIMIT 1
+  `).bind(channelId).first<any>();
+
+  if (!channel) return null;
+
+  const decision = await getQueuePolicyDecision(env, channel);
+  const maxRunsPerDay = Math.max(0, Math.floor(apifyPreRunNumberEnv(env, 'APIFY_PRE_RUN_MAX_RUNS_PER_DAY', 4)));
+
+  let runsToday = 0;
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM run_events
+      WHERE event_type = 'apify.rotation.task_started'
+        AND date(datetime(created_at, '+3 hours', '+30 minutes')) =
+            date(datetime('now', '+3 hours', '+30 minutes'))
+    `).first<{ count: number | null }>();
+    runsToday = Number(row?.count ?? 0) || 0;
+  } catch {
+    runsToday = 0;
+  }
+
+  const remainingRunsToday = Math.max(0, maxRunsPerDay - runsToday);
+  let stopReason: string | null = null;
+
+  if (decision.mode === 'soft_brake' || decision.mode === 'hard_brake') {
+    stopReason = `queue_${decision.mode}`;
+  } else if (remainingRunsToday <= 0) {
+    stopReason = 'apify_daily_run_budget_exhausted';
+  }
+
+  return {
+    decision,
+    runsToday,
+    maxRunsPerDay,
+    remainingRunsToday,
+    stopReason,
+  };
+}
+
+function summarizeApifyPreRunPolicy(state: ApifyPreRunPolicyState): Record<string, unknown> {
+  return {
+    mode: state.decision.mode,
+    scheduledNext6h: state.decision.scheduledNext6h,
+    scheduledNext24h: state.decision.scheduledNext24h,
+    scheduledTotal: state.decision.scheduledTotal,
+    targetNext24h: state.decision.targetNext24h,
+    softBrakeAt: state.decision.softBrakeAt,
+    hardBrakeAt: state.decision.hardBrakeAt,
+    sourceSoftCap: state.decision.sourceSoftCap,
+    runsToday: state.runsToday,
+    maxRunsPerDay: state.maxRunsPerDay,
+    remainingRunsToday: state.remainingRunsToday,
+    stopReason: state.stopReason,
+    sourcePolicy: state.decision.sourcePolicy,
+  };
+}
+
+function applyApifyPreRunPolicy(
+  plans: RotationPlan[],
+  state: ApifyPreRunPolicyState,
+): { plans: RotationPlan[]; skippedPlans: NonNullable<ApifyRotationResult['skippedPlans']> } {
+  const skippedPlans: NonNullable<ApifyRotationResult['skippedPlans']> = [];
+  const allowedPlans: RotationPlan[] = [];
+
+  if (state.stopReason) {
+    for (const plan of plans) {
+      skippedPlans.push({
+        sourceId: plan.source.id,
+        cohortName: plan.cohortName,
+        accounts: plan.accounts,
+        reason: state.stopReason,
+      });
+    }
+    return { plans: [], skippedPlans };
+  }
+
+  let remainingRuns = state.remainingRunsToday;
+
+  for (const plan of plans) {
+    if (remainingRuns <= 0) {
+      skippedPlans.push({
+        sourceId: plan.source.id,
+        cohortName: plan.cohortName,
+        accounts: plan.accounts,
+        reason: 'apify_daily_run_budget_exhausted',
+      });
+      continue;
+    }
+
+    const filtered = filterPlanAccountsByPolicy(plan, state);
+    if (!filtered.plan) {
+      skippedPlans.push({
+        sourceId: plan.source.id,
+        cohortName: plan.cohortName,
+        accounts: plan.accounts,
+        reason: filtered.reason,
+        blockedAccounts: filtered.blockedAccounts,
+        allowedAccounts: filtered.allowedAccounts,
+      });
+      continue;
+    }
+
+    allowedPlans.push(filtered.plan);
+    remainingRuns--;
+  }
+
+  return { plans: allowedPlans, skippedPlans };
+}
+
+function filterPlanAccountsByPolicy(
+  plan: RotationPlan,
+  state: ApifyPreRunPolicyState,
+): {
+  plan: RotationPlan | null;
+  reason: string;
+  blockedAccounts: string[];
+  allowedAccounts: string[];
+} {
+  const accounts = Array.isArray(plan.accounts) ? plan.accounts : [];
+  if (accounts.length === 0) {
+    return { plan, reason: 'allowed_no_profile_accounts', blockedAccounts: [], allowedAccounts: [] };
+  }
+
+  const blockedAccounts = accounts.filter(account => isSourceBlockedByPolicy(state.decision, account));
+  const allowedAccounts = accounts.filter(account => !isSourceBlockedByPolicy(state.decision, account));
+
+  if (allowedAccounts.length === accounts.length) {
+    return { plan, reason: 'allowed_all_accounts', blockedAccounts, allowedAccounts };
+  }
+
+  if (allowedAccounts.length === 0) {
+    return { plan: null, reason: 'all_accounts_source_cap_full', blockedAccounts, allowedAccounts };
+  }
+
+  const inputOverride = filterInputOverrideForAccounts(plan.inputOverride, accounts, allowedAccounts);
+  if (!inputOverride) {
+    return { plan: null, reason: 'input_not_safely_filterable', blockedAccounts, allowedAccounts };
+  }
+
+  return {
+    plan: {
+      ...plan,
+      accounts: allowedAccounts,
+      cohortName: `${plan.cohortName}_policy_filtered`,
+      inputOverride,
+    },
+    reason: 'allowed_partial_accounts',
+    blockedAccounts,
+    allowedAccounts,
+  };
+}
+
+function filterInputOverrideForAccounts(
+  inputOverride: Record<string, unknown>,
+  originalAccounts: string[],
+  allowedAccounts: string[],
+): Record<string, unknown> | null {
+  const rawTerms = inputOverride.searchTerms;
+  if (!Array.isArray(rawTerms)) return null;
+
+  const allowedLower = new Set(allowedAccounts.map(account => account.toLowerCase()));
+  const filteredTerms = rawTerms
+    .map(term => String(term ?? '').trim())
+    .filter(term => {
+      const lower = term.toLowerCase();
+      return [...allowedLower].some(account => lower.includes(`from:${account}`));
+    });
+
+  if (filteredTerms.length === 0) return null;
+
+  const oldMaxItems = Number(inputOverride.maxItems ?? filteredTerms.length * 12);
+  const ratio = allowedAccounts.length / Math.max(1, originalAccounts.length);
+  const nextMaxItems = Number.isFinite(oldMaxItems)
+    ? Math.max(1, Math.ceil(oldMaxItems * ratio))
+    : Math.max(1, filteredTerms.length * 12);
+
+  return {
+    ...inputOverride,
+    searchTerms: filteredTerms,
+    maxItems: nextMaxItems,
+  };
+}
+
 
 function buildRotationPlan(source: SourceRow, bucket: number): RotationPlan | null {
   const strategy = getCategorySourceStrategy(source.category_id);
