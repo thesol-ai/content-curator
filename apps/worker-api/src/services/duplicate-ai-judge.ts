@@ -69,7 +69,7 @@ export function getDuplicateAiJudgeConfig(env: Env): DuplicateAiJudgeConfig {
     enabled: isDuplicateAiJudgeEnabled(env),
     model: env.DUPLICATE_AI_JUDGE_MODEL || env.AI_SCORING_MODEL,
     batchSize: parseIntEnv(env.DUPLICATE_AI_JUDGE_BATCH_SIZE, 5, 1, 10),
-    maxPriors: parseIntEnv(env.DUPLICATE_AI_JUDGE_MAX_PRIORS, 20, 1, 50),
+    maxPriors: parseIntEnv(env.DUPLICATE_AI_JUDGE_MAX_PRIORS, 80, 1, 200),
     windowHours: parseIntEnv(env.DUPLICATE_AI_JUDGE_WINDOW_HOURS || env.STORY_INTELLIGENCE_WINDOW_HOURS, 72, 1, 168),
     maxTextChars: parseIntEnv(env.DUPLICATE_AI_JUDGE_MAX_TEXT_CHARS, 220, 80, 800),
     maxCallsPerDay: parseIntEnv(env.DUPLICATE_AI_JUDGE_MAX_CALLS_PER_DAY, 14, 0, 200),
@@ -389,6 +389,342 @@ async function callDuplicateJudge(
   }
 }
 
+
+const GENERIC_LOCAL_STOP_TERMS = new Set([
+  'the','a','an','and','or','of','to','in','on','for','with','by','from','as','is','are','was','were',
+  'has','have','had','will','would','could','should','new','latest','just','breaking','report','reports',
+  'says','said','per','according','update','updates','announces','announced','official','today',
+  'crypto','cryptocurrency','blockchain','market','markets','digital','asset','assets',
+  'است','شد','شده','می‌شود','می‌کند','میکند','کرد','کرده','برای','از','به','در','با','که','این','آن','یک',
+  'های','ها','را','بر','تا','طبق','گزارش','اعلام','خبر','جدید','آخرین','امروز','رسمی','بازار','رمزارز','کریپتو',
+]);
+
+const LOCAL_DIGITS: Record<string, string> = {
+  '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+  '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+};
+
+interface LocalDuplicateSignal {
+  sourceUrl: string | null;
+  storyKey: string | null;
+  topicFingerprint: string | null;
+  eventType: string | null;
+  canonicalDate: string | null;
+  contentTokens: Set<string>;
+  fieldTokens: Set<string>;
+  symbols: Set<string>;
+  numbers: Set<string>;
+  shingles: Set<string>;
+}
+
+interface LocalDuplicatePriorMatch {
+  prior: DuplicateAiJudgePrior;
+  score: number;
+  reasons: string[];
+}
+
+interface LocalDuplicateSuspect {
+  candidate: DuplicateAiJudgeCandidate;
+  priors: LocalDuplicatePriorMatch[];
+}
+
+function parseDuplicateLocalThreshold(env: Env): number {
+  const raw = Number((env as any).DUPLICATE_AI_JUDGE_LOCAL_THRESHOLD ?? 0.38);
+  return Number.isFinite(raw) ? Math.max(0.2, Math.min(0.9, raw)) : 0.38;
+}
+
+function parseDuplicateLocalPriorsPerItem(env: Env): number {
+  const raw = Math.floor(Number((env as any).DUPLICATE_AI_JUDGE_LOCAL_PRIORS_PER_ITEM ?? 4));
+  return Number.isFinite(raw) ? Math.max(1, Math.min(12, raw)) : 4;
+}
+
+function normalizeLocalText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[۰-۹٠-٩]/g, ch => LOCAL_DIGITS[ch] ?? ch)
+    .replace(/[ي]/g, 'ی')
+    .replace(/[ك]/g, 'ک')
+    .replace(/[\u200c\u200d]/g, ' ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[@]\S+/g, ' ')
+    .replace(/[^a-zA-Z0-9$#\u0600-\u06FF.%]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanLocalKey(value: unknown): string | null {
+  const cleaned = normalizeLocalText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0600-\u06FF]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 180);
+  return cleaned || null;
+}
+
+function normalizeLocalFingerprint(value: unknown): string | null {
+  const fp = cleanLocalKey(value);
+  if (!fp || fp.startsWith('ns_') || fp.startsWith('fp_') || fp.startsWith('err_') || fp.startsWith('budget_')) return null;
+  return fp;
+}
+
+function tokenizeLocal(value: unknown, maxTokens = 140): Set<string> {
+  const normalized = normalizeLocalText(value).toLowerCase();
+  const out = new Set<string>();
+  for (const token of normalized.split(' ')) {
+    const t = token.replace(/^[$#]+/, '');
+    if (t.length <= 2) continue;
+    if (GENERIC_LOCAL_STOP_TERMS.has(t)) continue;
+    out.add(t);
+    if (out.size >= maxTokens) break;
+  }
+  return out;
+}
+
+function extractSymbolTokens(value: unknown): Set<string> {
+  const raw = String(value ?? '');
+  const out = new Set<string>();
+  const matches = raw.match(/(?:[$#][A-Za-z][A-Za-z0-9]{1,12})|\b[A-Z][A-Z0-9]{1,11}\b/g) ?? [];
+  for (const match of matches) {
+    const cleaned = match.replace(/^[$#]+/, '').toLowerCase();
+    if (cleaned.length <= 1) continue;
+    if (GENERIC_LOCAL_STOP_TERMS.has(cleaned)) continue;
+    out.add(cleaned);
+  }
+  return out;
+}
+
+function extractNumbers(value: unknown): Set<string> {
+  const text = normalizeLocalText(value).toLowerCase();
+  const out = new Set<string>();
+  const matches = text.match(/\$?\d+(?:[,.]\d+)*(?:\.\d+)?\s*(?:b|bn|m|k|btc|eth|sol|xrp|usd|usdt|usdc|٪|%|هزار|میلیون|میلیارد|تریلیون)?/gi) ?? [];
+  for (const raw of matches) {
+    const normalized = raw
+      .replace(/\s+/g, '')
+      .replace(/,/g, '')
+      .replace(/^\$/, '')
+      .replace(/٪/g, '%');
+    if (normalized.length >= 2) out.add(normalized);
+  }
+  return out;
+}
+
+function buildShingles(tokens: Set<string>, size = 2, maxShingles = 80): Set<string> {
+  const arr = Array.from(tokens).slice(0, 120);
+  const out = new Set<string>();
+  for (let i = 0; i <= arr.length - size; i++) {
+    out.add(arr.slice(i, i + size).join('_'));
+    if (out.size >= maxShingles) break;
+  }
+  return out;
+}
+
+function addTokens(target: Set<string>, value: unknown): void {
+  for (const token of tokenizeLocal(value, 60)) target.add(token);
+  for (const token of extractSymbolTokens(value)) target.add(token);
+}
+
+function candidateLocalSignal(candidate: DuplicateAiJudgeCandidate): LocalDuplicateSignal {
+  const fields = candidate.ai.storyFields ?? null;
+  const fieldBlob = [
+    candidate.ai.storyKey,
+    candidate.ai.topicFingerprint,
+    fields?.eventType,
+    fields?.canonicalDate,
+    ...(fields?.primaryEntities ?? []),
+  ].join(' ');
+
+  const contentBlob = [
+    candidate.item.text,
+    candidate.ai.topicFingerprint,
+    candidate.ai.storyKey,
+    fields?.eventType,
+    fields?.canonicalDate,
+    ...(fields?.primaryEntities ?? []),
+  ].join(' ');
+
+  const contentTokens = tokenizeLocal(contentBlob);
+  const fieldTokens = new Set<string>();
+  addTokens(fieldTokens, fieldBlob);
+
+  return {
+    sourceUrl: candidate.item.sourceUrl ?? null,
+    storyKey: cleanLocalKey(candidate.ai.storyKey),
+    topicFingerprint: normalizeLocalFingerprint(candidate.ai.topicFingerprint),
+    eventType: cleanLocalKey(fields?.eventType),
+    canonicalDate: cleanLocalKey(fields?.canonicalDate),
+    contentTokens,
+    fieldTokens,
+    symbols: extractSymbolTokens(contentBlob),
+    numbers: extractNumbers(contentBlob),
+    shingles: buildShingles(contentTokens),
+  };
+}
+
+function priorLocalSignal(prior: DuplicateAiJudgePrior): LocalDuplicateSignal {
+  const fieldBlob = [
+    prior.storyKey,
+    prior.topicFingerprint,
+    prior.eventType,
+    prior.canonicalDate,
+  ].join(' ');
+
+  const contentBlob = [
+    prior.text,
+    prior.captionShort,
+    prior.topicFingerprint,
+    prior.storyKey,
+    prior.eventType,
+    prior.canonicalDate,
+  ].join(' ');
+
+  const contentTokens = tokenizeLocal(contentBlob);
+  const fieldTokens = new Set<string>();
+  addTokens(fieldTokens, fieldBlob);
+
+  return {
+    sourceUrl: prior.sourceUrl ?? null,
+    storyKey: cleanLocalKey(prior.storyKey),
+    topicFingerprint: normalizeLocalFingerprint(prior.topicFingerprint),
+    eventType: cleanLocalKey(prior.eventType),
+    canonicalDate: cleanLocalKey(prior.canonicalDate),
+    contentTokens,
+    fieldTokens,
+    symbols: extractSymbolTokens(contentBlob),
+    numbers: extractNumbers(contentBlob),
+    shingles: buildShingles(contentTokens),
+  };
+}
+
+function intersectionSize(a: Set<string>, b: Set<string>): number {
+  let n = 0;
+  for (const x of a) if (b.has(x)) n++;
+  return n;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  const overlap = intersectionSize(a, b);
+  if (overlap === 0) return 0;
+  return overlap / (a.size + b.size - overlap);
+}
+
+function scoreLocalDuplicateCandidate(current: LocalDuplicateSignal, prior: LocalDuplicateSignal): { score: number; reasons: string[] } {
+  const reasons: string[] = [];
+
+  if (current.sourceUrl && prior.sourceUrl && current.sourceUrl === prior.sourceUrl) {
+    return { score: 1, reasons: ['same_source_url'] };
+  }
+
+  let score = 0;
+
+  if (current.storyKey && prior.storyKey && current.storyKey === prior.storyKey) {
+    score += 0.7;
+    reasons.push('same_story_key');
+  }
+
+  if (current.topicFingerprint && prior.topicFingerprint && current.topicFingerprint === prior.topicFingerprint) {
+    score += 0.5;
+    reasons.push('same_topic_fingerprint');
+  }
+
+  const fieldSim = jaccard(current.fieldTokens, prior.fieldTokens);
+  const contentSim = jaccard(current.contentTokens, prior.contentTokens);
+  const shingleSim = jaccard(current.shingles, prior.shingles);
+  const symbolOverlap = intersectionSize(current.symbols, prior.symbols);
+  const numberOverlap = intersectionSize(current.numbers, prior.numbers);
+
+  if (fieldSim >= 0.15) {
+    score += Math.min(0.34, fieldSim * 0.8);
+    reasons.push(`field_overlap:${fieldSim.toFixed(2)}`);
+  }
+
+  if (contentSim >= 0.16) {
+    score += Math.min(0.28, contentSim * 0.65);
+    reasons.push(`content_overlap:${contentSim.toFixed(2)}`);
+  }
+
+  if (shingleSim >= 0.08) {
+    score += Math.min(0.22, shingleSim * 0.85);
+    reasons.push(`phrase_overlap:${shingleSim.toFixed(2)}`);
+  }
+
+  if (symbolOverlap > 0) {
+    score += Math.min(0.18, symbolOverlap * 0.09);
+    reasons.push(`symbol_overlap:${symbolOverlap}`);
+  }
+
+  if (numberOverlap > 0) {
+    score += Math.min(0.2, numberOverlap * 0.1);
+    reasons.push(`number_overlap:${numberOverlap}`);
+  }
+
+  if (current.eventType && prior.eventType && current.eventType === prior.eventType) {
+    score += 0.08;
+    reasons.push('same_event_type');
+  }
+
+  if (current.canonicalDate && prior.canonicalDate && current.canonicalDate === prior.canonicalDate) {
+    score += 0.05;
+    reasons.push('same_canonical_date');
+  }
+
+  const hasStrongAnchor =
+    !!(current.storyKey && prior.storyKey && current.storyKey === prior.storyKey)
+    || !!(current.topicFingerprint && prior.topicFingerprint && current.topicFingerprint === prior.topicFingerprint)
+    || symbolOverlap > 0
+    || numberOverlap > 0
+    || fieldSim >= 0.28
+    || shingleSim >= 0.16;
+
+  // If all we have is weak generic word overlap, do not wake Claude up.
+  if (!hasStrongAnchor && contentSim < 0.38) {
+    score = Math.min(score, 0.29);
+    reasons.push('weak_anchor_cap');
+  }
+
+  // Strong numeric + field overlap catches repeated concrete events without
+  // needing hardcoded country/company/token names.
+  if ((fieldSim >= 0.25 || symbolOverlap > 0) && numberOverlap > 0) {
+    score = Math.max(score, 0.46);
+    reasons.push('strong_field_number_match');
+  }
+
+  return { score: Math.min(1, score), reasons };
+}
+
+function buildLocalDuplicateSuspects(args: {
+  candidates: DuplicateAiJudgeCandidate[];
+  priors: DuplicateAiJudgePrior[];
+  threshold: number;
+  priorsPerItem: number;
+}): LocalDuplicateSuspect[] {
+  const priorSignals = args.priors.map(prior => ({ prior, signal: priorLocalSignal(prior) }));
+  const suspects: LocalDuplicateSuspect[] = [];
+
+  for (const candidate of args.candidates) {
+    const signal = candidateLocalSignal(candidate);
+    const matches: LocalDuplicatePriorMatch[] = [];
+
+    for (const prior of priorSignals) {
+      const scored = scoreLocalDuplicateCandidate(signal, prior.signal);
+      if (scored.score >= args.threshold) {
+        matches.push({ prior: prior.prior, score: scored.score, reasons: scored.reasons });
+      }
+    }
+
+    matches.sort((a, b) => b.score - a.score);
+    if (matches.length > 0) {
+      suspects.push({
+        candidate,
+        priors: matches.slice(0, args.priorsPerItem),
+      });
+    }
+  }
+
+  return suspects;
+}
+
+
 export async function runDuplicateAiJudgeForSurvivors(
   env: Env,
   args: {
@@ -412,7 +748,22 @@ export async function runDuplicateAiJudgeForSurvivors(
 
   if (priors.length === 0) return rejected;
 
-  for (const candidates of chunk(args.candidates, cfg.batchSize)) {
+  const localThreshold = parseDuplicateLocalThreshold(env);
+  const priorsPerItem = parseDuplicateLocalPriorsPerItem(env);
+  const suspects = buildLocalDuplicateSuspects({
+    candidates: args.candidates,
+    priors,
+    threshold: localThreshold,
+    priorsPerItem,
+  });
+
+  console.info(
+    `[DuplicateAIJudge] local_prefilter survivors=${args.candidates.length} priors=${priors.length} suspects=${suspects.length} threshold=${localThreshold}`,
+  );
+
+  if (suspects.length === 0) return rejected;
+
+  for (const suspectChunk of chunk(suspects, cfg.batchSize)) {
     const callsToday = await countDuplicateJudgeCallsToday(env);
     if (callsToday >= cfg.maxCallsPerDay) {
       await recordDuplicateJudgeUsage(env, {
@@ -425,7 +776,23 @@ export async function runDuplicateAiJudgeForSurvivors(
       break;
     }
 
-    const results = await callDuplicateJudge(env, cfg, candidates, priors);
+    const priorById = new Map<string, DuplicateAiJudgePrior>();
+    for (const suspect of suspectChunk) {
+      for (const match of suspect.priors) {
+        priorById.set(match.prior.priorId, match.prior);
+      }
+    }
+
+    const scopedPriors = Array.from(priorById.values()).slice(0, cfg.maxPriors);
+    if (scopedPriors.length === 0) continue;
+
+    const results = await callDuplicateJudge(
+      env,
+      cfg,
+      suspectChunk.map(suspect => suspect.candidate),
+      scopedPriors,
+    );
+
     for (const result of results) {
       if (shouldRejectDuplicateAiJudgeResult(result, cfg.confidenceThreshold)) {
         rejected.set(result.index, result);
