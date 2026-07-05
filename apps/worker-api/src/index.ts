@@ -234,6 +234,7 @@ export default {
                 // last rotation is not very recent (avoid double-firing a slot).
                 if (
                   env.APIFY_ROTATION_ENABLED === 'true' &&
+                  String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() !== 'true' &&
                   (shouldTriggerEarlyRotation(health) || qualitySteer) &&
                   (health.rotationAgeMin == null || health.rotationAgeMin >= getRotationSlotMinutes(env))
                 ) {
