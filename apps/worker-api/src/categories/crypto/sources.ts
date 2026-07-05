@@ -138,19 +138,19 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
   // V2 profile lanes: short source ids, two accounts per lane, text+media together.
   // No filter:media and no -filter:media, so the actor can return both text-only and media tweets.
   if (id === 'crypto_v2_news_a') {
-    return buildFixedProfilePlan(source, ['Cointelegraph', 'CoinDesk'], 'v2_news_a', 24, 12);
+    return buildFixedProfilePlan(source, ['Cointelegraph', 'CoinDesk'], 'v2_news_a', 50, 12);
   }
 
   if (id === 'crypto_v2_news_b') {
-    return buildFixedProfilePlan(source, ['WuBlockchain', 'cryptodotnews'], 'v2_news_b', 24, 12);
+    return buildFixedProfilePlan(source, ['WuBlockchain', 'cryptodotnews'], 'v2_news_b', 50, 12);
   }
 
   if (id === 'crypto_v2_market') {
-    return buildFixedProfilePlan(source, ['CryptoRank_io', 'WhaleFactor'], 'v2_market', 24, 12);
+    return buildFixedProfilePlan(source, ['CryptoRank_io', 'WhaleFactor'], 'v2_market', 50, 12);
   }
 
   if (id === 'crypto_v2_analysts') {
-    return buildFixedProfilePlan(source, ['cryptomanran', 'CryptoMichNL'], 'v2_analysts', 24, 12);
+    return buildFixedProfilePlan(source, ['cryptomanran', 'CryptoMichNL'], 'v2_analysts', 50, 12);
   }
 
   // IMPROVEMENT #2: discovery lanes — top/trending across the whole timeline.

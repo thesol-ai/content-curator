@@ -144,10 +144,14 @@ export async function runApifyRotation(
       }
     }
     const perSlot = Math.min(hardCap, getContinuousSourcesPerSlot(env));
+    const fixedSourceId = getFixedCryptoV2ScheduleSourceId(env, Date.now());
+    if (fixedSourceId) {
+      ordered = ordered.filter(plan => plan.source.id === fixedSourceId);
+    }
+
     // Claim the SLOT once (not per-source). The first cron tick inside a slot
     // wins and fires exactly the designated source(s); later ticks in the same
-    // slot find the slot already claimed and skip — so we never fall through to
-    // other sources and never re-create the burst.
+    // slot find the slot already claimed and skip.
     const claimed = await claimRotationSlot(env, slot);
     if (claimed) {
       for (const plan of ordered) {
@@ -247,7 +251,7 @@ export async function runApifyRotation(
     });
     const attemptsToRun = orderedAttempts.slice(0, budget.maxAttempts);
     const attemptResults: NonNullable<ApifyRotationResult['plans'][number]['attempts']> = [];
-    let selected: { attempt: RotationAttemptPlan; run: any } | null = null;
+    let selected: { attempt: RotationAttemptPlan; run: any; inputOverride: Record<string, unknown> } | null = null;
     let lastFailure: string | null = null;
     let secondAttemptCharged = false;
 
@@ -260,8 +264,10 @@ export async function runApifyRotation(
         await incrementSecondAttemptBudgetUsed(env);
         secondAttemptCharged = true;
       }
+      let effectiveInputOverride = attempt.inputOverride;
       try {
-        const run = await runApifyTask(env, taskId, attempt.inputOverride);
+        effectiveInputOverride = await applySourceCursorWindow(env, plan.source.id, attempt.inputOverride);
+        const run = await runApifyTask(env, taskId, effectiveInputOverride);
         const datasetId = safeString(run.defaultDatasetId);
         const health = datasetId
           ? await inspectApifyDatasetHealth(env, datasetId)
@@ -294,14 +300,14 @@ export async function runApifyRotation(
             cohortName: plan.cohortName,
             cohortIndex: plan.cohortIndex,
             accounts: plan.accounts,
-            inputOverride: attempt.inputOverride,
+            inputOverride: effectiveInputOverride,
             status: safeString(run.status),
             datasetHealth: health,
           },
         });
 
         if (datasetId && isHealthyApifyDataset(health)) {
-          selected = { attempt, run };
+          selected = { attempt, run, inputOverride: effectiveInputOverride };
           break;
         }
 
@@ -328,7 +334,7 @@ export async function runApifyRotation(
             cohortName: plan.cohortName,
             cohortIndex: plan.cohortIndex,
             accounts: plan.accounts,
-            inputOverride: attempt.inputOverride,
+            inputOverride: effectiveInputOverride,
             datasetHealth: health,
           },
         });
@@ -358,7 +364,7 @@ export async function runApifyRotation(
             cohortName: plan.cohortName,
             cohortIndex: plan.cohortIndex,
             accounts: plan.accounts,
-            inputOverride: attempt.inputOverride,
+            inputOverride: effectiveInputOverride,
           },
         });
       }
@@ -372,7 +378,7 @@ export async function runApifyRotation(
 
       results.push({
         ...resultBase,
-        inputOverride: selected.attempt.inputOverride,
+        inputOverride: selected.inputOverride,
         finalAttempt: selected.attempt.attempt,
         attempts: attemptResults,
         actorRunId: safeString(selected.run.id),
@@ -1023,6 +1029,88 @@ function isRotationEnabled(env: Env): boolean {
 
 function isContinuousRotationEnabled(env: Env): boolean {
   return String((env as any).APIFY_ROTATION_CONTINUOUS_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+function getFixedCryptoV2ScheduleSourceId(env: Env, nowMs: number): string | null {
+  if (String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() !== 'true') {
+    return null;
+  }
+
+  // UTC slots map to Tehran slots because Tehran = UTC+03:30.
+  // 21:00 UTC -> 00:30 Tehran, 00:00 UTC -> 03:30 Tehran, etc.
+  const hour = new Date(nowMs).getUTCHours();
+  const slotHour = Math.floor(hour / 3) * 3;
+
+  switch (slotHour) {
+    case 21: return 'crypto_v2_analysts';
+    case 0:  return 'crypto_v2_news_a';
+    case 3:  return 'crypto_v2_news_b';
+    case 6:  return 'crypto_v2_market';
+    case 9:  return 'crypto_v2_analysts';
+    case 12: return 'crypto_v2_news_a';
+    case 15: return 'crypto_v2_news_b';
+    case 18: return 'crypto_v2_market';
+    default: return null;
+  }
+}
+
+async function applySourceCursorWindow(
+  env: Env,
+  sourceId: string,
+  inputOverride: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (String((env as any).APIFY_ROTATION_CURSOR_WINDOW_ENABLED ?? '').toLowerCase() !== 'true') {
+    return inputOverride;
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const fallbackHours = boundedNumber((env as any).APIFY_ROTATION_CURSOR_FALLBACK_HOURS, 24, 1, 48);
+  const maxLookbackHours = boundedNumber((env as any).APIFY_ROTATION_CURSOR_MAX_LOOKBACK_HOURS, 24, 1, 72);
+  const overlapSeconds = boundedNumber((env as any).APIFY_ROTATION_CURSOR_OVERLAP_SECONDS, 600, 0, 3600);
+
+  let sinceSec = nowSec - fallbackHours * 3600;
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT MAX(re.created_at) AS last_completed_at
+      FROM run_events re
+      JOIN discovery_runs dr ON dr.apify_dataset_id = re.dataset_id
+      WHERE re.event_type = 'apify.rotation.task_started'
+        AND re.source_id = ?
+        AND re.dataset_id IS NOT NULL
+        AND dr.status = 'completed'
+    `).bind(sourceId).first<{ last_completed_at: string | null }>();
+
+    const lastCompleted = parseSqliteUtc(row?.last_completed_at);
+    if (lastCompleted != null) {
+      sinceSec = Math.floor(lastCompleted / 1000) - overlapSeconds;
+    }
+  } catch (err) {
+    console.warn('[ApifyRotation] source cursor lookup failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  const minSinceSec = nowSec - maxLookbackHours * 3600;
+  sinceSec = Math.max(minSinceSec, sinceSec);
+  sinceSec = Math.max(0, Math.min(sinceSec, nowSec - 60));
+
+  return {
+    ...inputOverride,
+    since_time: String(sinceSec),
+    until_time: '',
+  };
+}
+
+function parseSqliteUtc(value: unknown): number | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const ms = Date.parse(text.includes('T') ? text : `${text.replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
 export function getRotationSlotMinutes(env: Env): number {
