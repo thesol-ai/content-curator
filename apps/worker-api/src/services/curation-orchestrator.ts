@@ -295,6 +295,43 @@ async function fetchSourceDatasetItems(
   }
 }
 
+async function loadDatasetSourceCursorSinceTime(
+  env: Env,
+  sourceId: string,
+  datasetId: string,
+): Promise<number | null> {
+  if (!sourceId.startsWith('crypto_v2_')) return null;
+  if (!datasetId) return null;
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT metadata_json
+      FROM run_events
+      WHERE event_type='apify.rotation.task_started'
+        AND source_id=?
+        AND dataset_id=?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).bind(sourceId, datasetId).first<{ metadata_json: string | null }>();
+
+    if (!row?.metadata_json) return null;
+
+    let meta: any = null;
+    try { meta = JSON.parse(String(row.metadata_json)); } catch { return null; }
+
+    const since = Number(meta?.inputOverride?.since_time);
+    if (!Number.isFinite(since) || since <= 0) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    if (since > now - 60) return null;
+
+    return Math.floor(since);
+  } catch (err) {
+    console.warn('[Curation] source cursor lookup skipped:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
 // ── Process one source ────────────────────────────────────────
 
 async function processSingleSource(
@@ -470,6 +507,7 @@ async function processSingleSource(
     const actorMockFilter = filterApifyActorMockNoResultItems(rawFetched);
     const raw = actorMockFilter.realItems;
     effectiveDatasetId = fetched.datasetId;
+    const sourceCursorSinceTime = await loadDatasetSourceCursorSinceTime(env, source.id, effectiveDatasetId);
     itemsFetched = raw.length;
 
     await recordRunEvent(env, {
@@ -595,14 +633,48 @@ async function processSingleSource(
     const freshKeys: string[][] = [];
     const freshnessCutoffTs = Math.floor(Date.now() / 1000) - category.freshness_hours * 3600;
     let staleBeforeAiCount = 0;
+    let skippedBeforeSourceCursorCount = 0;
 
     const itemKeyPairs = normalizedBalanced.map(item => ({
       item,
       keys: computeDedupeKeys(item),
     }));
+
+    const cursorFilteredItemKeyPairs = [] as typeof itemKeyPairs;
+    for (const pair of itemKeyPairs) {
+      const item = pair.item;
+      if (
+        sourceCursorSinceTime != null &&
+        Number(item.publishedAt ?? 0) > 0 &&
+        Number(item.publishedAt) < sourceCursorSinceTime
+      ) {
+        skippedBeforeSourceCursorCount++;
+        await recordRunItemEvent(env, {
+          runId,
+          sourceUrl: item.sourceUrl,
+          postId: item.postId,
+          sourceAccount: item.sourceAccount,
+          phase: 'dedupe_check',
+          status: 'skipped',
+          rejectReason: 'before_source_cursor',
+          mediaCount: item.media.length,
+          metadata: {
+            priorityScore: computeCandidatePriorityScore(item),
+            publishedAt: item.publishedAt,
+            sourceCursorSinceTime,
+            textPreview: item.text.slice(0, 240),
+          },
+        });
+        if (!dryRun) await recordDedupeKeys(env, pair.keys, generateId('cursor'));
+        continue;
+      }
+
+      cursorFilteredItemKeyPairs.push(pair);
+    }
+
     const existingDedupeKeys = await findExistingDedupeKeys(
       env,
-      itemKeyPairs.flatMap(pair => pair.keys),
+      cursorFilteredItemKeyPairs.flatMap(pair => pair.keys),
     );
 
     await recordRunEvent(env, {
@@ -616,12 +688,15 @@ async function processSingleSource(
       durationMs: Date.now() - t0,
       metadata: {
         normalizedCount: normalizedBalanced.length,
-        totalKeys: itemKeyPairs.reduce((sum, pair) => sum + pair.keys.length, 0),
+        cursorFilteredCount: cursorFilteredItemKeyPairs.length,
+        skippedBeforeSourceCursorCount,
+        sourceCursorSinceTime,
+        totalKeys: cursorFilteredItemKeyPairs.reduce((sum, pair) => sum + pair.keys.length, 0),
         existingKeys: existingDedupeKeys.size,
       },
     });
 
-    for (const { item, keys } of itemKeyPairs) {
+    for (const { item, keys } of cursorFilteredItemKeyPairs) {
       const duplicate = keys.some(key => existingDedupeKeys.has(key));
       if (duplicate) {
         itemsDuplicate++;
@@ -679,6 +754,8 @@ async function processSingleSource(
         freshCount: fresh.length,
         duplicateCount: itemsDuplicate,
           staleBeforeAiCount,
+          skippedBeforeSourceCursorCount,
+          sourceCursorSinceTime,
           freshnessCutoffTs,
       },
     });
