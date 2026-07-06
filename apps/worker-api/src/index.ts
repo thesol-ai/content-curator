@@ -39,6 +39,7 @@ import {
 } from './services/observability-reports';
 import { cleanupStoryIntelligenceEvents } from './services/story-intelligence';
 import { isCronCoordinatorEnabled, pickCoordinatorPhase, shouldRunCoordinatorHousekeeping, shouldRunHeavyPhaseAfterPublish } from './services/cron-coordinator';
+import { recordRunEvent } from './services/run-events';
 
 export default {
 
@@ -107,7 +108,40 @@ export default {
         // Apify schedules are turned off, otherwise costs can double.
         if (env.APIFY_ROTATION_ENABLED === 'true') {
           try {
-            const rotationResult = await runApifyRotation(env);
+            const scheduledTimeMs = _controller.scheduledTime ?? Date.now();
+            const fixedSourceId = getFixedCryptoV2ScheduleSourceId(env, scheduledTimeMs);
+            let rotationResult: Awaited<ReturnType<typeof runApifyRotation>>;
+
+            if (fixedSourceId) {
+              const fixedSlot = getFixedCryptoV2RotationSlot(scheduledTimeMs);
+              const claimed = await claimFixedCryptoV2RotationSlot(env, fixedSlot, fixedSourceId);
+
+              if (claimed) {
+                rotationResult = await runApifyRotation(env, {
+                  force: true,
+                  onlySourceId: fixedSourceId,
+                  maxSources: 1,
+                });
+              } else {
+                await recordFixedCryptoV2RotationSkipOnce(env, {
+                  fixedSlot,
+                  sourceId: fixedSourceId,
+                  reason: 'fixed_slot_already_claimed',
+                  scheduledTimeMs,
+                });
+
+                rotationResult = {
+                  ok: true,
+                  skipped: true,
+                  reason: 'fixed_slot_already_claimed',
+                  bucket: fixedSlot,
+                  rotationRunId: `apify_fixed_rotation_skip_${fixedSlot}_${Date.now()}`,
+                  plans: [],
+                };
+              }
+            } else {
+              rotationResult = await runApifyRotation(env);
+            }
             if (!rotationResult.skipped) {
               console.log('[Scheduled] Apify rotation:', {
                 ok: rotationResult.ok,
@@ -301,6 +335,87 @@ export default {
     })());
   },
 } satisfies ExportedHandler<Env>;
+
+
+function getFixedCryptoV2ScheduleSourceId(env: Env, scheduledTimeMs: number): string | null {
+  if (String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() !== 'true') {
+    return null;
+  }
+
+  const slotInDay = getFixedCryptoV2SlotInDay(scheduledTimeMs);
+  const schedule = [
+    'crypto_v2_analysts',
+    'crypto_v2_news_a',
+    'crypto_v2_news_b',
+    'crypto_v2_market',
+    'crypto_v2_analysts',
+    'crypto_v2_news_a',
+    'crypto_v2_news_b',
+    'crypto_v2_market',
+  ];
+
+  return schedule[slotInDay] ?? null;
+}
+
+function getFixedCryptoV2RotationSlot(scheduledTimeMs: number): number {
+  // Tehran is UTC+03:30. Fixed slots start at 00:30, then every 3 hours.
+  const tehranOffsetMs = 3.5 * 60 * 60 * 1000;
+  const slotAnchorMs = 30 * 60 * 1000;
+  const slotMs = 3 * 60 * 60 * 1000;
+  return Math.floor((scheduledTimeMs + tehranOffsetMs - slotAnchorMs) / slotMs);
+}
+
+function getFixedCryptoV2SlotInDay(scheduledTimeMs: number): number {
+  const slot = getFixedCryptoV2RotationSlot(scheduledTimeMs);
+  return ((slot % 8) + 8) % 8;
+}
+
+async function claimFixedCryptoV2RotationSlot(env: Env, fixedSlot: number, sourceId: string): Promise<boolean> {
+  const key = `apify_rotation_slot_${fixedSlot}_fixed_${sourceId}`;
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
+    VALUES (?, 'claimed', CURRENT_TIMESTAMP)
+  `).bind(key).run();
+
+  return (result.meta.changes ?? 0) > 0;
+}
+
+async function recordFixedCryptoV2RotationSkipOnce(
+  env: Env,
+  args: {
+    fixedSlot: number;
+    sourceId: string;
+    reason: string;
+    scheduledTimeMs: number;
+  },
+): Promise<void> {
+  const key = `apify_rotation_slot_${args.fixedSlot}_fixed_skip_logged_${args.sourceId}`;
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
+    VALUES (?, 'logged', CURRENT_TIMESTAMP)
+  `).bind(key).run();
+
+  if ((result.meta.changes ?? 0) <= 0) return;
+
+  await recordRunEvent(env, {
+    runId: `apify_fixed_rotation_skip_${args.fixedSlot}_${Date.now()}`,
+    eventType: 'apify.rotation.skipped',
+    phase: 'apify_rotation',
+    sourceId: args.sourceId,
+    metadata: {
+      reason: args.reason,
+      fixedSlot: args.fixedSlot,
+      slotInDay: getFixedCryptoV2SlotInDay(args.scheduledTimeMs),
+      sourceId: args.sourceId,
+      scheduledTimeTehran: formatTehranTimestamp(args.scheduledTimeMs),
+    },
+  });
+}
+
+function formatTehranTimestamp(timestampMs: number): string {
+  const tehranOffsetMs = 3.5 * 60 * 60 * 1000;
+  return new Date(timestampMs + tehranOffsetMs).toISOString().replace('T', ' ').slice(0, 19);
+}
 
 
 async function runRssFallbackCoordinatorTick(env: Env, scheduledTimeMs: number): Promise<void> {
