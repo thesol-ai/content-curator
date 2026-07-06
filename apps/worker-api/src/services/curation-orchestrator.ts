@@ -641,6 +641,14 @@ async function processSingleSource(
     }));
 
     const cursorFilteredItemKeyPairs = [] as typeof itemKeyPairs;
+    const sourceCursorSkipSamples: Array<{
+      sourceUrl: string;
+      postId?: string;
+      sourceAccount?: string;
+      publishedAt?: number;
+      textPreview: string;
+    }> = [];
+
     for (const pair of itemKeyPairs) {
       const item = pair.item;
       if (
@@ -649,27 +657,43 @@ async function processSingleSource(
         Number(item.publishedAt) < sourceCursorSinceTime
       ) {
         skippedBeforeSourceCursorCount++;
-        await recordRunItemEvent(env, {
-          runId,
-          sourceUrl: item.sourceUrl,
-          postId: item.postId,
-          sourceAccount: item.sourceAccount,
-          phase: 'dedupe_check',
-          status: 'skipped',
-          rejectReason: 'before_source_cursor',
-          mediaCount: item.media.length,
-          metadata: {
-            priorityScore: computeCandidatePriorityScore(item),
+
+        // Keep source-cursor filtering cheap. These rows are intentionally
+        // outside the requested source window, so do not write one
+        // run_item_event or dedupe-key row per skipped item. A summary event
+        // below is enough for audit and avoids leaving cron runs stranded in
+        // dedupe_check when Apify returns many old rows.
+        if (sourceCursorSkipSamples.length < 5) {
+          sourceCursorSkipSamples.push({
+            sourceUrl: item.sourceUrl,
+            postId: item.postId,
+            sourceAccount: item.sourceAccount,
             publishedAt: item.publishedAt,
-            sourceCursorSinceTime,
             textPreview: item.text.slice(0, 240),
-          },
-        });
-        if (!dryRun) await recordDedupeKeys(env, pair.keys, generateId('cursor'));
+          });
+        }
         continue;
       }
 
       cursorFilteredItemKeyPairs.push(pair);
+    }
+
+    if (skippedBeforeSourceCursorCount > 0) {
+      await recordRunEvent(env, {
+        runId,
+        eventType: 'dedupe.source_cursor.skipped_summary',
+        phase: 'dedupe_check',
+        categoryId: category.id,
+        platform: source.platform,
+        sourceId: source.id,
+        datasetId: effectiveDatasetId,
+        durationMs: Date.now() - t0,
+        metadata: {
+          skippedBeforeSourceCursorCount,
+          sourceCursorSinceTime,
+          samples: sourceCursorSkipSamples,
+        },
+      });
     }
 
     const existingDedupeKeys = await findExistingDedupeKeys(
@@ -763,7 +787,14 @@ async function processSingleSource(
 
     if (fresh.length === 0) {
       await finishRun(env, runId, category.id, source.platform, effectiveDatasetId,
-        dryRun ? 'dry_run' : 'completed', { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
+        dryRun ? 'dry_run' : 'completed', {
+          itemsFetched,
+          itemsNew,
+          itemsDuplicate,
+          staleBeforeAiCount,
+          skippedBeforeSourceCursorCount,
+          durationMs: Date.now() - t0,
+        });
       return mkResult(runId, category.id, source.platform, true, dryRun,
         { itemsFetched, itemsNew, itemsDuplicate, durationMs: Date.now() - t0 });
     }
