@@ -79,7 +79,13 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
       try {
+        const scheduledTimeMs = _controller.scheduledTime ?? Date.now();
         const runtime = await getRuntimeConfig(env);
+        await recordFixedCryptoV2WindowTick(env, {
+          scheduledTimeMs,
+          maintenanceMode: runtime.maintenanceMode,
+        });
+
         if (runtime.maintenanceMode) {
           console.log('[Scheduled] Skipped — maintenance_mode is active');
           return;
@@ -108,13 +114,18 @@ export default {
         // Apify schedules are turned off, otherwise costs can double.
         if (env.APIFY_ROTATION_ENABLED === 'true') {
           try {
-            const scheduledTimeMs = _controller.scheduledTime ?? Date.now();
             const fixedSourceId = getFixedCryptoV2ScheduleSourceId(env, scheduledTimeMs);
             let rotationResult: Awaited<ReturnType<typeof runApifyRotation>>;
 
             if (fixedSourceId) {
               const fixedSlot = getFixedCryptoV2RotationSlot(scheduledTimeMs);
               const claimed = await claimFixedCryptoV2RotationSlot(env, fixedSlot, fixedSourceId);
+              await recordFixedCryptoV2RotationDecisionOnce(env, {
+                fixedSlot,
+                sourceId: fixedSourceId,
+                scheduledTimeMs,
+                claimed,
+              });
 
               if (claimed) {
                 rotationResult = await runApifyRotation(env, {
@@ -336,6 +347,98 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
+
+
+async function recordFixedCryptoV2WindowTick(
+  env: Env,
+  args: {
+    scheduledTimeMs: number;
+    maintenanceMode: boolean;
+  },
+): Promise<void> {
+  if (String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() !== 'true') {
+    return;
+  }
+
+  if (!isFixedCryptoV2BoundaryWindow(args.scheduledTimeMs)) return;
+
+  const fixedSlot = getFixedCryptoV2RotationSlot(args.scheduledTimeMs);
+  const sourceId = getFixedCryptoV2ScheduleSourceId(env, args.scheduledTimeMs);
+  const key = `scheduler_fixed_rotation_window_tick_${fixedSlot}`;
+
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
+    VALUES (?, 'logged', CURRENT_TIMESTAMP)
+  `).bind(key).run();
+
+  if ((result.meta.changes ?? 0) <= 0) return;
+
+  await recordRunEvent(env, {
+    runId: `scheduler_fixed_rotation_window_${fixedSlot}_${Date.now()}`,
+    eventType: 'scheduler.fixed_rotation.window_tick',
+    phase: 'scheduled',
+    sourceId: sourceId ?? undefined,
+    metadata: {
+      fixedSlot,
+      slotInDay: getFixedCryptoV2SlotInDay(args.scheduledTimeMs),
+      expectedSourceId: sourceId,
+      scheduledTimeTehran: formatTehranTimestamp(args.scheduledTimeMs),
+      maintenanceMode: args.maintenanceMode,
+      cronCoordinatorEnabled: isCronCoordinatorEnabled(env),
+      apifyRotationEnabled: String((env as any).APIFY_ROTATION_ENABLED ?? '').toLowerCase() === 'true',
+      fixedScheduleEnabled: String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() === 'true',
+      version: 'fixed_rotation_observability_v1',
+    },
+  });
+}
+
+function isFixedCryptoV2BoundaryWindow(scheduledTimeMs: number): boolean {
+  // Tehran fixed slots start at 00:30 and repeat every 3 hours.
+  // Cron runs every 5 minutes; logging the first 10 minutes is enough to prove
+  // whether the Worker entered the expected rotation window.
+  const tehranOffsetMs = 3.5 * 60 * 60 * 1000;
+  const slotAnchorMs = 30 * 60 * 1000;
+  const slotMs = 3 * 60 * 60 * 1000;
+  const offset = ((scheduledTimeMs + tehranOffsetMs - slotAnchorMs) % slotMs + slotMs) % slotMs;
+  return offset < 10 * 60 * 1000;
+}
+
+async function recordFixedCryptoV2RotationDecisionOnce(
+  env: Env,
+  args: {
+    fixedSlot: number;
+    sourceId: string;
+    scheduledTimeMs: number;
+    claimed: boolean;
+  },
+): Promise<void> {
+  const key = `apify_rotation_slot_${args.fixedSlot}_fixed_decision_logged_${args.sourceId}`;
+
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
+    VALUES (?, 'logged', CURRENT_TIMESTAMP)
+  `).bind(key).run();
+
+  if ((result.meta.changes ?? 0) <= 0) return;
+
+  await recordRunEvent(env, {
+    runId: `apify_fixed_rotation_decision_${args.fixedSlot}_${Date.now()}`,
+    eventType: 'apify.fixed_rotation.decision',
+    phase: 'apify_rotation',
+    sourceId: args.sourceId,
+    metadata: {
+      fixedSlot: args.fixedSlot,
+      slotInDay: getFixedCryptoV2SlotInDay(args.scheduledTimeMs),
+      sourceId: args.sourceId,
+      scheduledTimeTehran: formatTehranTimestamp(args.scheduledTimeMs),
+      claimed: args.claimed,
+      action: args.claimed ? 'run_fixed_source' : 'skip_fixed_slot_already_claimed',
+      fixedScheduleEnabled: String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() === 'true',
+      apifyRotationEnabled: String((env as any).APIFY_ROTATION_ENABLED ?? '').toLowerCase() === 'true',
+      version: 'fixed_rotation_observability_v1',
+    },
+  });
+}
 
 function getFixedCryptoV2ScheduleSourceId(env: Env, scheduledTimeMs: number): string | null {
   if (String((env as any).APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED ?? '').toLowerCase() !== 'true') {
