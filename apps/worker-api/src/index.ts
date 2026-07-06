@@ -221,7 +221,7 @@ export default {
 
         // 3. Controlled AI candidate backlog drain. Runs only when explicitly enabled.
         // Publishing stays first; backlog errors are isolated so cleanup still runs.
-        if (isCandidateBacklogEnabled(env)) {
+        if (isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
           try {
             const recovered = await recoverStaleScoringCandidates(env);
             const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);
@@ -521,6 +521,11 @@ function formatTehranTimestamp(timestampMs: number): string {
 }
 
 
+function isAiBacklogCronDrainEnabled(env: Env): boolean {
+  return String((env as any).AI_BACKLOG_CRON_DRAIN_ENABLED ?? 'true').toLowerCase() !== 'false';
+}
+
+
 async function runRssFallbackCoordinatorTick(env: Env, scheduledTimeMs: number): Promise<void> {
   const publishResult = await publishDueItems(env, { limit: 1 });
   console.log('[Scheduled] Coordinator publish:', publishResult);
@@ -553,7 +558,7 @@ async function runRssFallbackCoordinatorTick(env: Env, scheduledTimeMs: number):
   }
 
   if (phase === 'ai_drain') {
-    if (isCandidateBacklogEnabled(env)) {
+    if (isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
       try {
         const recovered = await recoverStaleScoringCandidates(env);
         const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);

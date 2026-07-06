@@ -247,6 +247,7 @@ APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED = "false"
 APIFY_TASK_MAX_RETRIES = "0"
 
 APIFY_PRE_RUN_MAX_RUNS_PER_DAY = "8"
+AI_BACKLOG_CRON_DRAIN_ENABLED = "false"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "content-curator-db-v2"
