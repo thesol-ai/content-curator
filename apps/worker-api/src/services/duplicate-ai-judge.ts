@@ -27,6 +27,9 @@ export interface DuplicateAiJudgePrior {
   eventType: string | null;
   canonicalDate: string | null;
   publishedAt: number | null;
+  /** Synthetic prior from the same current survivor batch. Used only to prevent
+   *  same-batch duplicates from both reaching publish_queue. */
+  batchIndex?: number;
 }
 
 export interface DuplicateAiJudgeResult {
@@ -95,6 +98,23 @@ export function shouldRejectDuplicateAiJudgeResult(
 ): boolean {
   return (result.decision === 'duplicate' || result.decision === 'near_duplicate')
     && result.confidence >= confidenceThreshold;
+}
+
+
+function candidateAsSameBatchPrior(candidate: DuplicateAiJudgeCandidate): DuplicateAiJudgePrior {
+  return {
+    priorId: `same_batch:${candidate.index}`,
+    sourceAccount: candidate.item.sourceAccount ?? null,
+    sourceUrl: candidate.item.sourceUrl ?? null,
+    text: candidate.item.text ?? null,
+    captionShort: null,
+    topicFingerprint: candidate.ai.topicFingerprint ?? null,
+    storyKey: candidate.ai.storyKey ?? null,
+    eventType: candidate.ai.storyFields?.eventType ?? null,
+    canonicalDate: candidate.ai.storyFields?.canonicalDate ?? null,
+    publishedAt: null,
+    batchIndex: candidate.index,
+  };
 }
 
 export function shapeDuplicateAiJudgePayload(args: {
@@ -256,7 +276,7 @@ export async function fetchRecentDuplicateJudgePriors(
 function buildDuplicateJudgeSystem(confidenceThreshold: number): string {
   return [
     'You are a strict duplicate detector for a Telegram news publishing queue.',
-    'Compare NEW_ITEMS against PREVIOUS_ITEMS from the same channel.',
+    'Compare NEW_ITEMS against PREVIOUS_ITEMS from the same channel. PREVIOUS_ITEMS may include already queued/published posts from the last window and earlier candidates from the same current processing batch.',
     'Mark duplicate or near_duplicate when the new item is the same underlying story/event as a previous item, even if wording, source, URL, or story_key differs.',
     'Do NOT mark duplicate when the new item is a materially new follow-up: recovery, arrest, exploit update with new funds, official decision, court ruling, approval, denial, settlement, patch/fix, or a genuinely new company/product under the same broad law.',
     'Do NOT mark duplicate just because both items mention the same chain, token, country, broad topic, or market sector.',
@@ -706,6 +726,10 @@ function buildLocalDuplicateSuspects(args: {
     const matches: LocalDuplicatePriorMatch[] = [];
 
     for (const prior of priorSignals) {
+      if (prior.prior.batchIndex != null && prior.prior.batchIndex >= candidate.index) {
+        continue;
+      }
+
       const scored = scoreLocalDuplicateCandidate(signal, prior.signal);
       if (scored.score >= args.threshold) {
         matches.push({ prior: prior.prior, score: scored.score, reasons: scored.reasons });
@@ -738,13 +762,16 @@ export async function runDuplicateAiJudgeForSurvivors(
 
   if (!cfg.enabled || args.candidates.length === 0 || cfg.maxCallsPerDay <= 0) return rejected;
 
-  const priors = await fetchRecentDuplicateJudgePriors(env, {
+  const recentPriors = await fetchRecentDuplicateJudgePriors(env, {
     categoryId: args.categoryId,
     channelId: args.channelId,
     windowHours: cfg.windowHours,
     maxPriors: cfg.maxPriors,
     maxTextChars: cfg.maxTextChars,
   });
+
+  const sameBatchPriors = args.candidates.map(candidateAsSameBatchPrior);
+  const priors = [...sameBatchPriors, ...recentPriors];
 
   if (priors.length === 0) return rejected;
 
@@ -758,7 +785,7 @@ export async function runDuplicateAiJudgeForSurvivors(
   });
 
   console.info(
-    `[DuplicateAIJudge] local_prefilter survivors=${args.candidates.length} priors=${priors.length} suspects=${suspects.length} threshold=${localThreshold}`,
+    `[DuplicateAIJudge] local_prefilter survivors=${args.candidates.length} recent_priors=${recentPriors.length} same_batch_priors=${sameBatchPriors.length} suspects=${suspects.length} threshold=${localThreshold}`,
   );
 
   if (suspects.length === 0) return rejected;
