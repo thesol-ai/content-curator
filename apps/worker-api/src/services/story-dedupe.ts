@@ -90,120 +90,18 @@ function buildFundingStoryFamilyKey(fingerprint: string): string | null {
 }
 
 
-const HIGH_CONFIDENCE_STORY_FILLER_TOKENS = new Set([
-  'a',
-  'an',
-  'the',
-  'new',
-  'just',
-  'in',
-  'latest',
-  'update',
-  'updates',
-  'news',
-  'about',
-  'around',
-  'under',
-  'from',
-  'by',
-  'via',
-  'per',
-  'and',
-  'or',
-  'of',
-  'to',
-  'for',
-  'with',
-]);
-
-function normalizeHighConfidenceToken(token: string): string {
-  const raw = token.toLowerCase().replace(/[^a-z0-9]+/g, '');
-  if (!raw) return '';
-  if (/^\d+$/.test(raw)) return '';
-  if (/^\d+(k|m|b|bn|million|billion)?$/.test(raw)) return '';
-
-  if (raw === 'btc') return 'bitcoin';
-
-  if (['summrfi', 'summerfi', 'summerfinance'].includes(raw)) return 'summer-finance';
-  if (raw === 'summer') return 'summer';
-  if (raw === 'finance' || raw === 'fi') return raw;
-
-  if (['exploit', 'exploits', 'exploited', 'hack', 'hacked', 'attack', 'attacked', 'breach', 'drain', 'drained', 'draining'].includes(raw)) {
-    return 'exploit';
-  }
-
-  if (raw === 'casps') return 'casp';
-  if (['licence', 'licensed', 'licensing', 'authorization', 'authorisation', 'approval', 'approved', 'receives', 'received', 'secures', 'secured'].includes(raw)) {
-    return 'license';
-  }
-
-  if (['eu', 'eea', 'european', 'economic', 'area'].includes(raw)) return 'eea';
-  if (raw === 'cssf') return 'cssf';
-  if (['regulatory', 'regulation', 'regulated'].includes(raw)) return 'regulation';
-
-  return raw;
-}
-
-function highConfidenceTokens(value: unknown): { raw: string; compact: string; tokens: string[] } {
-  const raw = String(value ?? '').trim().toLowerCase();
-  const compact = raw.replace(/[^a-z0-9]+/g, '');
-  const tokens = Array.from(new Set(
-    raw
-      .split(/[^a-z0-9]+/)
-      .map(normalizeHighConfidenceToken)
-      .filter(token => token && !HIGH_CONFIDENCE_STORY_FILLER_TOKENS.has(token))
-  ));
-
-  return { raw, compact, tokens };
-}
-
-function tokenHas(tokens: string[], token: string): boolean {
-  return tokens.includes(token);
-}
-
-function tokenHasAny(tokens: string[], values: string[]): boolean {
-  return values.some(value => tokens.includes(value));
-}
-
-export function normalizeHighConfidenceStoryFamilyKey(value: unknown): string | null {
-  const { compact, tokens } = highConfidenceTokens(value);
-  if (!compact || tokens.length < 2) return null;
-
-  const hasSummerFinance =
-    compact.includes('summrfi') ||
-    compact.includes('summerfi') ||
-    compact.includes('summerfinance') ||
-    tokenHas(tokens, 'summer-finance') ||
-    (tokenHas(tokens, 'summer') && tokenHasAny(tokens, ['fi', 'finance']));
-
-  if (hasSummerFinance && tokenHas(tokens, 'exploit')) {
-    return 'summer-finance-exploit';
-  }
-
-  if (
-    tokenHas(tokens, 'ripple') &&
-    tokenHasAny(tokens, ['mica', 'casp']) &&
-    tokenHasAny(tokens, ['license', 'regulation', 'cssf', 'eea', 'luxembourg'])
-  ) {
-    return 'ripple-mica-casp-license';
-  }
-
-  return null;
-}
-
-
 export function normalizeStoryFamilyKey(value: unknown): string | null {
   const fingerprint = normalizeStoryFingerprint(value);
   if (!fingerprint) return null;
 
-  return normalizeHighConfidenceStoryFamilyKey(fingerprint) ?? buildFundingStoryFamilyKey(fingerprint) ?? fingerprint;
+  return buildFundingStoryFamilyKey(fingerprint) ?? fingerprint;
 }
 
 function shouldUseStoryFamilyDedupe(value: unknown): boolean {
   const fingerprint = normalizeStoryFingerprint(value);
   if (!fingerprint) return false;
 
-  return normalizeHighConfidenceStoryFamilyKey(fingerprint) !== null || buildFundingStoryFamilyKey(fingerprint) !== null;
+  return buildFundingStoryFamilyKey(fingerprint) !== null;
 }
 
 export function getStoryDedupeWindowHours(channel: unknown, fallback = 72): number {

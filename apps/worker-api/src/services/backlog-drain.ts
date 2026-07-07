@@ -51,7 +51,6 @@ import {
   similarStorySeenInWindow,
   storyKeySeenInWindow,
 } from './story-intelligence';
-import { normalizeHighConfidenceStoryFamilyKey } from './story-dedupe';
 
 export interface BacklogDrainOptions {
   categoryId?: string;
@@ -831,7 +830,6 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   // ── Phase 6H path: decide everything, translate survivors, then queue. ──
   const seenFingerprints = new Set<string>();
   const seenStoryClusters = new Set<string>();
-  const seenStoryFamilyKeys = new Set<string>();
   const seenStoryKeys = new Set<string>();
   const seenSemanticStories: Array<{
     storyKey: string | null;
@@ -872,7 +870,6 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     // in-memory sets that we update only when an item survives the gates.
     const fpNorm = normalizeFingerprintForBatch(ai.topicFingerprint);
     if (!ev.recentTopicDuplicate && fpNorm && seenFingerprints.has(fpNorm)) ev.recentTopicDuplicate = true;
-    if (!ev.recentStoryFamilyDuplicate && ev.storyFamilyKey && seenStoryFamilyKeys.has(ev.storyFamilyKey)) ev.recentStoryFamilyDuplicate = true;
     if (!ev.recentStoryClusterDuplicate && ev.storyClusterKey && seenStoryClusters.has(ev.storyClusterKey)) ev.recentStoryClusterDuplicate = true;
     // Phase 6K intra-batch story-key dedup (only when reject is active).
     if (!ev.storyKeyRejectReason && ev.storyKey
@@ -911,7 +908,6 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
     if (rejectReason === null) {
       if (fpNorm) seenFingerprints.add(fpNorm);
-      if (ev.storyFamilyKey) seenStoryFamilyKeys.add(ev.storyFamilyKey);
       if (ev.storyClusterKey) seenStoryClusters.add(ev.storyClusterKey);
       if (ev.storyKey) seenStoryKeys.add(ev.storyKey);
       seenSemanticStories.push({
@@ -1106,9 +1102,7 @@ interface CandidateEvaluation {
   storyClusterKey: string | null;
   themeKey: string | null;
   recentTopicDuplicate: boolean;
-  recentStoryFamilyDuplicate: boolean;
   recentStoryClusterDuplicate: boolean;
-  storyFamilyKey: string | null;
   themeCapRejectReason: string | null;
   audienceRejectReason: string | null;
   storyKey: string | null;
@@ -1129,12 +1123,8 @@ async function evaluateCandidateDb(
 ): Promise<CandidateEvaluation> {
   const itemId = itemIdForCandidate(candidate.row.id);
   const storyClusterKey = buildCryptoStoryClusterKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
-  const storyFamilyKey =
-    normalizeHighConfidenceStoryFamilyKey(ai.topicFingerprint) ??
-    normalizeHighConfidenceStoryFamilyKey(candidate.item.text);
   const themeKey = buildCryptoThemeKey(ai.topicFingerprint, candidate.item.text, candidate.item.sourceAccount);
   const recentTopicDuplicate = await hasRecentTopicMatchForAnySemanticChannel(env, channels, ai.topicFingerprint);
-  const recentStoryFamilyDuplicate = await hasRecentStoryFamilyMatchForAnySemanticChannel(env, channels, storyFamilyKey);
   const recentStoryClusterDuplicate = await hasRecentStoryClusterMatchForAnySemanticChannel(env, channels, storyClusterKey);
   const themeCapRejectReason = await getThemeCapRejectReason(env, channels, themeKey);
   const audienceRejectReason = getSourceAudienceRejectReason(candidate.item, ai);
@@ -1178,10 +1168,8 @@ async function evaluateCandidateDb(
   return {
     itemId,
     storyClusterKey,
-    storyFamilyKey,
     themeKey,
     recentTopicDuplicate,
-    recentStoryFamilyDuplicate,
     recentStoryClusterDuplicate,
     themeCapRejectReason,
     audienceRejectReason,
@@ -1264,11 +1252,9 @@ function resolveCandidateRejectReason(
 
   return ev.recentTopicDuplicate
     ? 'similar_topic_recent_channel'
-    : ev.recentStoryFamilyDuplicate
-      ? 'similar_story_family_recent_channel'
-      : ev.recentStoryClusterDuplicate
-        ? 'similar_story_cluster_recent_channel'
-        : ev.storyKeyRejectReason
+    : ev.recentStoryClusterDuplicate
+      ? 'similar_story_cluster_recent_channel'
+      : ev.storyKeyRejectReason
         ?? themeReject
         ?? audienceReject
         ?? getItemRejectReason(ai, category, item, similarTopicRejected);
@@ -1295,10 +1281,8 @@ async function persistCandidateDecision(
   await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason, ai, {
     topicFingerprint: ai.topicFingerprint,
     storyClusterKey: ev.storyClusterKey,
-    storyFamilyKey: ev.storyFamilyKey,
     themeKey: ev.themeKey,
     recentTopicDuplicate: ev.recentTopicDuplicate,
-    recentStoryFamilyDuplicate: ev.recentStoryFamilyDuplicate,
     recentStoryClusterDuplicate: ev.recentStoryClusterDuplicate,
     themeCapRejectReason: ev.themeCapRejectReason,
     audienceRejectReason: ev.audienceRejectReason,
@@ -1608,51 +1592,6 @@ async function hasRecentStoryClusterMatchForAnySemanticChannel(
   for (const channel of semanticChannels) {
     if (await hasRecentStoryClusterMatch(env, channel, storyClusterKey)) return true;
   }
-  return false;
-}
-
-
-async function hasRecentStoryFamilyMatchForAnySemanticChannel(
-  env: Env,
-  channels: ChannelRow[],
-  storyFamilyKey: string | null,
-): Promise<boolean> {
-  if (!storyFamilyKey) return false;
-  const semanticChannels = channels.filter(channel => channel.enabled && channel.semantic_dedupe_enabled !== 0);
-  for (const channel of semanticChannels) {
-    if (await hasRecentStoryFamilyMatch(env, channel, storyFamilyKey)) return true;
-  }
-  return false;
-}
-
-async function hasRecentStoryFamilyMatch(env: Env, channel: ChannelRow, storyFamilyKey: string): Promise<boolean> {
-  const windowHoursRaw = Number((channel as any).semantic_dedupe_window_hours);
-  const windowHours = Number.isFinite(windowHoursRaw) && windowHoursRaw > 0
-    ? Math.min(Math.max(windowHoursRaw, 1), 168)
-    : 48;
-
-  try {
-    const rows = await env.DB.prepare(`
-      SELECT d.topic_fingerprint, d.text AS item_text, q.caption_short, q.caption_full
-      FROM publish_queue q
-      JOIN discovery_items d ON d.id = q.item_id
-      WHERE q.channel_id = ?
-        AND q.status IN ('scheduled','retry','publishing','published')
-        AND COALESCE(q.published_at, q.scheduled_at) >= unixepoch('now', '-' || ? || ' hours')
-      ORDER BY COALESCE(q.published_at, q.scheduled_at) DESC
-      LIMIT 160
-    `).bind(channel.id, String(windowHours)).all<any>();
-
-    for (const row of rows.results ?? []) {
-      const existingFamily =
-        normalizeHighConfidenceStoryFamilyKey(row.topic_fingerprint) ??
-        normalizeHighConfidenceStoryFamilyKey(`${row.item_text ?? ''} ${row.caption_short ?? ''} ${row.caption_full ?? ''}`);
-      if (existingFamily === storyFamilyKey) return true;
-    }
-  } catch (err) {
-    console.warn('[BacklogDrain] story family dedupe skipped:', err instanceof Error ? err.message : String(err));
-  }
-
   return false;
 }
 
