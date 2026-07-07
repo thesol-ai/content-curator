@@ -1,0 +1,60 @@
+[
+  {
+    "results": [
+      {
+        "provider": "anthropic",
+        "purpose": "duplicate_judge",
+        "status": "skipped",
+        "calls": 5,
+        "total_tokens": 0,
+        "first_tehran": "2026-07-06 15:32:21",
+        "last_tehran": "2026-07-07 00:34:07"
+      },
+      {
+        "provider": "anthropic",
+        "purpose": "duplicate_judge",
+        "status": "success",
+        "calls": 15,
+        "total_tokens": 56235,
+        "first_tehran": "2026-07-07 04:01:14",
+        "last_tehran": "2026-07-07 12:32:06"
+      },
+      {
+        "provider": "anthropic",
+        "purpose": "scoring",
+        "status": "success",
+        "calls": 21,
+        "total_tokens": 143044,
+        "first_tehran": "2026-07-06 15:32:18",
+        "last_tehran": "2026-07-07 12:32:03"
+      },
+      {
+        "provider": "gemini",
+        "purpose": "translation",
+        "status": "success",
+        "calls": 20,
+        "total_tokens": 96739,
+        "first_tehran": "2026-07-06 15:32:28",
+        "last_tehran": "2026-07-07 12:31:57"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WEUR",
+      "served_by_colo": "AMS",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 7.4031
+      },
+      "duration": 7.4031,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 52944896,
+      "rows_read": 2136,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

@@ -1,0 +1,112 @@
+[
+  {
+    "results": [
+      {
+        "id": "srcacct_crypto_v2_cryptomichnl",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "CryptoMichNL",
+        "display_name": "CryptoMichNL",
+        "trust_level": "medium",
+        "enabled": 1,
+        "notes": "crypto_v2_analysts",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_cryptorank_io",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "CryptoRank_io",
+        "display_name": "CryptoRank.io",
+        "trust_level": "medium",
+        "enabled": 1,
+        "notes": "crypto_v2_market",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_whalefactor",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "WhaleFactor",
+        "display_name": "WhaleFactor",
+        "trust_level": "medium",
+        "enabled": 1,
+        "notes": "crypto_v2_market",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_coindesk",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "coindesk",
+        "display_name": "CoinDesk",
+        "trust_level": "high",
+        "enabled": 1,
+        "notes": "crypto_v2_news_a",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_cointelegraph",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "cointelegraph",
+        "display_name": "Cointelegraph",
+        "trust_level": "high",
+        "enabled": 1,
+        "notes": "crypto_v2_news_a",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_cryptodotnews",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "cryptodotnews",
+        "display_name": "Crypto.News",
+        "trust_level": "medium",
+        "enabled": 1,
+        "notes": "crypto_v2_news_b",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_cryptomanran",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "cryptomanran",
+        "display_name": "Crypto Man Ran",
+        "trust_level": "medium",
+        "enabled": 1,
+        "notes": "crypto_v2_analysts",
+        "created_at": "2026-06-30 10:19:47"
+      },
+      {
+        "id": "srcacct_crypto_v2_wublockchain",
+        "category_id": "crypto",
+        "platform": "x",
+        "account_handle": "wublockchain",
+        "display_name": "WuBlockchain",
+        "trust_level": "high",
+        "enabled": 1,
+        "notes": "crypto_v2_news_b",
+        "created_at": "2026-06-30 10:19:47"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WEUR",
+      "served_by_colo": "AMS",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.4324
+      },
+      "duration": 0.4324,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 52944896,
+      "rows_read": 16,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

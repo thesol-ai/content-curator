@@ -1,0 +1,144 @@
+[
+  {
+    "results": [
+      {
+        "id": "q_1783393368968_ph1gre",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-07 06:32:49",
+        "scheduled_tehran": "2026-07-07 11:10:55",
+        "published_tehran": null,
+        "source_url": "https://x.com/WuBlockchain/status/2074126218891338131",
+        "caption": "🏦 بزرگترین بانک روسیه کیف پول رمزارزی راه‌اندازی می‌کند\n\nSberbank، بزرگترین بانک روسیه، قصد دارد تا اوایل دسامبر کیف پول رمزارزی و خدمات امانت‌داری دیجیتال را در اپلیکیشن‌های خود راه‌اندازی کند. این اقدام پس از اجرای قانون جدید رمزارز روسیه در اول سپتامبر صورت می‌گیرد."
+      },
+      {
+        "id": "q_1783384600867_wmh5pb",
+        "status": "failed",
+        "retry_count": 1,
+        "publish_error": "legacy_recovered_retry_quarantined_possible_telegram_duplicate",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-07 04:06:40",
+        "scheduled_tehran": "2026-07-07 11:51:55",
+        "published_tehran": null,
+        "source_url": "https://x.com/CoinDesk/status/2074116567164485957",
+        "caption": "📊 سهم میم‌کوین‌ها از بازار آلت‌کوین‌ها به پایین‌ترین حد خود رسید\n\nارزش بازار میم‌کوین‌ها به ۳.۷ درصد کل بازار آلت‌کوین‌ها سقوط کرده که از فوریه ۲۰۲۴ بی‌سابقه بوده است. این رقم در نوامبر ۲۰۲۴ به اوج خود یعنی بیش از ۱۰ درصد رسیده بود."
+      },
+      {
+        "id": "q_1783384295568_dhee0c",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-07 04:01:35",
+        "scheduled_tehran": "2026-07-07 11:05:55",
+        "published_tehran": null,
+        "source_url": "https://x.com/CoinDesk/status/2074213039218233850",
+        "caption": "🔐 خزانه BonkDAO هدف سوءاستفاده امنیتی قرار گرفت؛ ۲۰ میلیون دلار BONK از دست رفت\n\nBonkDAO اعلام کرد که هدف یک پیشنهاد حاکمیتی مخرب قرار گرفته و حدود ۲۰ میلیون دلار از توکن‌های BONK از خزانه آن به سرقت رفته است. این سازمان در حال همکاری با صرافی‌ها و بنیاد سولانا برای شناسایی کیف پول‌های مرتبط است."
+      },
+      {
+        "id": "q_1783384293912_ttn0bo",
+        "status": "failed",
+        "retry_count": 2,
+        "publish_error": "legacy_recovered_retry_quarantined_possible_telegram_duplicate",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-07 04:01:33",
+        "scheduled_tehran": "2026-07-07 11:16:55",
+        "published_tehran": null,
+        "source_url": "https://x.com/Cointelegraph/status/2074142072584507523",
+        "caption": "📊 ذخایر بیت‌کوین اریک ترامپ از ۸۰۰۰ بیت‌کوین فراتر رفت\n\nشرکت امریکن بیت‌کوین (American Bitcoin) متعلق به اریک ترامپ اعلام کرد که با افزودن ۵۰۰ بیت‌کوین دیگر، مجموع ذخایر این شرکت از ۸۰۰۰ بیت‌کوین عبور کرده است."
+      },
+      {
+        "id": "q_1783339596937_pg3pl0",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-06 15:36:37",
+        "scheduled_tehran": "2026-07-06 21:05:31",
+        "published_tehran": null,
+        "source_url": "https://x.com/Cointelegraph/status/2074075722591703543",
+        "caption": "🔐 زک‌اکس‌بی‌تی: میم‌کوین‌ها با نام من بدون اجازه من منتشر شدند\n\nمحقق بلاکچین، زک‌اکس‌بی‌تی (ZachXBT)، اعلام کرد که میم‌کوین‌هایی با استفاده از نام او بدون حمایتش راه‌اندازی شده‌اند. او توکن‌های دریافتی را فروخته و حدود ۴۱ هزار دلار به خیریه اهدا کرد."
+      },
+      {
+        "id": "q_1783339595185_qlbd50",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-06 15:36:35",
+        "scheduled_tehran": "2026-07-06 21:00:32",
+        "published_tehran": null,
+        "source_url": "https://x.com/Cointelegraph/status/2073924994933936517",
+        "caption": "🚨 ضرر ۳.۸۱ میلیارد دلاری سرمایه‌گذاران میم‌کوین ترامپ\n\nنیویورک تایمز گزارش داده که حدود ۱ میلیون نفر که در میم‌کوین ترامپ سرمایه‌گذاری کرده‌اند، تا پایان ژوئن ۳.۸۱ میلیارد دلار زیان دیده‌اند."
+      },
+      {
+        "id": "q_1783339567660_kph8cq",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-06 15:36:07",
+        "scheduled_tehran": "2026-07-06 20:55:31",
+        "published_tehran": null,
+        "source_url": "https://x.com/Cointelegraph/status/2073980362984767922",
+        "caption": "🚨 ضرر ۲ میلیون دلاری در یک معامله اشتباه اتریوم\n\nکاربری ۱, ۱۲۶ اتریوم (۲.۰۱ میلیون دلار) را با ۱۴, ۲۰۸ دلار توکن LIT معامله کرد و نزدیک به ۲ میلیون دلار ضرر داد."
+      },
+      {
+        "id": "q_1783339565137_s00zyp",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-06 15:36:05",
+        "scheduled_tehran": "2026-07-06 21:10:32",
+        "published_tehran": null,
+        "source_url": "https://x.com/CoinDesk/status/2074100712062013650",
+        "caption": "🏦 بانک اسبربانک روسیه کیف پول رمزارز راه‌اندازی می‌کند\n\nبزرگترین بانک روسیه، اسبربانک، قصد دارد تا دسامبر کیف پول رمزارز و سپرده دیجیتال راه‌اندازی کند، مشروط بر تصویب قوانین جدید دارایی دیجیتال در سپتامبر."
+      },
+      {
+        "id": "q_1783339563313_pev2li",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-06 15:36:03",
+        "scheduled_tehran": "2026-07-06 20:50:32",
+        "published_tehran": null,
+        "source_url": "https://x.com/Cointelegraph/status/2074025723556135269",
+        "caption": "📊 حجم تراکنش استیبل‌کوین‌ها به ۱.۷۹ تریلیون دلار رسید\n\nحجم تراکنش‌های استیبل‌کوین‌ها در ماه ژوئن با رشد ۶۳ درصدی نسبت به ماه قبل، به رکورد ۱.۷۹ تریلیون دلار رسید."
+      },
+      {
+        "id": "q_1783339406922_5sx3db",
+        "status": "failed",
+        "retry_count": 3,
+        "publish_error": "recovered_from_stale_publishing",
+        "telegram_message_id": null,
+        "created_tehran": "2026-07-06 15:33:27",
+        "scheduled_tehran": "2026-07-06 19:30:31",
+        "published_tehran": null,
+        "source_url": "https://x.com/Cointelegraph/status/2074065925641289878",
+        "caption": "⚖️ قوانین جدید مصادره دارایی‌های رمزارزی در کره جنوبی\n\nدیوان عالی کره جنوبی در حال تدوین مقرراتی برای مصادره و تسویه دارایی‌های رمزارزی است که توسط دادگاه‌ها دستور داده می‌شود. این گام می‌تواند به شفافیت بیشتر در رسیدگی‌های قضایی مرتبط با دارایی‌های دیجیتال منجر شود."
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WEUR",
+      "served_by_colo": "AMS",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 1.6344
+      },
+      "duration": 1.6344,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 52944896,
+      "rows_read": 902,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

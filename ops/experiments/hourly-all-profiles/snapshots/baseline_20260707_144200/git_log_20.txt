@@ -1,0 +1,20 @@
+3501c85 Harden publisher against stale duplicate sends
+75ab348 Broaden duplicate judge to same-batch and richer priors
+b6f0872 Use general semantic duplicate rejection
+7b7f6b7 Enable general duplicate protection and AI drain
+8a5ae2e Add backlog story-family duplicate guard
+6cab936 Add cron AI drain kill switch for controlled repair
+6428a6c Make source cursor dedupe skips summary-only
+e979052 Add general caption title and naming rules
+794cc35 Raise Apify pre-run daily cap for fixed schedule
+2016926 Add fixed Apify rotation decision logs
+1cbf572 Enforce fixed crypto v2 Apify rotation slots
+9cee548 Enforce source cursor before AI ingest
+f579c80 Disable adaptive Apify rotation during fixed schedule
+1feb190 Fix production Apify rotation env placement
+a5885b8 Restore dynamic Apify scraping with source cursors
+8a2dd79 Limit duplicate judge daily calls to five
+690f26f Add generic low-cost semantic duplicate judge prefilter
+4e1a54d Revert "Add low-cost semantic prefilter for duplicate judge"
+eca7fff Add low-cost semantic prefilter for duplicate judge
+1ffe29e Revert "TEMP repair selected candidates without queue"

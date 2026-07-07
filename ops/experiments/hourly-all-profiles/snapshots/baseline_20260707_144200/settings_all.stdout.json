@@ -1,0 +1,1469 @@
+[
+  {
+    "results": [
+      {
+        "key": "ai_usage_attribution_last_cleanup",
+        "value": "2026-07-06T21:20:34.142Z",
+        "updated_at": "2026-06-13 22:20:58"
+      },
+      {
+        "key": "apify_curation_dry_run",
+        "value": "false",
+        "updated_at": "2026-06-16 10:20:12"
+      },
+      {
+        "key": "apify_curation_enabled",
+        "value": "true",
+        "updated_at": "2026-06-16 10:20:12"
+      },
+      {
+        "key": "apify_rotation_last_bucket_crypto",
+        "value": "164915",
+        "updated_at": "2026-06-10 10:44:14"
+      },
+      {
+        "key": "apify_rotation_slot_165119",
+        "value": "claimed",
+        "updated_at": "2026-07-05 21:05:31"
+      },
+      {
+        "key": "apify_rotation_slot_165120",
+        "value": "claimed",
+        "updated_at": "2026-07-06 00:00:34"
+      },
+      {
+        "key": "apify_rotation_slot_165121",
+        "value": "claimed",
+        "updated_at": "2026-07-06 03:00:34"
+      },
+      {
+        "key": "apify_rotation_slot_165122",
+        "value": "claimed",
+        "updated_at": "2026-07-06 06:00:38"
+      },
+      {
+        "key": "apify_rotation_slot_165123",
+        "value": "claimed",
+        "updated_at": "2026-07-06 09:00:36"
+      },
+      {
+        "key": "apify_rotation_slot_165124_fixed_crypto_v2_analysts",
+        "value": "claimed",
+        "updated_at": "2026-07-06 09:45:31"
+      },
+      {
+        "key": "apify_rotation_slot_165124_fixed_decision_logged_crypto_v2_analysts",
+        "value": "logged",
+        "updated_at": "2026-07-06 10:10:31"
+      },
+      {
+        "key": "apify_rotation_slot_165124_fixed_skip_logged_crypto_v2_analysts",
+        "value": "logged",
+        "updated_at": "2026-07-06 09:50:31"
+      },
+      {
+        "key": "apify_rotation_slot_165125_fixed_crypto_v2_news_a",
+        "value": "claimed",
+        "updated_at": "2026-07-06 12:00:32"
+      },
+      {
+        "key": "apify_rotation_slot_165125_fixed_decision_logged_crypto_v2_news_a",
+        "value": "logged",
+        "updated_at": "2026-07-06 12:00:32"
+      },
+      {
+        "key": "apify_rotation_slot_165125_fixed_skip_logged_crypto_v2_news_a",
+        "value": "logged",
+        "updated_at": "2026-07-06 12:05:32"
+      },
+      {
+        "key": "apify_rotation_slot_165126_fixed_crypto_v2_news_b",
+        "value": "claimed",
+        "updated_at": "2026-07-06 15:00:31"
+      },
+      {
+        "key": "apify_rotation_slot_165126_fixed_decision_logged_crypto_v2_news_b",
+        "value": "logged",
+        "updated_at": "2026-07-06 15:00:32"
+      },
+      {
+        "key": "apify_rotation_slot_165126_fixed_skip_logged_crypto_v2_news_b",
+        "value": "logged",
+        "updated_at": "2026-07-06 15:05:31"
+      },
+      {
+        "key": "apify_rotation_slot_165127_fixed_crypto_v2_market",
+        "value": "claimed",
+        "updated_at": "2026-07-06 18:00:32"
+      },
+      {
+        "key": "apify_rotation_slot_165127_fixed_decision_logged_crypto_v2_market",
+        "value": "logged",
+        "updated_at": "2026-07-06 18:00:32"
+      },
+      {
+        "key": "apify_rotation_slot_165127_fixed_skip_logged_crypto_v2_market",
+        "value": "logged",
+        "updated_at": "2026-07-06 18:05:32"
+      },
+      {
+        "key": "apify_rotation_slot_165128_fixed_crypto_v2_analysts",
+        "value": "claimed",
+        "updated_at": "2026-07-06 21:00:31"
+      },
+      {
+        "key": "apify_rotation_slot_165128_fixed_decision_logged_crypto_v2_analysts",
+        "value": "logged",
+        "updated_at": "2026-07-06 21:00:31"
+      },
+      {
+        "key": "apify_rotation_slot_165128_fixed_skip_logged_crypto_v2_analysts",
+        "value": "logged",
+        "updated_at": "2026-07-06 21:05:29"
+      },
+      {
+        "key": "apify_rotation_slot_165129_fixed_crypto_v2_news_a",
+        "value": "claimed",
+        "updated_at": "2026-07-07 00:00:55"
+      },
+      {
+        "key": "apify_rotation_slot_165129_fixed_decision_logged_crypto_v2_news_a",
+        "value": "logged",
+        "updated_at": "2026-07-07 00:00:55"
+      },
+      {
+        "key": "apify_rotation_slot_165129_fixed_skip_logged_crypto_v2_news_a",
+        "value": "logged",
+        "updated_at": "2026-07-07 00:05:55"
+      },
+      {
+        "key": "apify_rotation_slot_165130_fixed_crypto_v2_news_b",
+        "value": "claimed",
+        "updated_at": "2026-07-07 03:00:56"
+      },
+      {
+        "key": "apify_rotation_slot_165130_fixed_decision_logged_crypto_v2_news_b",
+        "value": "logged",
+        "updated_at": "2026-07-07 03:00:56"
+      },
+      {
+        "key": "apify_rotation_slot_165130_fixed_skip_logged_crypto_v2_news_b",
+        "value": "logged",
+        "updated_at": "2026-07-07 03:05:55"
+      },
+      {
+        "key": "apify_rotation_slot_165131_fixed_crypto_v2_market",
+        "value": "claimed",
+        "updated_at": "2026-07-07 06:00:55"
+      },
+      {
+        "key": "apify_rotation_slot_165131_fixed_decision_logged_crypto_v2_market",
+        "value": "logged",
+        "updated_at": "2026-07-07 06:00:55"
+      },
+      {
+        "key": "apify_rotation_slot_165131_fixed_skip_logged_crypto_v2_market",
+        "value": "logged",
+        "updated_at": "2026-07-07 06:05:55"
+      },
+      {
+        "key": "apify_rotation_slot_165132_fixed_crypto_v2_analysts",
+        "value": "claimed",
+        "updated_at": "2026-07-07 09:00:55"
+      },
+      {
+        "key": "apify_rotation_slot_165132_fixed_decision_logged_crypto_v2_analysts",
+        "value": "logged",
+        "updated_at": "2026-07-07 09:00:55"
+      },
+      {
+        "key": "apify_rotation_slot_165132_fixed_skip_logged_crypto_v2_analysts",
+        "value": "logged",
+        "updated_at": "2026-07-07 09:05:38"
+      },
+      {
+        "key": "apify_rotation_slot_247516",
+        "value": "claimed",
+        "updated_at": "2026-06-22 09:40:23"
+      },
+      {
+        "key": "apify_rotation_slot_247517",
+        "value": "claimed",
+        "updated_at": "2026-06-22 10:00:23"
+      },
+      {
+        "key": "apify_rotation_slot_495000",
+        "value": "claimed",
+        "updated_at": "2026-06-21 00:55:08"
+      },
+      {
+        "key": "apify_rotation_slot_495001",
+        "value": "claimed",
+        "updated_at": "2026-06-21 01:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495002",
+        "value": "claimed",
+        "updated_at": "2026-06-21 02:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495003",
+        "value": "claimed",
+        "updated_at": "2026-06-21 03:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495004",
+        "value": "claimed",
+        "updated_at": "2026-06-21 04:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495005",
+        "value": "claimed",
+        "updated_at": "2026-06-21 05:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495006",
+        "value": "claimed",
+        "updated_at": "2026-06-21 06:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495007",
+        "value": "claimed",
+        "updated_at": "2026-06-21 07:00:08"
+      },
+      {
+        "key": "apify_rotation_slot_495008",
+        "value": "claimed",
+        "updated_at": "2026-06-21 08:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495009",
+        "value": "claimed",
+        "updated_at": "2026-06-21 09:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495010",
+        "value": "claimed",
+        "updated_at": "2026-06-21 10:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495011",
+        "value": "claimed",
+        "updated_at": "2026-06-21 11:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495012",
+        "value": "claimed",
+        "updated_at": "2026-06-21 12:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495013",
+        "value": "claimed",
+        "updated_at": "2026-06-21 13:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495014",
+        "value": "claimed",
+        "updated_at": "2026-06-21 14:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495015",
+        "value": "claimed",
+        "updated_at": "2026-06-21 15:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495016",
+        "value": "claimed",
+        "updated_at": "2026-06-21 16:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495017",
+        "value": "claimed",
+        "updated_at": "2026-06-21 17:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495018",
+        "value": "claimed",
+        "updated_at": "2026-06-21 18:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495019",
+        "value": "claimed",
+        "updated_at": "2026-06-21 19:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495020",
+        "value": "claimed",
+        "updated_at": "2026-06-21 20:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495021",
+        "value": "claimed",
+        "updated_at": "2026-06-21 21:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495022",
+        "value": "claimed",
+        "updated_at": "2026-06-21 22:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495023",
+        "value": "claimed",
+        "updated_at": "2026-06-21 23:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495024",
+        "value": "claimed",
+        "updated_at": "2026-06-22 00:00:15"
+      },
+      {
+        "key": "apify_rotation_slot_495025",
+        "value": "claimed",
+        "updated_at": "2026-06-22 01:00:22"
+      },
+      {
+        "key": "apify_rotation_slot_495026",
+        "value": "claimed",
+        "updated_at": "2026-06-22 02:00:22"
+      },
+      {
+        "key": "apify_rotation_slot_495027",
+        "value": "claimed",
+        "updated_at": "2026-06-22 03:00:22"
+      },
+      {
+        "key": "apify_rotation_slot_495028",
+        "value": "claimed",
+        "updated_at": "2026-06-22 04:00:22"
+      },
+      {
+        "key": "apify_rotation_slot_495029",
+        "value": "claimed",
+        "updated_at": "2026-06-22 05:00:22"
+      },
+      {
+        "key": "apify_rotation_slot_495030",
+        "value": "claimed",
+        "updated_at": "2026-06-22 06:00:22"
+      },
+      {
+        "key": "apify_rotation_slot_495031",
+        "value": "claimed",
+        "updated_at": "2026-06-22 07:00:23"
+      },
+      {
+        "key": "apify_rotation_slot_495032",
+        "value": "claimed",
+        "updated_at": "2026-06-22 08:00:23"
+      },
+      {
+        "key": "apify_rotation_slot_495033",
+        "value": "claimed",
+        "updated_at": "2026-06-22 09:00:23"
+      },
+      {
+        "key": "apify_rotation_slot_989905",
+        "value": "claimed",
+        "updated_at": "2026-06-19 00:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989906",
+        "value": "claimed",
+        "updated_at": "2026-06-19 01:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989907",
+        "value": "claimed",
+        "updated_at": "2026-06-19 01:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989908",
+        "value": "claimed",
+        "updated_at": "2026-06-19 02:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989909",
+        "value": "claimed",
+        "updated_at": "2026-06-19 02:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989910",
+        "value": "claimed",
+        "updated_at": "2026-06-19 03:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989911",
+        "value": "claimed",
+        "updated_at": "2026-06-19 03:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989912",
+        "value": "claimed",
+        "updated_at": "2026-06-19 04:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989913",
+        "value": "claimed",
+        "updated_at": "2026-06-19 04:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989914",
+        "value": "claimed",
+        "updated_at": "2026-06-19 05:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989915",
+        "value": "claimed",
+        "updated_at": "2026-06-19 05:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989916",
+        "value": "claimed",
+        "updated_at": "2026-06-19 06:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989917",
+        "value": "claimed",
+        "updated_at": "2026-06-19 06:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989918",
+        "value": "claimed",
+        "updated_at": "2026-06-19 07:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989919",
+        "value": "claimed",
+        "updated_at": "2026-06-19 07:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989920",
+        "value": "claimed",
+        "updated_at": "2026-06-19 08:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989921",
+        "value": "claimed",
+        "updated_at": "2026-06-19 08:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989922",
+        "value": "claimed",
+        "updated_at": "2026-06-19 09:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989923",
+        "value": "claimed",
+        "updated_at": "2026-06-19 09:30:21"
+      },
+      {
+        "key": "apify_rotation_slot_989924",
+        "value": "claimed",
+        "updated_at": "2026-06-19 10:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989925",
+        "value": "claimed",
+        "updated_at": "2026-06-19 10:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989926",
+        "value": "claimed",
+        "updated_at": "2026-06-19 11:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989927",
+        "value": "claimed",
+        "updated_at": "2026-06-19 11:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989928",
+        "value": "claimed",
+        "updated_at": "2026-06-19 12:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989929",
+        "value": "claimed",
+        "updated_at": "2026-06-19 12:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989930",
+        "value": "claimed",
+        "updated_at": "2026-06-19 13:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989931",
+        "value": "claimed",
+        "updated_at": "2026-06-19 13:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989932",
+        "value": "claimed",
+        "updated_at": "2026-06-19 14:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989933",
+        "value": "claimed",
+        "updated_at": "2026-06-19 14:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989934",
+        "value": "claimed",
+        "updated_at": "2026-06-19 15:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989935",
+        "value": "claimed",
+        "updated_at": "2026-06-19 15:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989936",
+        "value": "claimed",
+        "updated_at": "2026-06-19 16:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989937",
+        "value": "claimed",
+        "updated_at": "2026-06-19 16:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989938",
+        "value": "claimed",
+        "updated_at": "2026-06-19 17:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989939",
+        "value": "claimed",
+        "updated_at": "2026-06-19 17:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989940",
+        "value": "claimed",
+        "updated_at": "2026-06-19 18:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989941",
+        "value": "claimed",
+        "updated_at": "2026-06-19 18:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989942",
+        "value": "claimed",
+        "updated_at": "2026-06-19 19:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989943",
+        "value": "claimed",
+        "updated_at": "2026-06-19 19:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989944",
+        "value": "claimed",
+        "updated_at": "2026-06-19 20:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989945",
+        "value": "claimed",
+        "updated_at": "2026-06-19 20:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989946",
+        "value": "claimed",
+        "updated_at": "2026-06-19 21:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989947",
+        "value": "claimed",
+        "updated_at": "2026-06-19 21:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989948",
+        "value": "claimed",
+        "updated_at": "2026-06-19 22:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989949",
+        "value": "claimed",
+        "updated_at": "2026-06-19 22:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989950",
+        "value": "claimed",
+        "updated_at": "2026-06-19 23:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989951",
+        "value": "claimed",
+        "updated_at": "2026-06-19 23:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989952",
+        "value": "claimed",
+        "updated_at": "2026-06-20 00:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989953",
+        "value": "claimed",
+        "updated_at": "2026-06-20 00:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989954",
+        "value": "claimed",
+        "updated_at": "2026-06-20 01:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989955",
+        "value": "claimed",
+        "updated_at": "2026-06-20 01:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989956",
+        "value": "claimed",
+        "updated_at": "2026-06-20 02:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989957",
+        "value": "claimed",
+        "updated_at": "2026-06-20 02:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989958",
+        "value": "claimed",
+        "updated_at": "2026-06-20 03:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989959",
+        "value": "claimed",
+        "updated_at": "2026-06-20 03:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989960",
+        "value": "claimed",
+        "updated_at": "2026-06-20 04:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989961",
+        "value": "claimed",
+        "updated_at": "2026-06-20 04:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989962",
+        "value": "claimed",
+        "updated_at": "2026-06-20 05:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989963",
+        "value": "claimed",
+        "updated_at": "2026-06-20 05:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989964",
+        "value": "claimed",
+        "updated_at": "2026-06-20 06:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989965",
+        "value": "claimed",
+        "updated_at": "2026-06-20 06:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989966",
+        "value": "claimed",
+        "updated_at": "2026-06-20 07:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989967",
+        "value": "claimed",
+        "updated_at": "2026-06-20 07:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989968",
+        "value": "claimed",
+        "updated_at": "2026-06-20 08:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989969",
+        "value": "claimed",
+        "updated_at": "2026-06-20 08:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989970",
+        "value": "claimed",
+        "updated_at": "2026-06-20 09:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989971",
+        "value": "claimed",
+        "updated_at": "2026-06-20 09:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989972",
+        "value": "claimed",
+        "updated_at": "2026-06-20 10:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989973",
+        "value": "claimed",
+        "updated_at": "2026-06-20 10:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989974",
+        "value": "claimed",
+        "updated_at": "2026-06-20 11:00:21"
+      },
+      {
+        "key": "apify_rotation_slot_989975",
+        "value": "claimed",
+        "updated_at": "2026-06-20 11:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989976",
+        "value": "claimed",
+        "updated_at": "2026-06-20 12:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989977",
+        "value": "claimed",
+        "updated_at": "2026-06-20 12:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989978",
+        "value": "claimed",
+        "updated_at": "2026-06-20 13:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989979",
+        "value": "claimed",
+        "updated_at": "2026-06-20 13:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989980",
+        "value": "claimed",
+        "updated_at": "2026-06-20 14:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989981",
+        "value": "claimed",
+        "updated_at": "2026-06-20 14:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989982",
+        "value": "claimed",
+        "updated_at": "2026-06-20 15:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989983",
+        "value": "claimed",
+        "updated_at": "2026-06-20 15:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989984",
+        "value": "claimed",
+        "updated_at": "2026-06-20 16:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989985",
+        "value": "claimed",
+        "updated_at": "2026-06-20 16:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989986",
+        "value": "claimed",
+        "updated_at": "2026-06-20 17:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989987",
+        "value": "claimed",
+        "updated_at": "2026-06-20 17:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989988",
+        "value": "claimed",
+        "updated_at": "2026-06-20 18:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989989",
+        "value": "claimed",
+        "updated_at": "2026-06-20 18:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989990",
+        "value": "claimed",
+        "updated_at": "2026-06-20 19:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989991",
+        "value": "claimed",
+        "updated_at": "2026-06-20 19:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989992",
+        "value": "claimed",
+        "updated_at": "2026-06-20 20:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989993",
+        "value": "claimed",
+        "updated_at": "2026-06-20 20:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989994",
+        "value": "claimed",
+        "updated_at": "2026-06-20 21:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989995",
+        "value": "claimed",
+        "updated_at": "2026-06-20 21:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989996",
+        "value": "claimed",
+        "updated_at": "2026-06-20 22:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989997",
+        "value": "claimed",
+        "updated_at": "2026-06-20 22:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_989998",
+        "value": "claimed",
+        "updated_at": "2026-06-20 23:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_989999",
+        "value": "claimed",
+        "updated_at": "2026-06-20 23:30:20"
+      },
+      {
+        "key": "apify_rotation_slot_990000",
+        "value": "claimed",
+        "updated_at": "2026-06-21 00:00:20"
+      },
+      {
+        "key": "apify_rotation_slot_990001",
+        "value": "claimed",
+        "updated_at": "2026-06-21 00:30:20"
+      },
+      {
+        "key": "maintenance_mode",
+        "value": "false",
+        "updated_at": "2026-07-03 20:03:10"
+      },
+      {
+        "key": "market_snapshot_cache_v2",
+        "value": "{\"cachedAt\":1782452107,\"data\":{\"generatedAt\":1782452107,\"lines\":[\"🔴 BTC  $59,971   (▼ 2.7%)\",\"🔴 ETH  $1,557    (▼ 5.5%)\",\"🔴 SOL  $68.3     (▼ 1.1%)\",\"🔴 XRP  $1.03     (▼ 4.9%)\",\"🔴 BNB  $560.85   (▼ 1.6%)\",\"🔴 ADA  $0.1424   (▼ 5.2%)\",\"🔴 TON  $1.6      (▼ 0.4%)\",\"🔴 DOGE $0.0743   (▼ 3.8%)\"],\"totalMarketCapUsd\":2143007173806.8618,\"btcDominance\":55.93499514564091}}",
+        "updated_at": "2026-06-26 05:35:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260607_1900",
+        "value": "{\"sentAt\":1780846204,\"messageId\":\"128\"}",
+        "updated_at": "2026-06-07 15:30:04"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260607_2000",
+        "value": "{\"sentAt\":1780849807,\"messageId\":\"130\"}",
+        "updated_at": "2026-06-07 16:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260607_2100",
+        "value": "{\"sentAt\":1780856399,\"messageId\":\"137\"}",
+        "updated_at": "2026-06-07 18:19:59"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260607_2200",
+        "value": "{\"sentAt\":1780857884,\"messageId\":\"141\"}",
+        "updated_at": "2026-06-07 18:44:44"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260607_2300",
+        "value": "{\"sentAt\":1780860606,\"messageId\":\"145\"}",
+        "updated_at": "2026-06-07 19:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0000",
+        "value": "{\"sentAt\":1780864207,\"messageId\":\"146\"}",
+        "updated_at": "2026-06-07 20:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0100",
+        "value": "{\"sentAt\":1780867807,\"messageId\":\"148\"}",
+        "updated_at": "2026-06-07 21:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0200",
+        "value": "{\"sentAt\":1780871407,\"messageId\":\"149\"}",
+        "updated_at": "2026-06-07 22:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0300",
+        "value": "{\"sentAt\":1780875007,\"messageId\":\"150\"}",
+        "updated_at": "2026-06-07 23:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0400",
+        "value": "{\"sentAt\":1780878607,\"messageId\":\"151\"}",
+        "updated_at": "2026-06-08 00:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0500",
+        "value": "{\"sentAt\":1780882208,\"messageId\":\"152\"}",
+        "updated_at": "2026-06-08 01:30:08"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0600",
+        "value": "{\"sentAt\":1780885807,\"messageId\":\"153\"}",
+        "updated_at": "2026-06-08 02:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0700",
+        "value": "{\"sentAt\":1780889407,\"messageId\":\"154\"}",
+        "updated_at": "2026-06-08 03:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0800",
+        "value": "{\"sentAt\":1780893007,\"messageId\":\"155\"}",
+        "updated_at": "2026-06-08 04:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_0900",
+        "value": "{\"sentAt\":1780896606,\"messageId\":\"161\"}",
+        "updated_at": "2026-06-08 05:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1000",
+        "value": "{\"sentAt\":1780900207,\"messageId\":\"162\"}",
+        "updated_at": "2026-06-08 06:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1100",
+        "value": "{\"sentAt\":1780903807,\"messageId\":\"163\"}",
+        "updated_at": "2026-06-08 07:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1200",
+        "value": "{\"sentAt\":1780907407,\"messageId\":\"164\"}",
+        "updated_at": "2026-06-08 08:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1300",
+        "value": "{\"sentAt\":1780911006,\"messageId\":\"168\"}",
+        "updated_at": "2026-06-08 09:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1400",
+        "value": "{\"sentAt\":1780914607,\"messageId\":\"172\"}",
+        "updated_at": "2026-06-08 10:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1500",
+        "value": "{\"sentAt\":1780918206,\"messageId\":\"176\"}",
+        "updated_at": "2026-06-08 11:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1600",
+        "value": "{\"sentAt\":1780921807,\"messageId\":\"177\"}",
+        "updated_at": "2026-06-08 12:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1700",
+        "value": "{\"sentAt\":1780925406,\"messageId\":\"180\"}",
+        "updated_at": "2026-06-08 13:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1800",
+        "value": "{\"sentAt\":1780929007,\"messageId\":\"183\"}",
+        "updated_at": "2026-06-08 14:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_1900",
+        "value": "{\"sentAt\":1780932606,\"messageId\":\"189\"}",
+        "updated_at": "2026-06-08 15:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_2000",
+        "value": "{\"sentAt\":1780936206,\"messageId\":\"194\"}",
+        "updated_at": "2026-06-08 16:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_2100",
+        "value": "{\"sentAt\":1780939806,\"messageId\":\"197\"}",
+        "updated_at": "2026-06-08 17:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_2200",
+        "value": "{\"sentAt\":1780943407,\"messageId\":\"198\"}",
+        "updated_at": "2026-06-08 18:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260608_2300",
+        "value": "{\"sentAt\":1780947006,\"messageId\":\"203\"}",
+        "updated_at": "2026-06-08 19:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0000",
+        "value": "{\"sentAt\":1780950607,\"messageId\":\"205\"}",
+        "updated_at": "2026-06-08 20:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0100",
+        "value": "{\"sentAt\":1780954206,\"messageId\":\"211\"}",
+        "updated_at": "2026-06-08 21:30:06"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0200",
+        "value": "{\"sentAt\":1780957808,\"messageId\":\"212\"}",
+        "updated_at": "2026-06-08 22:30:08"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0300",
+        "value": "{\"sentAt\":1780961407,\"messageId\":\"213\"}",
+        "updated_at": "2026-06-08 23:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0400",
+        "value": "{\"sentAt\":1780965006,\"messageId\":\"214\"}",
+        "updated_at": "2026-06-09 00:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0500",
+        "value": "{\"sentAt\":1780968607,\"messageId\":\"215\"}",
+        "updated_at": "2026-06-09 01:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0600",
+        "value": "{\"sentAt\":1780972207,\"messageId\":\"216\"}",
+        "updated_at": "2026-06-09 02:30:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0700",
+        "value": "{\"sentAt\":1780975813,\"messageId\":\"217\"}",
+        "updated_at": "2026-06-09 03:30:13"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0800",
+        "value": "{\"sentAt\":1780979411,\"messageId\":\"222\"}",
+        "updated_at": "2026-06-09 04:30:11"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_0900",
+        "value": "{\"sentAt\":1780983016,\"messageId\":\"225\"}",
+        "updated_at": "2026-06-09 05:30:16"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_1000",
+        "value": "{\"sentAt\":1780986615,\"messageId\":\"232\"}",
+        "updated_at": "2026-06-09 06:30:16"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260609_1235",
+        "value": "{\"sentAt\":1780995907,\"messageId\":\"235\"}",
+        "updated_at": "2026-06-09 09:05:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260610_0905",
+        "value": "{\"sentAt\":1781069728,\"messageId\":\"295\"}",
+        "updated_at": "2026-06-10 05:35:28"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260610_2231",
+        "value": "{\"sentAt\":1781118119,\"messageId\":\"344\"}",
+        "updated_at": "2026-06-10 19:01:59"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260611_0905",
+        "value": "{\"sentAt\":1781156121,\"messageId\":\"354\"}",
+        "updated_at": "2026-06-11 05:35:21"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260611_1235",
+        "value": "{\"sentAt\":1781168743,\"messageId\":\"367\"}",
+        "updated_at": "2026-06-11 09:05:44"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260611_1535",
+        "value": "{\"sentAt\":1781179550,\"messageId\":\"379\"}",
+        "updated_at": "2026-06-11 12:05:50"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260611_1835",
+        "value": "{\"sentAt\":1781190352,\"messageId\":\"393\"}",
+        "updated_at": "2026-06-11 15:05:52"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260611_2135",
+        "value": "{\"sentAt\":1781201151,\"messageId\":\"409\"}",
+        "updated_at": "2026-06-11 18:05:51"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_0905",
+        "value": "{\"sentAt\":1781242532,\"messageId\":\"439\"}",
+        "updated_at": "2026-06-12 05:35:32"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_1235",
+        "value": "{\"sentAt\":1781255164,\"messageId\":\"443\"}",
+        "updated_at": "2026-06-12 09:06:04"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_1535",
+        "value": "{\"sentAt\":1781265984,\"messageId\":\"447\"}",
+        "updated_at": "2026-06-12 12:06:24"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_1835",
+        "value": "{\"sentAt\":1781276754,\"messageId\":\"454\"}",
+        "updated_at": "2026-06-12 15:05:54"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_2135",
+        "value": "{\"sentAt\":1781287546,\"messageId\":\"455\"}",
+        "updated_at": "2026-06-12 18:05:46"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_2149",
+        "value": "{\"sentAt\":1781288393,\"messageId\":\"456\"}",
+        "updated_at": "2026-06-12 18:19:53"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260612_2218",
+        "value": "{\"sentAt\":1781290126,\"messageId\":\"457\"}",
+        "updated_at": "2026-06-12 18:48:46"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260613_0905",
+        "value": "{\"sentAt\":1781328960,\"messageId\":\"477\"}",
+        "updated_at": "2026-06-13 05:36:00"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260613_1235",
+        "value": "{\"sentAt\":1781341660,\"messageId\":\"495\"}",
+        "updated_at": "2026-06-13 09:07:40"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260613_1535",
+        "value": "{\"sentAt\":1781352405,\"messageId\":\"508\"}",
+        "updated_at": "2026-06-13 12:06:45"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260613_1835",
+        "value": "{\"sentAt\":1781363214,\"messageId\":\"512\"}",
+        "updated_at": "2026-06-13 15:06:54"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260613_2135",
+        "value": "{\"sentAt\":1781374019,\"messageId\":\"513\"}",
+        "updated_at": "2026-06-13 18:06:59"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260614_0905",
+        "value": "{\"sentAt\":1781415369,\"messageId\":\"519\"}",
+        "updated_at": "2026-06-14 05:36:09"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260614_1835",
+        "value": "{\"sentAt\":1781449547,\"messageId\":\"530\"}",
+        "updated_at": "2026-06-14 15:05:47"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260616_2135",
+        "value": "{\"sentAt\":1781633161,\"messageId\":\"540\"}",
+        "updated_at": "2026-06-16 18:06:01"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260617_0905",
+        "value": "{\"sentAt\":1781674501,\"messageId\":\"563\"}",
+        "updated_at": "2026-06-17 05:35:01"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260617_1235",
+        "value": "{\"sentAt\":1781687103,\"messageId\":\"583\"}",
+        "updated_at": "2026-06-17 09:05:03"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260617_1535",
+        "value": "{\"sentAt\":1781697903,\"messageId\":\"597\"}",
+        "updated_at": "2026-06-17 12:05:03"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260617_1835",
+        "value": "{\"sentAt\":1781708703,\"messageId\":\"607\"}",
+        "updated_at": "2026-06-17 15:05:03"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260617_2135",
+        "value": "{\"sentAt\":1781719503,\"messageId\":\"608\"}",
+        "updated_at": "2026-06-17 18:05:03"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260618_0905",
+        "value": "{\"sentAt\":1781760913,\"messageId\":\"614\"}",
+        "updated_at": "2026-06-18 05:35:13"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260618_1235",
+        "value": "{\"sentAt\":1781773522,\"messageId\":\"621\"}",
+        "updated_at": "2026-06-18 09:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260618_1535",
+        "value": "{\"sentAt\":1781784322,\"messageId\":\"635\"}",
+        "updated_at": "2026-06-18 12:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260618_1835",
+        "value": "{\"sentAt\":1781795122,\"messageId\":\"651\"}",
+        "updated_at": "2026-06-18 15:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260618_2135",
+        "value": "{\"sentAt\":1781805922,\"messageId\":\"669\"}",
+        "updated_at": "2026-06-18 18:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260619_0905",
+        "value": "{\"sentAt\":1781847621,\"messageId\":\"694\"}",
+        "updated_at": "2026-06-19 05:40:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260619_1235",
+        "value": "{\"sentAt\":1781859922,\"messageId\":\"711\"}",
+        "updated_at": "2026-06-19 09:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260619_1535",
+        "value": "{\"sentAt\":1781870722,\"messageId\":\"719\"}",
+        "updated_at": "2026-06-19 12:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260619_1835",
+        "value": "{\"sentAt\":1781881523,\"messageId\":\"722\"}",
+        "updated_at": "2026-06-19 15:05:23"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260619_2135",
+        "value": "{\"sentAt\":1781892322,\"messageId\":\"728\"}",
+        "updated_at": "2026-06-19 18:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260620_0905",
+        "value": "{\"sentAt\":1781933722,\"messageId\":\"754\"}",
+        "updated_at": "2026-06-20 05:35:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260620_1235",
+        "value": "{\"sentAt\":1781946322,\"messageId\":\"761\"}",
+        "updated_at": "2026-06-20 09:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260620_1535",
+        "value": "{\"sentAt\":1781957133,\"messageId\":\"764\"}",
+        "updated_at": "2026-06-20 12:05:33"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260620_1835",
+        "value": "{\"sentAt\":1781967922,\"messageId\":\"767\"}",
+        "updated_at": "2026-06-20 15:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260620_2135",
+        "value": "{\"sentAt\":1781978722,\"messageId\":\"768\"}",
+        "updated_at": "2026-06-20 18:05:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260621_0905",
+        "value": "{\"sentAt\":1782020108,\"messageId\":\"779\"}",
+        "updated_at": "2026-06-21 05:35:08"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260621_1235",
+        "value": "{\"sentAt\":1782032716,\"messageId\":\"780\"}",
+        "updated_at": "2026-06-21 09:05:16"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260621_1535",
+        "value": "{\"sentAt\":1782043516,\"messageId\":\"781\"}",
+        "updated_at": "2026-06-21 12:05:16"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260621_1835",
+        "value": "{\"sentAt\":1782054316,\"messageId\":\"784\"}",
+        "updated_at": "2026-06-21 15:05:16"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260621_2135",
+        "value": "{\"sentAt\":1782065116,\"messageId\":\"785\"}",
+        "updated_at": "2026-06-21 18:05:16"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260622_0905",
+        "value": "{\"sentAt\":1782106522,\"messageId\":\"787\"}",
+        "updated_at": "2026-06-22 05:35:22"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260622_1235",
+        "value": "{\"sentAt\":1782119124,\"messageId\":\"disabled_skip\"}",
+        "updated_at": "2026-06-22 09:05:24"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260622_1535",
+        "value": "{\"sentAt\":1782129926,\"messageId\":\"803\"}",
+        "updated_at": "2026-06-22 12:05:26"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260622_1835",
+        "value": "{\"sentAt\":1782140725,\"messageId\":\"808\"}",
+        "updated_at": "2026-06-22 15:05:26"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260622_2135",
+        "value": "{\"sentAt\":1782151527,\"messageId\":\"815\"}",
+        "updated_at": "2026-06-22 18:05:27"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260623_0905",
+        "value": "{\"sentAt\":1782192956,\"messageId\":\"819\"}",
+        "updated_at": "2026-06-23 05:35:56"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260623_1235",
+        "value": "{\"sentAt\":1782205556,\"messageId\":\"820\"}",
+        "updated_at": "2026-06-23 09:05:56"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260623_1535",
+        "value": "{\"sentAt\":1782216356,\"messageId\":\"821\"}",
+        "updated_at": "2026-06-23 12:05:56"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260623_1835",
+        "value": "{\"sentAt\":1782227157,\"messageId\":\"822\"}",
+        "updated_at": "2026-06-23 15:05:57"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260623_2135",
+        "value": "{\"sentAt\":1782237956,\"messageId\":\"823\"}",
+        "updated_at": "2026-06-23 18:05:56"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260625_1535",
+        "value": "{\"sentAt\":1782389107,\"messageId\":\"832\"}",
+        "updated_at": "2026-06-25 12:05:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260625_1835",
+        "value": "{\"sentAt\":1782399907,\"messageId\":\"838\"}",
+        "updated_at": "2026-06-25 15:05:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260625_2135",
+        "value": "{\"sentAt\":1782410707,\"messageId\":\"839\"}",
+        "updated_at": "2026-06-25 18:05:07"
+      },
+      {
+        "key": "market_snapshot_sent_crypto_fa_pilot_20260626_0905",
+        "value": "{\"sentAt\":1782452107,\"messageId\":\"843\"}",
+        "updated_at": "2026-06-26 05:35:07"
+      },
+      {
+        "key": "ops:rss_reset_at",
+        "value": "2026-06-22 22:46:39",
+        "updated_at": "2026-06-22 22:46:39"
+      },
+      {
+        "key": "ops_backup:channel_rate:crypto_fa_pilot",
+        "value": "{\"max_per_hour\":4,\"min_gap_minutes\":15}",
+        "updated_at": "2026-06-22 10:48:45"
+      },
+      {
+        "key": "ops_backup:crypto_category_threshold",
+        "value": "{\"score_threshold\":70.0,\"media_mode\":\"optional\",\"freshness_hours\":168}",
+        "updated_at": "2026-06-22 13:21:20"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165125",
+        "value": "logged",
+        "updated_at": "2026-07-06 12:00:32"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165126",
+        "value": "logged",
+        "updated_at": "2026-07-06 15:00:31"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165127",
+        "value": "logged",
+        "updated_at": "2026-07-06 18:00:31"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165128",
+        "value": "logged",
+        "updated_at": "2026-07-06 21:00:30"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165129",
+        "value": "logged",
+        "updated_at": "2026-07-07 00:00:55"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165130",
+        "value": "logged",
+        "updated_at": "2026-07-07 03:00:55"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165131",
+        "value": "logged",
+        "updated_at": "2026-07-07 06:00:54"
+      },
+      {
+        "key": "scheduler_fixed_rotation_window_tick_165132",
+        "value": "logged",
+        "updated_at": "2026-07-07 09:00:54"
+      },
+      {
+        "key": "story_intelligence_events_last_cleanup",
+        "value": "2026-07-06T22:20:56.064Z",
+        "updated_at": "2026-06-13 22:20:58"
+      },
+      {
+        "key": "telegram_admin:last_audit:6286008147",
+        "value": "{\"actor_id\":6286008147,\"action\":\"back\",\"scope\":{\"platform\":\"Platforms\",\"screen\":\"command_center\",\"categoryId\":\"crypto\",\"channelId\":\"Channels\"},\"result\":\"back:command_center\",\"at\":\"2026-06-10T23:19:03.902Z\"}",
+        "updated_at": "2026-06-10 23:19:03"
+      },
+      {
+        "key": "telegram_admin:last_start:6286008147",
+        "value": "1781704429731",
+        "updated_at": "2026-06-17 13:53:49"
+      },
+      {
+        "key": "telegram_admin:session:6286008147",
+        "value": "{\"platform\":\"x\",\"screen\":\"monitoring\",\"categoryId\":\"crypto\",\"channelId\":\"crypto_fa_pilot\"}",
+        "updated_at": "2026-07-07 00:53:20"
+      },
+      {
+        "key": "telegram_publish_enabled",
+        "value": "true",
+        "updated_at": "2026-07-01 23:29:20"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WEUR",
+      "served_by_colo": "AMS",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 2.1297
+      },
+      "duration": 2.1297,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 52944896,
+      "rows_read": 289,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

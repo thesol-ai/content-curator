@@ -1,0 +1,14 @@
+{
+  "db": "content-curator-db-v2",
+  "snapshot_dir": "ops/experiments/hourly-all-profiles/snapshots/baseline_20260707_144200",
+  "tables": [
+    "channels_crypto_fa_pilot",
+    "categories_crypto",
+    "apify_sources_crypto",
+    "source_accounts_crypto",
+    "settings_all",
+    "publish_queue_active_snapshot_audit_only",
+    "ai_usage_last_24h_audit_only",
+    "publish_safety_errors_audit_only"
+  ]
+}
