@@ -1453,25 +1453,23 @@ export async function publishDueItems(
 
 async function recoverStalePublishingItems(env: Env, now: number): Promise<number> {
   const staleAfterSec = 15 * 60;
-  const retryDelaySec = 60;
 
   try {
     const result = await env.DB.prepare(`
       UPDATE publish_queue
       SET
-        status=CASE WHEN COALESCE(retry_count,0) + 1 >= 3 THEN 'failed' ELSE 'retry' END,
+        status='failed',
         retry_count=COALESCE(retry_count,0) + 1,
-        scheduled_at=CASE WHEN COALESCE(retry_count,0) + 1 >= 3 THEN scheduled_at ELSE ? END,
-        publish_error='recovered_from_stale_publishing'
+        publish_error='stale_publishing_quarantined_possible_telegram_duplicate'
       WHERE status='publishing'
         AND published_at IS NULL
         AND (telegram_message_id IS NULL OR telegram_message_id='')
         AND scheduled_at <= ?
-    `).bind(now + retryDelaySec, now - staleAfterSec).run();
+    `).bind(now - staleAfterSec).run();
 
     return Number(result.meta.changes ?? 0);
   } catch (err) {
-    console.warn('[Publisher] stale publishing recovery skipped:', err instanceof Error ? err.message : String(err));
+    console.warn('[Publisher] stale publishing quarantine skipped:', err instanceof Error ? err.message : String(err));
     return 0;
   }
 }
@@ -1519,6 +1517,66 @@ export async function publishQueueItem(
   if (respectRateLimits) {
     const rateLimitReason = await checkChannelPublishRateLimits(env, row.channel_id, row.max_per_hour, row.min_gap_minutes, now);
     if (rateLimitReason) return { queueId, ok: false, status: 'skipped', reason: rateLimitReason };
+  }
+
+  // Final exact duplicate guard before Telegram.
+  // Semantic duplicate detection happens earlier. This is the last hard safety
+  // check for exact source/item duplicates and stale-publishing ghosts.
+  const finalDuplicate = await env.DB.prepare(`
+    SELECT p.id, p.status, p.publish_error
+    FROM publish_queue p
+    WHERE p.channel_id=?
+      AND p.id<>?
+      AND COALESCE(p.published_at, p.scheduled_at, 0) >= ?
+      AND (
+        (p.source_url IS NOT NULL AND p.source_url<>'' AND p.source_url=?)
+        OR (p.item_id IS NOT NULL AND p.item_id<>'' AND p.item_id=?)
+      )
+      AND (
+        p.status IN ('published','publishing')
+        OR (
+          p.status IN ('scheduled','retry')
+          AND (
+            COALESCE(p.scheduled_at,0) < COALESCE(?,0)
+            OR (COALESCE(p.scheduled_at,0) = COALESCE(?,0) AND p.id < ?)
+          )
+        )
+        OR (
+          p.status='failed'
+          AND (
+            p.publish_error='recovered_from_stale_publishing'
+            OR p.publish_error='stale_publishing_quarantined_possible_telegram_duplicate'
+            OR p.publish_error LIKE 'final_publish_duplicate_guard:%'
+          )
+        )
+      )
+    ORDER BY COALESCE(p.published_at, p.scheduled_at, 0) DESC
+    LIMIT 1
+  `).bind(
+    row.channel_id,
+    queueId,
+    now - 72 * 3600,
+    row.source_url ?? '',
+    row.item_id ?? '',
+    Number(row.scheduled_at ?? 0),
+    Number(row.scheduled_at ?? 0),
+    queueId,
+  ).first<{ id: string; status: string; publish_error: string | null }>();
+
+  if (finalDuplicate?.id) {
+    await env.DB.prepare(`
+      UPDATE publish_queue
+      SET status='failed', publish_error=?
+      WHERE id=? AND status IN ('scheduled','retry','publishing','failed')
+    `).bind(`final_publish_duplicate_guard:${finalDuplicate.id}:${finalDuplicate.status}`, queueId).run();
+
+    return {
+      queueId,
+      ok: false,
+      status: 'failed',
+      reason: 'final_publish_duplicate_guard',
+      error: `duplicate_of:${finalDuplicate.id}`,
+    };
   }
 
   const placeholders = allowedStatuses.map(() => '?').join(',');
