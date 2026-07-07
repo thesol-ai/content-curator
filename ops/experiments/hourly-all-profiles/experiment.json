@@ -22,7 +22,7 @@
     ],
     "query_mode": "profile_latest_text_and_media",
     "media_policy": "allow_text_and_media",
-    "maxItems": 80
+    "maxItems": 60
   },
   "apify_rotation": {
     "APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED": "false",
@@ -36,7 +36,7 @@
     "APIFY_MAX_ATTEMPTS_PER_SLOT": "1",
     "APIFY_TASK_MAX_RETRIES": "0",
     "APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED": "false",
-    "APIFY_MAX_ITEMS_PER_SOURCE": "80",
+    "APIFY_MAX_ITEMS_PER_SOURCE": "60",
     "APIFY_RAW_FETCH_LIMIT_PER_SOURCE": "120"
   },
   "publish_speed": {

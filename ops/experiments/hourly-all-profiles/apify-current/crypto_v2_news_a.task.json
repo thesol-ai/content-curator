@@ -1,0 +1,60 @@
+{
+  "data": {
+    "id": "iNN1vntCrT6dhomck",
+    "userId": "eF8oj7hDKc3qZ9xTd",
+    "actId": "CJdippxWmn9uRfooo",
+    "name": "crypto-v2-news-a",
+    "nameLowerCase": "crypto-v2-news-a",
+    "title": "crypto-v2-news-a",
+    "username": "thesol",
+    "createdAt": "2026-06-30T10:18:19.833Z",
+    "modifiedAt": "2026-06-30T23:03:49.962Z",
+    "stats": {
+      "totalRuns": 16,
+      "lastRunStartedAt": "2026-07-07T12:00:41.381Z"
+    },
+    "options": {
+      "build": "latest0225",
+      "timeoutSecs": 0,
+      "memoryMbytes": 256,
+      "maxTotalChargeUsd": 1
+    },
+    "input": {
+      "-min_faves": 0,
+      "-min_replies": 0,
+      "-min_retweets": 0,
+      "filter:blue_verified": false,
+      "filter:consumer_video": false,
+      "filter:has_engagement": false,
+      "filter:hashtags": false,
+      "filter:images": false,
+      "filter:links": false,
+      "filter:media": false,
+      "filter:mentions": false,
+      "filter:native_video": false,
+      "filter:nativeretweets": false,
+      "filter:news": false,
+      "filter:pro_video": false,
+      "filter:quote": false,
+      "filter:replies": false,
+      "filter:safe": false,
+      "filter:spaces": false,
+      "filter:twimg": false,
+      "filter:videos": false,
+      "filter:vine": false,
+      "include:nativeretweets": false,
+      "lang": "en",
+      "maxItems": 24,
+      "min_faves": 0,
+      "min_replies": 0,
+      "min_retweets": 0,
+      "queryType": "Latest",
+      "searchTerms": [
+        "from:CoinDesk -filter:media -filter:replies lang:en",
+        "from:Cointelegraph -filter:media -filter:replies lang:en"
+      ]
+    },
+    "publicConfig": null,
+    "standbyUrl": null
+  }
+}

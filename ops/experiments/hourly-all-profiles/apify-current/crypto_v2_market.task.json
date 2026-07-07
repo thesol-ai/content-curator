@@ -1,0 +1,60 @@
+{
+  "data": {
+    "id": "bqEEYU3HOgtt9Vd8S",
+    "userId": "eF8oj7hDKc3qZ9xTd",
+    "actId": "CJdippxWmn9uRfooo",
+    "name": "crypto-v2-market",
+    "nameLowerCase": "crypto-v2-market",
+    "title": "crypto-v2-market",
+    "username": "thesol",
+    "createdAt": "2026-06-30T10:18:17.479Z",
+    "modifiedAt": "2026-06-30T23:06:09.800Z",
+    "stats": {
+      "totalRuns": 10,
+      "lastRunStartedAt": "2026-07-07T06:00:56.324Z"
+    },
+    "options": {
+      "build": "latest0225",
+      "timeoutSecs": 0,
+      "memoryMbytes": 256,
+      "maxTotalChargeUsd": 1
+    },
+    "input": {
+      "-min_faves": 0,
+      "-min_replies": 0,
+      "-min_retweets": 0,
+      "filter:blue_verified": false,
+      "filter:consumer_video": false,
+      "filter:has_engagement": false,
+      "filter:hashtags": false,
+      "filter:images": false,
+      "filter:links": false,
+      "filter:media": false,
+      "filter:mentions": false,
+      "filter:native_video": false,
+      "filter:nativeretweets": false,
+      "filter:news": false,
+      "filter:pro_video": false,
+      "filter:quote": false,
+      "filter:replies": false,
+      "filter:safe": false,
+      "filter:spaces": false,
+      "filter:twimg": false,
+      "filter:videos": false,
+      "filter:vine": false,
+      "include:nativeretweets": false,
+      "lang": "en",
+      "maxItems": 24,
+      "min_faves": 0,
+      "min_replies": 0,
+      "min_retweets": 0,
+      "queryType": "Latest",
+      "searchTerms": [
+        "from:CryptoRank_io -filter:media -filter:replies lang:en -presale -airdrop -giveaway -contest -competition -voucher -vouchers -rewards -campaign -referral -\"claim your share\" -\"watch the full interview\" -\"full interview\" -\"get access\" -\"now live\" -\"limited time\" -\"retail access\" -\"private assets\" -\"trade now\"",
+        "from:WhaleFactor -filter:media -filter:replies lang:en -presale -airdrop -giveaway -contest -competition -voucher -vouchers -rewards -campaign -referral -\"claim your share\" -\"watch the full interview\" -\"full interview\" -\"get access\" -\"now live\" -\"limited time\" -\"retail access\" -\"private assets\" -\"trade now\""
+      ]
+    },
+    "publicConfig": null,
+    "standbyUrl": null
+  }
+}

@@ -1,0 +1,52 @@
+[
+  {
+    "results": [
+      {
+        "id": "crypto_v2_analysts",
+        "label": "Crypto V2 Analysts",
+        "apify_actor_id": "kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest",
+        "apify_task_id": "Md5OrgLlLOVuwKDAV",
+        "source_config": "{\"version\":\"v2\",\"lane\":\"analysts\",\"accounts\":[\"cryptomanran\",\"CryptoMichNL\"],\"query_mode\":\"profile_latest_text_and_media\",\"maxItems\":24,\"media_policy\":\"allow_text_and_media\",\"managed_by\":\"worker_strategy\",\"apify_task_name_uses_hyphen\":true,\"old_sources_deleted\":false}"
+      },
+      {
+        "id": "crypto_v2_market",
+        "label": "Crypto V2 Market",
+        "apify_actor_id": "kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest",
+        "apify_task_id": "bqEEYU3HOgtt9Vd8S",
+        "source_config": "{\"version\":\"v2\",\"lane\":\"market\",\"accounts\":[\"CryptoRank_io\",\"WhaleFactor\"],\"query_mode\":\"profile_latest_text_and_media\",\"maxItems\":24,\"media_policy\":\"allow_text_and_media\",\"managed_by\":\"worker_strategy\",\"apify_task_name_uses_hyphen\":true,\"old_sources_deleted\":false}"
+      },
+      {
+        "id": "crypto_v2_news_a",
+        "label": "Crypto V2 News A",
+        "apify_actor_id": "kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest",
+        "apify_task_id": "iNN1vntCrT6dhomck",
+        "source_config": "{\"version\":\"v2\",\"lane\":\"news_a\",\"accounts\":[\"Cointelegraph\",\"CoinDesk\"],\"query_mode\":\"profile_latest_text_and_media\",\"maxItems\":24,\"media_policy\":\"allow_text_and_media\",\"managed_by\":\"worker_strategy\",\"apify_task_name_uses_hyphen\":true,\"old_sources_deleted\":false}"
+      },
+      {
+        "id": "crypto_v2_news_b",
+        "label": "Crypto V2 News B",
+        "apify_actor_id": "kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest",
+        "apify_task_id": "sluh7x1Ga0ZGTAznY",
+        "source_config": "{\"version\":\"v2\",\"lane\":\"news_b\",\"accounts\":[\"WuBlockchain\",\"cryptodotnews\"],\"query_mode\":\"profile_latest_text_and_media\",\"maxItems\":24,\"media_policy\":\"allow_text_and_media\",\"managed_by\":\"worker_strategy\",\"apify_task_name_uses_hyphen\":true,\"old_sources_deleted\":false}"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WEUR",
+      "served_by_colo": "AMS",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.4045
+      },
+      "duration": 0.4045,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 53198848,
+      "rows_read": 8,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
