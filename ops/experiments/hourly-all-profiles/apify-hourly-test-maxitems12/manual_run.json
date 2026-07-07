@@ -1,0 +1,94 @@
+                                           
+{
+  "data": {
+    "id": "Mz6RgfIT6Z5bLxMMS",
+    "actId": "CJdippxWmn9uRfooo",
+    "userId": "eF8oj7hDKc3qZ9xTd",
+    "actorTaskId": "3ooiOnMdFTXyCJsQV",
+    "startedAt": "2026-07-07T16:36:21.750Z",
+    "finishedAt": "2026-07-07T16:37:05.664Z",
+    "status": "SUCCEEDED",
+    "meta": {
+      "origin": "API",
+      "userAgent": "curl/8.7.1"
+    },
+    "stats": {
+      "inputBodyLen": 3540,
+      "migrationCount": 0,
+      "rebootCount": 0,
+      "restartCount": 0,
+      "durationMillis": 43689,
+      "resurrectCount": 0,
+      "runTimeSecs": 43.689,
+      "metamorph": 0,
+      "computeUnits": 0.0030339583333333334,
+      "memAvgBytes": 52893419.93613111,
+      "memMaxBytes": 55869440,
+      "memCurrentBytes": 55644160,
+      "cpuAvgUsage": 1.1421119795930543,
+      "cpuMaxUsage": 17.430208078335376,
+      "cpuCurrentUsage": 5.060088105726872,
+      "netRxBytes": 258844,
+      "netTxBytes": 161088
+    },
+    "options": {
+      "build": "latest0225",
+      "timeoutSecs": 0,
+      "memoryMbytes": 256,
+      "maxItems": 108979,
+      "maxTotalChargeUsd": 23.975586,
+      "isMaxTotalChargeUsdSetByUser": false,
+      "diskMbytes": 512
+    },
+    "createdByOrganizationMemberUserId": "hFTagP1xSzPeMafYI",
+    "buildId": "xe8FynYM1ZpSExuOU",
+    "exitCode": 0,
+    "defaultKeyValueStoreId": "oWVB76maJOs7CObx5",
+    "defaultDatasetId": "nFAtPbAQsu0gbDLKC",
+    "defaultRequestQueueId": "ldi4YIkBclaq4SMmP",
+    "storageIds": {
+      "keyValueStores": {
+        "default": "oWVB76maJOs7CObx5"
+      },
+      "datasets": {
+        "default": "nFAtPbAQsu0gbDLKC"
+      },
+      "requestQueues": {
+        "default": "ldi4YIkBclaq4SMmP"
+      }
+    },
+    "pricingInfo": {
+      "minimalMaxTotalChargeUsd": null,
+      "pricingModel": "PAY_PER_EVENT",
+      "isPriceChangeNotificationSuppressed": false,
+      "reasonForChange": "New: automatic volume discounts! No price increase—standard rate unchanged. Higher Apify plans now save up to 28%, down to $0.18 per 1K tweets. Discounts apply automatically. Happy scraping!",
+      "startedAt": "2026-06-05T13:02:57.450Z",
+      "createdAt": "2026-05-22T13:02:58.617Z",
+      "apifyMarginPercentage": 0.2,
+      "notifiedAboutFutureChangeAt": "2026-05-22T13:03:34.816Z",
+      "pricingPerEvent": {
+        "actorChargeEvents": {
+          "apify-default-dataset-item": {
+            "eventTitle": "tweet",
+            "eventDescription": "Single tweet in the default dataset.",
+            "isOneTimeEvent": false,
+            "isPrimaryEvent": true,
+            "eventPriceUsd": 0.00022
+          }
+        }
+      }
+    },
+    "chargedEventCounts": {
+      "apify-default-dataset-item": 160
+    },
+    "platformUsageBillingModel": "DEVELOPER",
+    "accountedChargedEventCounts": {
+      "apify-default-dataset-item": 160
+    },
+    "standby": null,
+    "generalAccess": "FOLLOW_USER_SETTING",
+    "buildNumber": "1.0.505",
+    "containerUrl": "https://kshvatg9gvhq.runs.apify.net",
+    "usageTotalUsd": 0.0352
+  }
+}

@@ -22,7 +22,9 @@
     ],
     "query_mode": "profile_latest_text_and_media",
     "media_policy": "allow_text_and_media",
-    "maxItems": 60
+    "maxItems": 12,
+    "expected_max_raw_items_per_run": 160,
+    "observed_apify_behavior": "maxItems=12 returned 20 items per profile on 2026-07-07 test run"
   },
   "apify_rotation": {
     "APIFY_CRYPTO_V2_FIXED_SCHEDULE_ENABLED": "false",
@@ -36,8 +38,8 @@
     "APIFY_MAX_ATTEMPTS_PER_SLOT": "1",
     "APIFY_TASK_MAX_RETRIES": "0",
     "APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED": "false",
-    "APIFY_MAX_ITEMS_PER_SOURCE": "60",
-    "APIFY_RAW_FETCH_LIMIT_PER_SOURCE": "120"
+    "APIFY_MAX_ITEMS_PER_SOURCE": "160",
+    "APIFY_RAW_FETCH_LIMIT_PER_SOURCE": "200"
   },
   "publish_speed": {
     "channel_id": "crypto_fa_pilot",

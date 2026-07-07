@@ -168,7 +168,7 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
         'CryptoMichNL',
       ],
       'v2_hourly_all',
-      60,
+      12,
       12,
     );
   }
