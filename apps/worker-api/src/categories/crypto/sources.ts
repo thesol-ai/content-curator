@@ -22,6 +22,7 @@ export const CRYPTO_ROTATION_SOURCE_IDS = new Set([
   'crypto_v2_news_b',
   'crypto_v2_market',
   'crypto_v2_analysts',
+  'crypto_v2_hourly_all',
 ]);
 
 const NEWS_COHORTS = [
@@ -151,6 +152,25 @@ export function buildCryptoRotationPlan(source: ApifyRotationSourceRow, bucket: 
 
   if (id === 'crypto_v2_analysts') {
     return buildFixedProfilePlan(source, ['cryptomanran', 'CryptoMichNL'], 'v2_analysts', 50, 12);
+  }
+
+  if (id === 'crypto_v2_hourly_all') {
+    return buildFixedProfilePlan(
+      source,
+      [
+        'Cointelegraph',
+        'CoinDesk',
+        'WuBlockchain',
+        'cryptodotnews',
+        'CryptoRank_io',
+        'WhaleFactor',
+        'cryptomanran',
+        'CryptoMichNL',
+      ],
+      'v2_hourly_all',
+      80,
+      12,
+    );
   }
 
   // IMPROVEMENT #2: discovery lanes — top/trending across the whole timeline.

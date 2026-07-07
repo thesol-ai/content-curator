@@ -38,7 +38,7 @@ updates = {
     "APIFY_MAX_ATTEMPTS_PER_SLOT": "1",
     "APIFY_TASK_MAX_RETRIES": "0",
     "APIFY_ADAPTIVE_ATTEMPT_SELECTION_ENABLED": "false",
-    "APIFY_MAX_ITEMS_PER_SOURCE": "60",
+    "APIFY_MAX_ITEMS_PER_SOURCE": "80",
     "APIFY_RAW_FETCH_LIMIT_PER_SOURCE": "120",
     "TELEGRAM_PUBLISH_DUE_LIMIT": "1",
     "PUBLISH_DELAY_BREAKING_MINUTES": "1",
@@ -83,7 +83,7 @@ BEGIN TRANSACTION;
 
 INSERT OR IGNORE INTO apify_sources (
   id, category_id, platform, apify_dataset_id, label, enabled,
-  apify_task_id, last_dataset_id, source_config
+  apify_actor_id, apify_task_id, last_dataset_id, source_config
 )
 VALUES (
   'crypto_v2_hourly_all',
@@ -92,9 +92,10 @@ VALUES (
   '$HOURLY_INITIAL_DATASET_ID',
   'Hourly all X profiles experiment',
   1,
+  'kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest',
   '$HOURLY_APIFY_TASK_ID',
   '$HOURLY_INITIAL_DATASET_ID',
-  '{"experiment":"hourly-all-profiles-48h","profiles":"all"}'
+  '{"experiment":"hourly-all-profiles-48h","version":"v2","lane":"hourly_all","accounts":["Cointelegraph","CoinDesk","WuBlockchain","cryptodotnews","CryptoRank_io","WhaleFactor","cryptomanran","CryptoMichNL"],"query_mode":"profile_latest_text_and_media","maxItems":80,"media_policy":"allow_text_and_media","managed_by":"worker_strategy","old_sources_deleted":false}'
 );
 
 UPDATE apify_sources
@@ -104,9 +105,10 @@ SET
   apify_dataset_id='$HOURLY_INITIAL_DATASET_ID',
   label='Hourly all X profiles experiment',
   enabled=1,
+  apify_actor_id='kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest',
   apify_task_id='$HOURLY_APIFY_TASK_ID',
   last_dataset_id='$HOURLY_INITIAL_DATASET_ID',
-  source_config='{"experiment":"hourly-all-profiles-48h","profiles":"all"}'
+  source_config='{"experiment":"hourly-all-profiles-48h","version":"v2","lane":"hourly_all","accounts":["Cointelegraph","CoinDesk","WuBlockchain","cryptodotnews","CryptoRank_io","WhaleFactor","cryptomanran","CryptoMichNL"],"query_mode":"profile_latest_text_and_media","maxItems":80,"media_policy":"allow_text_and_media","managed_by":"worker_strategy","old_sources_deleted":false}'
 WHERE id='crypto_v2_hourly_all';
 
 UPDATE channels
