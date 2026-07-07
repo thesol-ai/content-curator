@@ -61,5 +61,49 @@
     "old_sources_remain_in_db": true,
     "restore_from_baseline_snapshot": true,
     "do_not_restore_runtime_publish_queue": true
+  },
+  "publish": {
+    "TELEGRAM_PUBLISH_DUE_LIMIT": "1",
+    "PUBLISH_DELAY_BREAKING_MINUTES": "1",
+    "PUBLISH_DELAY_HIGH_MINUTES": "1",
+    "PUBLISH_DELAY_NORMAL_MINUTES": "1",
+    "PUBLISH_DELAY_LOW_MINUTES": "1",
+    "PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES": "1",
+    "PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES": "1",
+    "PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES": "5"
+  },
+  "channel": {
+    "id": "crypto_fa_pilot",
+    "timezone": "Asia/Tehran",
+    "allowed_windows": [
+      "00:00-23:59"
+    ],
+    "blocked_windows": [],
+    "max_per_day": 288,
+    "max_per_hour": 12,
+    "min_gap_minutes": 5
+  },
+  "rollback": {
+    "baseline_snapshot_dir": "ops/experiments/hourly-all-profiles/snapshots/baseline_20260707_144200",
+    "rollback_script": "ops/experiments/hourly-all-profiles/rollback_to_baseline.sh",
+    "baseline_wrangler": "ops/experiments/hourly-all-profiles/snapshots/baseline_20260707_144200/wrangler.toml.baseline",
+    "baseline_sql": "ops/experiments/hourly-all-profiles/snapshots/baseline_20260707_144200/rollback_control_plane.sql",
+    "restores": [
+      "wrangler.toml production env values",
+      "crypto_fa_pilot channel control-plane config",
+      "crypto apify_sources control-plane rows",
+      "settings rows captured in baseline snapshot"
+    ],
+    "does_not_restore": [
+      "publish_queue runtime rows",
+      "already published Telegram messages",
+      "AI usage rows",
+      "Apify run history",
+      "discovery_items created during experiment"
+    ],
+    "hourly_apify_task_after_rollback": {
+      "task_id": "3ooiOnMdFTXyCJsQV",
+      "action": "leave task in Apify but unused; disable any native Apify schedule if one was accidentally created"
+    }
   }
 }
