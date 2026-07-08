@@ -247,52 +247,6 @@ function summarizeSourceAccounts(items: NormalizedItem[]): Record<string, number
   return counts;
 }
 
-function getPerAccountNormalizedCap(env: Env): number {
-  const value = Number((env as any).APIFY_PER_ACCOUNT_MAX_ITEMS ?? 12);
-  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 50) : 12;
-}
-
-function capNormalizedItemsPerSourceAccount(
-  items: NormalizedItem[],
-  perAccountLimit: number,
-): {
-  kept: NormalizedItem[];
-  dropped: number;
-  before: Record<string, number>;
-  after: Record<string, number>;
-} {
-  const safeLimit = Number.isFinite(perAccountLimit) && perAccountLimit > 0
-    ? Math.floor(perAccountLimit)
-    : 12;
-
-  const groups = new Map<string, NormalizedItem[]>();
-
-  for (const item of items) {
-    const key = normalizedSourceAccountKey(item);
-    const bucket = groups.get(key) ?? [];
-    bucket.push(item);
-    groups.set(key, bucket);
-  }
-
-  const kept: NormalizedItem[] = [];
-  let dropped = 0;
-
-  for (const bucket of groups.values()) {
-    bucket.sort((a, b) => Number(b.publishedAt ?? 0) - Number(a.publishedAt ?? 0));
-    kept.push(...bucket.slice(0, safeLimit));
-    dropped += Math.max(0, bucket.length - safeLimit);
-  }
-
-  const balanced = balanceNormalizedItemsBySourceAccount(kept);
-
-  return {
-    kept: balanced,
-    dropped,
-    before: summarizeSourceAccounts(items),
-    after: summarizeSourceAccounts(balanced),
-  };
-}
-
 async function fetchSourceDatasetItems(
   env: Env,
   source: ApifySourceRow,
@@ -638,9 +592,7 @@ async function processSingleSource(
     // normalized item gets a clear fate: duplicate, stale, waiting_for_ai_score,
     // ai_rejected, queued, or skipped. In legacy inline mode, preserve the old
     // maxItems cap to avoid accidentally expanding synchronous AI work.
-    const perAccountCap = getPerAccountNormalizedCap(env);
-    const capped = capNormalizedItemsPerSourceAccount(normalized, perAccountCap);
-    const normalizedAll = capped.kept;
+    const normalizedAll = balanceNormalizedItemsBySourceAccount(normalized);
     const backlogEnabledForRun = isCandidateBacklogEnabled(env);
     const normalizedBalanced = backlogEnabledForRun
       ? normalizedAll
@@ -665,11 +617,7 @@ async function processSingleSource(
         normalizedBeforeBalance,
         normalizedCount: normalizedBalanced.length,
         sourceAccountsBeforeBalance: summarizeSourceAccounts(normalized),
-        sourceAccountsBeforePerAccountCap: capped.before,
-        sourceAccountsAfterPerAccountCap: capped.after,
         sourceAccountsAfterBalance: summarizeSourceAccounts(normalizedBalanced),
-        perAccountCap,
-        normalizedSkippedByPerAccountCap: capped.dropped,
         processingCapMode: isCandidateBacklogEnabled(env) ? 'backlog_all_fresh_items' : 'legacy_ai_batch_cap',
         processingCap: maxItems,
         normalizedSkippedByProcessingCap,

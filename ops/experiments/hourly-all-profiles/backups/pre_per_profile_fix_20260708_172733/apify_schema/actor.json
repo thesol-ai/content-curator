@@ -1,0 +1,162 @@
+{
+  "data": {
+    "id": "CJdippxWmn9uRfooo",
+    "userId": "IXuNT7FWLw9TjPPu8",
+    "name": "twitter-x-data-tweet-scraper-pay-per-result-cheapest",
+    "username": "kaitoeasyapi",
+    "description": "Only $0.18/1000 tweets for Twitter scraping,  100% reliability, swift data retrieval.This incredible low price is almost too good to be true.Thanks to our large-scale operations and efficient servers, we can offer you rock-bottom prices that no competitors can match.",
+    "isPublic": true,
+    "createdAt": "2024-10-14T16:20:36.738Z",
+    "modifiedAt": "2026-07-05T19:45:02.452Z",
+    "taggedBuilds": {
+      "latest": {
+        "buildId": "xnR5xNQIZkk8zqw8N",
+        "finishedAt": "2024-11-12T19:50:31.288Z",
+        "buildNumberInt": 68,
+        "buildNumber": "0.0.68"
+      },
+      "latest0225": {
+        "buildId": "xe8FynYM1ZpSExuOU",
+        "finishedAt": "2026-07-05T19:45:02.452Z",
+        "buildNumberInt": 10000505,
+        "buildNumber": "1.0.505"
+      }
+    },
+    "stats": {
+      "totalBuilds": 589,
+      "totalRuns": 41589886,
+      "totalUsers": 17701,
+      "totalUsers7Days": 1636,
+      "totalUsers30Days": 3352,
+      "totalUsers90Days": 5840,
+      "lastRunStartedAt": "2026-07-08T13:57:44.041Z",
+      "publicActorRunStats30Days": {
+        "ABORTED": 2473,
+        "FAILED": 1648,
+        "SUCCEEDED": 2435796,
+        "TIMED-OUT": 2528,
+        "TOTAL": 2442445
+      },
+      "actorReviewCount": 75,
+      "actorReviewRating": 3.7990869310985547,
+      "bookmarkCount": 404
+    },
+    "versions": [
+      {
+        "versionNumber": "0.0",
+        "sourceType": "SOURCE_FILES",
+        "buildTag": null
+      },
+      {
+        "versionNumber": "0.1",
+        "sourceType": "SOURCE_FILES",
+        "buildTag": null
+      },
+      {
+        "versionNumber": "1.0",
+        "sourceType": "SOURCE_FILES",
+        "buildTag": "latest0225"
+      }
+    ],
+    "defaultRunOptions": {
+      "build": "latest0225",
+      "timeoutSecs": 0,
+      "memoryMbytes": 256,
+      "maxItems": null,
+      "maxTotalChargeUsd": null
+    },
+    "exampleRunInput": {
+      "body": "{ \"helloWorld\": 123 }",
+      "contentType": "application/json; charset=utf-8"
+    },
+    "categories": [
+      "SOCIAL_MEDIA",
+      "LEAD_GENERATION"
+    ],
+    "isDeprecated": false,
+    "title": "Tweet Scraper|$0.18/1K Tweets | Pay-Per Result | No Rate Limits",
+    "pictureUrl": "https://apify-image-uploads-prod.s3.us-east-1.amazonaws.com/CJdippxWmn9uRfooo/SiVFfg8fLbxTTQPyE-218163ba66142ac0a16e40ecb48114da.jpeg",
+    "seoTitle": "Cheapest Twitter Scraper | $0.25 per 1000 Tweets",
+    "seoDescription": "Most affordable Twitter scraping API: Just $0.25/1000 tweets! Lightning-fast speed (150/sec), real-time data, and 99.9% uptime. Best price guaranteed.",
+    "pricingInfos": [
+      {
+        "pricingModel": "PRICE_PER_DATASET_ITEM",
+        "reasonForChange": "Introducing our new actor at a highly competitive price. We aim to provide top-quality services at the lowest cost. Enjoy superior web scraping and automation tools without breaking the bank.",
+        "pricePerUnitUsd": 0.00025,
+        "unitName": "Tweet",
+        "createdAt": "2024-10-15T12:01:28.330Z",
+        "startedAt": "2024-10-15T12:01:28.330Z",
+        "apifyMarginPercentage": 0.2,
+        "notifiedAboutChangeAt": "2024-10-15T14:09:17.796Z"
+      },
+      {
+        "pricingModel": "PAY_PER_EVENT",
+        "createdAt": "2026-03-03T15:07:42.724Z",
+        "startedAt": "2026-03-03T15:07:42.724Z",
+        "apifyMarginPercentage": 0.2,
+        "isPriceChangeNotificationSuppressed": true,
+        "reasonForChange": "Migration from Pay Per Result to Pay Per Event with apify-default-dataset-item event",
+        "pricingPerEvent": {
+          "actorChargeEvents": {
+            "apify-default-dataset-item": {
+              "eventTitle": "tweet",
+              "eventDescription": "Single tweet in the default dataset.",
+              "isPrimaryEvent": true,
+              "eventPriceUsd": 0.00025
+            }
+          }
+        },
+        "forceContainsSignificantPriceChange": false
+      },
+      {
+        "minimalMaxTotalChargeUsd": null,
+        "pricingModel": "PAY_PER_EVENT",
+        "isPriceChangeNotificationSuppressed": false,
+        "reasonForChange": "New: automatic volume discounts! No price increase—standard rate unchanged. Higher Apify plans now save up to 28%, down to $0.18 per 1K tweets. Discounts apply automatically. Happy scraping!",
+        "pricingPerEvent": {
+          "actorChargeEvents": {
+            "apify-default-dataset-item": {
+              "eventTitle": "tweet",
+              "eventDescription": "Single tweet in the default dataset.",
+              "isOneTimeEvent": false,
+              "eventTieredPricingUsd": {
+                "FREE": {
+                  "tieredEventPriceUsd": 0.00025
+                },
+                "BRONZE": {
+                  "tieredEventPriceUsd": 0.00022
+                },
+                "GOLD": {
+                  "tieredEventPriceUsd": 0.00018
+                },
+                "PLATINUM": {
+                  "tieredEventPriceUsd": 0.00018
+                },
+                "DIAMOND": {
+                  "tieredEventPriceUsd": 0.00018
+                },
+                "SILVER": {
+                  "tieredEventPriceUsd": 0.0002
+                }
+              },
+              "isPrimaryEvent": true
+            }
+          }
+        },
+        "startedAt": "2026-06-05T13:02:57.450Z",
+        "createdAt": "2026-05-22T13:02:58.617Z",
+        "apifyMarginPercentage": 0.2,
+        "notifiedAboutFutureChangeAt": "2026-05-22T13:03:34.816Z"
+      }
+    ],
+    "notice": "NONE",
+    "isCritical": false,
+    "isGeneric": false,
+    "hasNoDataset": false,
+    "isSourceCodeHidden": true,
+    "standbyUrl": null,
+    "actorPermissionLevel": "LIMITED_PERMISSIONS",
+    "readmeSummary": "## RealTime Twitter Data Scraper API\n\nA real-time X platform tweet data extraction Actor that collects and structures tweet content, author profile metadata, engagement metrics, media and link assets, geo and timestamp information, conversation threading, and network-related signals for large-scale social data analysis. The Actor exposes advanced filtering and query capabilities to target tweets by attributes and returns structured, machine-readable records suitable for analytics, sentiment and trend detection, audience profiling, media analysis, and network mapping. Technical capabilities include high-throughput ingestion, real-time capture, rich per-tweet attributes (engagement counts, language, timestamps, media and link details), comprehensive author metadata, timeline and historical context, and outputs optimized for downstream analytics and machine learning workflows.\n\n## Use cases\n\n- Competitive intelligence and market-shift prediction using tweet-level signals and trend trajectories  \n- Market research and audience insight generation from aggregated engagement and profile data  \n- Influencer and micro-influencer discovery by analyzing engagement patterns and profile metrics  \n- Predictive modeling and sentiment analysis for early trend detection and forecasting  \n- Audience segmentation and lookalike modeling based on behavioral and network signals  \n- Content optimization and timing strategies using engagement velocity and resonance metrics  \n- Network intelligence: mapping follower/following relationships and influence pathways  \n- Campaign intelligence and performance marketing: building audiences, attribution modeling, and CAC projections  \n- Brand intelligence and reputation monitoring via sentiment and engagement trends  \n- Risk monitoring and early-warning systems for reputation or crisis detection  \n- Lead and pipeline generation using intent and engagement signals from social activity  \n- Research and academic studies of social behavior, timelines, and multimedia diffusion  \n- Partnership and opportunity discovery through network overlap and influence scoring",
+    "deploymentKey": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDkw0QzhhKXaY3SccodhfA/parhWFRU7WJccV7FKRJzCsvMjAllV7HlYXsrEK0W7H5P5WAqNuR022wM9XVn4+OKKts3M4SpVseHu4dxMZbCTXJn9kyYn0pt2PBaWkoaWcV3x2it56TusSJ2m7DSDTXKp1DOamep5135epKcMa2PVvQxfxHdRvkoaX8xgoDvaNNhMk+t6sxSEBM9c3Ka0PVB1QF2yLaXbShvbs/OJS+g1CFJMkPBonkukjHeA4iO9xtPOgFtBWFn7obOga2TrrYBZ7Cu69tjnS2I++VwkPxgRaA+fscgK+QgAFJf9+JyDLDm94eW1O531C7iByJlEl/b \n"
+  }
+}
