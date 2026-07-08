@@ -55,13 +55,6 @@ export function getMaxCandidateAttempts(env: Env): number {
   return isNaN(v) || v <= 0 ? 2 : v;
 }
 
-export function getTranslationMaxCandidateAttempts(env: Env): number {
-  const base = getMaxCandidateAttempts(env);
-  const v = parseInt(env.AI_CANDIDATE_TRANSLATION_MAX_ATTEMPTS ?? String(base), 10);
-  if (!Number.isFinite(v) || v <= 0) return base;
-  return Math.max(base, Math.min(Math.floor(v), 10));
-}
-
 export function getCandidateMaxAgeHours(env: Env): number {
   const v = parseInt(env.AI_CANDIDATE_MAX_AGE_HOURS ?? '6', 10);
   return isNaN(v) || v <= 0 ? 6 : v;
@@ -218,15 +211,10 @@ export async function fetchPendingCandidates(
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
     const maxAttempts = getMaxCandidateAttempts(env);
-    const translationMaxAttempts = getTranslationMaxCandidateAttempts(env);
     const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
 
-    const conds = [
-      "status IN ('pending', 'needs_translation')",
-      'created_at > ?',
-      "((status = 'needs_translation' AND attempt_count < ?) OR (status != 'needs_translation' AND attempt_count < ?))",
-    ];
-    const binds: unknown[] = [cutoff, translationMaxAttempts, maxAttempts];
+    const conds = ["status IN ('pending', 'needs_translation')", 'created_at > ?', 'attempt_count < ?'];
+    const binds: unknown[] = [cutoff, maxAttempts];
     if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
     if (platformAllowlist.length > 0) {
       const placeholders = platformAllowlist.map(() => '?').join(', ');
@@ -264,15 +252,14 @@ export async function hasPendingCandidatesForPlatform(
   try {
     const maxAgeHours = getCandidateMaxAgeHours(env);
     const maxAttempts = getMaxCandidateAttempts(env);
-    const translationMaxAttempts = getTranslationMaxCandidateAttempts(env);
     const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
     const conds = [
       "status IN ('pending', 'needs_translation')",
       'platform = ?',
-      "((status = 'needs_translation' AND attempt_count < ?) OR (status != 'needs_translation' AND attempt_count < ?))",
+      'attempt_count < ?',
       'created_at > ?',
     ];
-    const binds: unknown[] = [platform, translationMaxAttempts, maxAttempts, cutoff];
+    const binds: unknown[] = [platform, maxAttempts, cutoff];
     if (categoryId) { conds.push('category_id = ?'); binds.push(categoryId); }
     const row = await env.DB.prepare(
       `SELECT 1 AS x FROM ai_candidate_queue WHERE ${conds.join(' AND ')} LIMIT 1`,
@@ -289,7 +276,6 @@ export async function claimCandidateBatch(
   candidates: AICandidateRow[],
 ): Promise<AICandidateRow[]> {
   const maxAttempts = getMaxCandidateAttempts(env);
-  const translationMaxAttempts = getTranslationMaxCandidateAttempts(env);
   const claimed: AICandidateRow[] = [];
 
   for (const row of candidates) {
@@ -302,12 +288,8 @@ export async function claimCandidateBatch(
             last_error=NULL
         WHERE id=?
           AND status IN ('pending', 'needs_translation')
-          AND (
-            (status = 'needs_translation' AND attempt_count < ?)
-            OR
-            (status != 'needs_translation' AND attempt_count < ?)
-          )
-      `).bind(row.id, translationMaxAttempts, maxAttempts).run();
+          AND attempt_count < ?
+      `).bind(row.id, maxAttempts).run();
 
       if ((res.meta.changes ?? 0) > 0) {
         claimed.push({ ...row, status: 'scoring', attempt_count: row.attempt_count + 1, claimed_at: new Date().toISOString(), last_error: null });
@@ -380,23 +362,13 @@ export async function recoverStaleScoringCandidates(env: Env, staleMinutes = 15)
 export async function failMaxAttemptPendingCandidates(env: Env): Promise<number> {
   try {
     const maxAttempts = getMaxCandidateAttempts(env);
-    const translationMaxAttempts = getTranslationMaxCandidateAttempts(env);
-
-    const normal = await env.DB.prepare(`
+    const result = await env.DB.prepare(`
       UPDATE ai_candidate_queue
       SET status='failed', last_error='max_attempts_exceeded'
-      WHERE status='pending'
+      WHERE status IN ('pending', 'needs_translation')
         AND attempt_count >= ?
     `).bind(maxAttempts).run();
-
-    const translation = await env.DB.prepare(`
-      UPDATE ai_candidate_queue
-      SET status='failed', last_error='translation_max_attempts_exceeded'
-      WHERE status='needs_translation'
-        AND attempt_count >= ?
-    `).bind(translationMaxAttempts).run();
-
-    return (normal.meta.changes ?? 0) + (translation.meta.changes ?? 0);
+    return result.meta.changes ?? 0;
   } catch (err) {
     console.warn(`[CandidateQueue] failMaxAttemptPendingCandidates failed: ${err instanceof Error ? err.message : String(err)}`);
     return 0;
