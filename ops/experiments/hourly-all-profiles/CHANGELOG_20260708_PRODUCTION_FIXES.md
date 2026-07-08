@@ -62,3 +62,29 @@ Do not manually trigger:
 - /internal/curation/trigger
 - /internal/apify/rotation/run
 - /internal/publish/due
+
+## Validation update - 2026-07-08 21:58 Tehran
+
+Exact audit window:
+2026-07-08 19:31:00 to 2026-07-08 21:58:59 Tehran.
+
+Results:
+- 5 publish_queue rows reached published status:
+  - 19:35 Cointelegraph, Telegram message 1166
+  - 19:40 cryptodotnews, Telegram message 1168
+  - 21:40 CryptoMichNL, Telegram message 1170
+  - 21:45 cryptodotnews, Telegram message 1171
+  - 21:50 CoinDesk, Telegram message 1173
+- All published rows had retry_count=0 and publish_error=null.
+- Hourly runs observed at 19:31, 20:31, and 21:31.
+- Each run received 160 raw Apify items.
+- Worker-side per-account cap reduced processing to 96 normalized items.
+- Each of the 8 X profiles had exactly 12 items after per-account cap.
+- No translation_missing or failed translation candidates appeared in the exact window.
+- due_not_published=0.
+- publish_errors_window=0.
+- exact_duplicate_source_urls_window=0.
+
+Known non-functional issue:
+- dedupe.complete metadata still reports normalizedCount=160 even though downstream dedupe arithmetic is based on the capped 96 items.
+- This is an observability/reporting issue only; defer functional changes unless it blocks diagnosis.
