@@ -1,5 +1,6 @@
 import type { Env } from '../types';
 import { recordRunEvent } from './run-events';
+import { runCuration } from './curation-orchestrator';
 
 export type ApifyDatasetJobStatus = 'ready' | 'processing' | 'completed' | 'failed';
 
@@ -227,6 +228,114 @@ export async function failApifyDatasetJob(
     message: message.slice(0, 1000),
     metadata: { attemptCount: job.attempt_count },
   });
+}
+
+
+export interface RunNextApifyDatasetJobResult {
+  ok: boolean;
+  skipped: boolean;
+  reason?: string;
+  jobId?: string;
+  sourceId?: string;
+  datasetId?: string;
+  error?: string;
+  curationRuns?: Array<{
+    runId: string | null;
+    ok: boolean;
+    categoryId: string | null;
+    platform: string | null;
+    itemsNew: number;
+    itemsAiSelected: number;
+    itemsQueued: number;
+    errors: number;
+  }>;
+}
+
+export async function runNextApifyDatasetJob(env: Env): Promise<RunNextApifyDatasetJobResult> {
+  if (!isDatasetJobProcessorEnabled(env)) {
+    return { ok: true, skipped: true, reason: 'processor_disabled' };
+  }
+
+  const job = await claimNextApifyDatasetJob(env);
+  if (!job) {
+    return { ok: true, skipped: true, reason: 'no_ready_dataset_job' };
+  }
+
+  await recordRunEvent(env, {
+    runId: job.id,
+    eventType: 'apify.dataset_job.claimed',
+    phase: 'apify_dataset_job',
+    sourceId: job.source_id,
+    datasetId: job.dataset_id,
+    actorRunId: job.actor_run_id ?? undefined,
+    categoryId: job.category_id ?? undefined,
+    platform: job.platform ?? undefined,
+    metadata: { attemptCount: job.attempt_count },
+  });
+
+  try {
+    const results = await runCuration(
+      env,
+      { sourceId: job.source_id, datasetId: job.dataset_id },
+      { forceCurationEnabled: true },
+    );
+
+    const curationRuns = results.map((r: any) => ({
+      runId: r.runId ?? null,
+      ok: Boolean(r.ok),
+      categoryId: r.categoryId ?? null,
+      platform: r.platform ?? null,
+      itemsNew: Number(r.itemsNew ?? 0),
+      itemsAiSelected: Number(r.itemsAiSelected ?? 0),
+      itemsQueued: Number(r.itemsQueued ?? 0),
+      errors: Array.isArray(r.errors) ? r.errors.length : 0,
+    }));
+
+    const failed = results.filter((r: any) => !r.ok);
+
+    if (results.length === 0 || failed.length > 0) {
+      const message = results.length === 0
+        ? 'curation_returned_no_results'
+        : `curation_failed:${failed.map((r: any) => r.runId ?? r.categoryId ?? 'unknown').join(',')}`;
+
+      await failApifyDatasetJob(env, job, new Error(message));
+
+      return {
+        ok: false,
+        skipped: false,
+        reason: 'curation_failed',
+        jobId: job.id,
+        sourceId: job.source_id,
+        datasetId: job.dataset_id,
+        error: message,
+        curationRuns,
+      };
+    }
+
+    await completeApifyDatasetJob(env, job.id, { curationRuns });
+
+    return {
+      ok: true,
+      skipped: false,
+      jobId: job.id,
+      sourceId: job.source_id,
+      datasetId: job.dataset_id,
+      curationRuns,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await failApifyDatasetJob(env, job, err);
+
+    return {
+      ok: false,
+      skipped: false,
+      reason: 'curation_exception',
+      jobId: job.id,
+      sourceId: job.source_id,
+      datasetId: job.dataset_id,
+      error: message,
+    };
+  }
 }
 
 function makeJobId(): string {
