@@ -736,27 +736,44 @@ export function applyPostScoringHardGate(
 
 // استخراج JSON از پاسخ AI — مقاوم در برابر markdown fences و متن اضافه
 function extractJsonObject(text: string): { items: any[] } | null {
-  // ابتدا markdown code blocks را حذف کن
-  const cleaned = text
+  // Strip markdown fences and tolerate both the requested object shape:
+  //   {"items":[...]}
+  // and the common model mistake:
+  //   [...]
+  const cleaned = String(text ?? '')
     .replace(/```json\s*/gi, '')
     .replace(/```\s*/g, '')
     .trim();
 
-  // پیدا کن اولین { و آخرین } را
+  const tryParse = (candidate: string): { items: any[] } | null => {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) return { items: parsed };
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) return parsed;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryParse(cleaned);
+  if (direct) return direct;
+
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
-
-  const candidate = cleaned.slice(firstBrace, lastBrace + 1);
-  try {
-    const parsed = JSON.parse(candidate);
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const parsedObject = tryParse(cleaned.slice(firstBrace, lastBrace + 1));
+    if (parsedObject) return parsedObject;
   }
+
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    const parsedArray = tryParse(cleaned.slice(firstBracket, lastBracket + 1));
+    if (parsedArray) return parsedArray;
+  }
+
+  return null;
 }
 
 function statusIdFromUrl(raw: unknown): string | null {
