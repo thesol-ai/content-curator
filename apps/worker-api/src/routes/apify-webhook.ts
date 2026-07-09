@@ -10,6 +10,7 @@
 
 import type { Env } from '../types';
 import { runCuration } from '../services/curation-orchestrator';
+import { isWebhookDirectCurationEnabled, recordApifyDatasetJob } from '../services/apify-dataset-jobs';
 
 export async function handleApifyWebhook(
   req: Request,
@@ -55,32 +56,54 @@ export async function handleApifyWebhook(
 
   console.log(`[Webhook] Apify run=${actorRunId} dataset=${datasetId} source_id=${sourceId ?? 'none'} platform=${platform}`);
 
-  // سریع 200 بده — Apify 30 ثانیه timeout دارد
-  // پردازش واقعی async با waitUntil
-  // datasetId پاس می‌شود تا فقط source مرتبط پردازش شود
-  ctx.waitUntil(
-    runCuration(env, { datasetId, sourceId: sourceId ?? undefined }, { forceCurationEnabled: true }).then(results => {
-      console.log('[Webhook] Curation complete:', results.map(r => ({
-        category: r.categoryId,
-        platform: r.platform,
-        ok: r.ok,
-        new: r.itemsNew,
-        selected: r.itemsAiSelected,
-        queued: r.itemsQueued,
-        errors: r.errors.length,
-      })));
-    }).catch(err => {
-      console.error('[Webhook] Curation error:', err instanceof Error ? err.message : String(err));
-    })
-  );
+  // Always record a durable dataset job when source_id is known.
+  // In phase 1, direct curation stays enabled by default, so this is observe-only.
+  if (sourceId) {
+    ctx.waitUntil(
+      recordApifyDatasetJob(env, {
+        sourceId,
+        datasetId,
+        actorRunId: String(actorRunId ?? ''),
+        categoryId: undefined,
+        platform: platform === 'unknown' ? undefined : String(platform),
+      }).then(result => {
+        console.log('[Webhook] Dataset job recorded:', { datasetId, sourceId, inserted: result.inserted, jobId: result.id });
+      }).catch(err => {
+        console.error('[Webhook] Dataset job record error:', err instanceof Error ? err.message : String(err));
+      })
+    );
+  }
+
+  const directCurationEnabled = isWebhookDirectCurationEnabled(env) || !sourceId;
+
+  if (directCurationEnabled) {
+    ctx.waitUntil(
+      runCuration(env, { datasetId, sourceId: sourceId ?? undefined }, { forceCurationEnabled: true }).then(results => {
+        console.log('[Webhook] Curation complete:', results.map(r => ({
+          category: r.categoryId,
+          platform: r.platform,
+          ok: r.ok,
+          new: r.itemsNew,
+          selected: r.itemsAiSelected,
+          queued: r.itemsQueued,
+          errors: r.errors.length,
+        })));
+      }).catch(err => {
+        console.error('[Webhook] Curation error:', err instanceof Error ? err.message : String(err));
+      })
+    );
+  } else {
+    console.log('[Webhook] Direct curation disabled; dataset job will be processed by scheduler:', { datasetId, sourceId });
+  }
 
   return Response.json({
     ok: true,
-    message: 'Webhook received, curation started',
+    message: directCurationEnabled ? 'Webhook received, curation started' : 'Webhook received, dataset job recorded',
     datasetId,
     actorRunId,
     platform,
     sourceId,
+    directCurationEnabled,
   });
 }
 

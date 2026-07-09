@@ -6,6 +6,7 @@ import type {
 } from '../categories/types';
 import { getCategorySourceStrategy } from '../categories/registry';
 import { recordRunEvent } from './run-events';
+import { recordApifyDatasetJob } from './apify-dataset-jobs';
 import { fetchApifyDataset, filterApifyActorMockNoResultItems } from './apify-client';
 import { getQueuePolicyDecision, isSourceBlockedByPolicy } from './queue-policy';
 
@@ -374,6 +375,14 @@ export async function runApifyRotation(
       const selectedDatasetId = safeString(selected.run.defaultDatasetId);
       if (selectedDatasetId) {
         await syncApifySourceDataset(env, plan.source.id, selectedDatasetId);
+        await recordApifyDatasetJob(env, {
+          sourceId: plan.source.id,
+          datasetId: selectedDatasetId,
+          actorRunId: safeString(selected.run.id),
+          rotationRunId,
+          categoryId: plan.source.category_id,
+          platform: plan.source.platform,
+        });
       }
 
       results.push({
