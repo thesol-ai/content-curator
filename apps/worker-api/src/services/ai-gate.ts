@@ -5,7 +5,14 @@
 //   مرحله ۲ — Gemini یا OpenAI: Translation + Caption نوشتن
 // ══════════════════════════════════════════════════════════════
 
-import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from '../types';
+import type {
+  Env,
+  NormalizedItem,
+  AIGateResult,
+  CategoryRow,
+  ChannelRow,
+  EditorialFactFrame,
+} from '../types';
 import { getPreAiContentRejectReason } from './content-policy';
 import { getHardPreAiCryptoAudienceRejectReason } from './story-quality-guard';
 import { getCategoryPolicy } from '../categories/registry';
@@ -251,7 +258,21 @@ export async function attachTranslations(
   const attrByPostId = new Map<string, AttributionItem>(
     items.map((it, i) => [it.postId, attributionItems?.[i] ?? { sourceAccount: it.sourceAccount }] as const),
   );
-  const translationsMap = await runTranslation(env, cfg, selectedForTranslation, category, attrByPostId);
+  const editorialFrameByPostId = new Map<string, EditorialFactFrame | null>(
+    items.map((it, i) => [
+      it.postId,
+      scoreResults[i]?.editorialFactFrame ?? null,
+    ] as const),
+  );
+
+  const translationsMap = await runTranslation(
+    env,
+    cfg,
+    selectedForTranslation,
+    category,
+    attrByPostId,
+    editorialFrameByPostId,
+  );
 
   return scoreResults.map((result, i) => {
     const item = items[i]!;
@@ -565,6 +586,18 @@ async function runScoring(
       ].join('\n')
     : '';
 
+  const editorialFactFrameInstr = [
+    'For every item, also return an "editorial_frame" object.',
+    'This is NOT a proposed headline and must not contain promotional or creative wording.',
+    '"headline_fact": one short neutral sentence stating only the main source-supported event or claim, preferably in the source language.',
+    '"claim_type": exactly one of "fact", "opinion", "forecast", "allegation", "estimate", or "unknown".',
+    '"attribution": the explicit speaker, organization, report, filing, or source responsible for a non-factual claim; otherwise an empty string.',
+    '"must_include": up to 6 source-supported names, figures, dates, products, or technical terms that matter to an accurate rewrite.',
+    '"forbidden_inferences": up to 4 tempting but unsupported conclusions the caption must not introduce.',
+    'If the source is unclear, disputed, conditional, or speculative, preserve that uncertainty in headline_fact and claim_type.',
+    'For rejected or unusable items, still return a minimal editorial_frame when the main claim is identifiable; otherwise use an empty headline_fact.',
+  ].join('\n');
+
   const system = [
     `You are an expert content curator. ${profile}`,
     scoringEditorialPolicy,
@@ -573,13 +606,14 @@ async function runScoring(
     trustedCryptoRssGuidance,
     mustCoverCryptoAssetGuidance,
     storyIntelInstr,
+    editorialFactFrameInstr,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
     '',
     'Return ONLY a JSON object with this exact structure (no markdown, no explanation):',
     storyIntelEnabled
-      ? '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","primary_entities":["Tether","Monero"],"event_type":"security_laundering","canonical_date":"2026-06-13"}]}'
-      : '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal"}]}',
+      ? '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","primary_entities":["Tether","Monero"],"event_type":"security_laundering","canonical_date":"2026-06-13","editorial_frame":{"headline_fact":"A neutral source-supported statement of the main event.","claim_type":"fact","attribution":"","must_include":["Tether","Monero"],"forbidden_inferences":["Do not invent a motive or market impact."]}}]}'
+      : '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","editorial_frame":{"headline_fact":"A neutral source-supported statement of the main event.","claim_type":"fact","attribution":"","must_include":[],"forbidden_inferences":[]}}]}',
     '',
     'publish_priority: "breaking"|"high"|"normal"|"low"',
     'risk_level: "low"|"medium"|"high" — set publish=false if high risk',
@@ -781,6 +815,79 @@ function statusIdFromUrl(raw: unknown): string | null {
   return m ? m[1]! : null;
 }
 
+const EDITORIAL_CLAIM_TYPES = new Set([
+  'fact',
+  'opinion',
+  'forecast',
+  'allegation',
+  'estimate',
+  'unknown',
+]);
+
+function sanitizeEditorialFrameText(value: unknown, maxLength: number): string {
+  return String(value ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function sanitizeEditorialFrameList(
+  value: unknown,
+  maxItems: number,
+  maxItemLength: number,
+): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const unique = new Set<string>();
+
+  for (const item of value) {
+    const cleaned = sanitizeEditorialFrameText(item, maxItemLength);
+    if (!cleaned) continue;
+    unique.add(cleaned);
+    if (unique.size >= maxItems) break;
+  }
+
+  return Array.from(unique);
+}
+
+export function parseEditorialFactFrame(value: unknown): EditorialFactFrame | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const raw = value as Record<string, unknown>;
+  const headlineFact = sanitizeEditorialFrameText(
+    raw.headline_fact ?? raw.headlineFact,
+    500,
+  );
+
+  if (!headlineFact) return null;
+
+  const requestedClaimType = sanitizeEditorialFrameText(
+    raw.claim_type ?? raw.claimType,
+    24,
+  ).toLowerCase();
+
+  const claimType = EDITORIAL_CLAIM_TYPES.has(requestedClaimType)
+    ? requestedClaimType as EditorialFactFrame['claimType']
+    : 'unknown';
+
+  return {
+    headlineFact,
+    claimType,
+    attribution: sanitizeEditorialFrameText(raw.attribution, 200),
+    mustInclude: sanitizeEditorialFrameList(
+      raw.must_include ?? raw.mustInclude,
+      6,
+      120,
+    ),
+    forbiddenInferences: sanitizeEditorialFrameList(
+      raw.forbidden_inferences ?? raw.forbiddenInferences,
+      4,
+      240,
+    ),
+  };
+}
+
 function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateResult[] {
   const byUrl = new Map<string, any>();
   const byPostId = new Map<string, any>();
@@ -831,6 +938,7 @@ function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateRes
         : `fp-${item.postId}`,
       publishPriority: (validPriorities.includes(p.publish_priority) ? p.publish_priority : 'normal') as any,
       translations: {},
+      editorialFactFrame: parseEditorialFactFrame(p.editorial_frame),
       storyKey: buildStoryKey(parseStoryFields(p)),
       storyFields: parseStoryFields(p),
     };
@@ -1128,6 +1236,7 @@ async function runTranslation(
   items: NormalizedItem[],
   category: CategoryRow,
   attrByPostId?: Map<string, AttributionItem>,
+  editorialFrameByPostId?: Map<string, EditorialFactFrame | null>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const result = new Map<string, any>();
   if (items.length === 0) return result;
@@ -1136,7 +1245,15 @@ async function runTranslation(
 
   for (let offset = 0; offset < items.length; offset += batchSize) {
     const chunk = items.slice(offset, offset + batchSize);
-    const chunkMap = await runTranslationChunk(env, cfg, chunk, category, offset, attrByPostId);
+    const chunkMap = await runTranslationChunk(
+      env,
+      cfg,
+      chunk,
+      category,
+      offset,
+      attrByPostId,
+      editorialFrameByPostId,
+    );
     for (const [key, value] of chunkMap.entries()) result.set(key, value);
   }
 
@@ -1151,6 +1268,7 @@ async function runTranslationChunk(
   category: CategoryRow,
   offset: number,
   attrByPostId?: Map<string, AttributionItem>,
+  editorialFrameByPostId?: Map<string, EditorialFactFrame | null>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const provider = cfg.translationProvider;
   const result = new Map<string, any>();
@@ -1158,7 +1276,12 @@ async function runTranslationChunk(
   const captureUsage = (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => { chunkUsage = u; };
 
   const system = buildTranslationSystem(cfg.translationTargets, category);
-  const user = buildTranslationUser(items, cfg.translationTargets, translationTextMaxChars(cfg, category));
+  const user = buildTranslationUser(
+    items,
+    cfg.translationTargets,
+    translationTextMaxChars(cfg, category),
+    editorialFrameByPostId,
+  );
 
   let responseText = '';
   let lastErr = '';
@@ -1522,6 +1645,12 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- If the source does not provide enough context for an explanatory sentence, omit that sentence instead of guessing.',
     '- Proper names, brands, products, tickers, abbreviations, and newly created terms may remain unchanged.',
     '- For RTL targets, every non-empty title/body block must begin naturally in the target script; place Latin names or technical terms after that native-language lead.',
+    '- When editorial_frame is supplied, treat it as a factual boundary for the rewrite, not as ready-made copy.',
+    '- The title must express the same central event as editorial_frame.headline_fact while remaining natural in the target language.',
+    '- Do not translate headline_fact word-for-word or copy its sentence structure mechanically.',
+    '- Preserve editorial_frame.claim_type and editorial_frame.attribution. Never turn an opinion, forecast, allegation, or estimate into a confirmed fact.',
+    '- Preserve relevant editorial_frame.must_include values and do not introduce any editorial_frame.forbidden_inferences.',
+    '- If editorial_frame conflicts with the supplied source text, the source text is authoritative and the frame must be ignored.',
   ];
 
   const cryptoCaptionGuidance = isCryptoCategory(category) ? [
@@ -1610,13 +1739,47 @@ function translationTextMaxChars(cfg: Config, category: CategoryRow): number {
   return isCryptoCategory(category) ? Math.max(cfg.translationMaxTextChars, 1200) : cfg.translationMaxTextChars;
 }
 
-function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarget[], maxChars: number): string {
+function buildTranslationSourceText(item: NormalizedItem, maxChars: number): string {
+  const parts = [item.text, item.fullText]
+    .map(value => String(value ?? '').trim())
+    .filter(Boolean);
+
+  const uniqueParts = parts.filter(
+    (value, index) => parts.indexOf(value) === index,
+  );
+
+  return uniqueParts.join('\n\n').slice(0, maxChars);
+}
+
+function serializeEditorialFactFrame(
+  frame: EditorialFactFrame | null | undefined,
+): Record<string, unknown> | undefined {
+  if (!frame) return undefined;
+
+  return {
+    headline_fact: frame.headlineFact,
+    claim_type: frame.claimType,
+    attribution: frame.attribution,
+    must_include: frame.mustInclude,
+    forbidden_inferences: frame.forbiddenInferences,
+  };
+}
+
+export function buildTranslationUser(
+  items: NormalizedItem[],
+  targets: TranslationTarget[],
+  maxChars: number,
+  editorialFrameByPostId?: Map<string, EditorialFactFrame | null>,
+): string {
   const data = items.map(it => ({
     post_id: it.postId,
     url: it.sourceUrl,
     platform: it.platform,
     account: it.sourceAccount,
-    text: it.text.slice(0, maxChars),
+    text: buildTranslationSourceText(it, maxChars),
+    editorial_frame: serializeEditorialFactFrame(
+      editorialFrameByPostId?.get(it.postId),
+    ),
     has_media: it.media.length > 0,
     media_count: it.media.length,
     is_reply: it.isReply === true,
