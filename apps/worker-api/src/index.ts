@@ -40,6 +40,7 @@ import {
 import { cleanupStoryIntelligenceEvents } from './services/story-intelligence';
 import { isCronCoordinatorEnabled, pickCoordinatorPhase, shouldRunCoordinatorHousekeeping, shouldRunHeavyPhaseAfterPublish } from './services/cron-coordinator';
 import { recordRunEvent } from './services/run-events';
+import { isDatasetJobProcessorEnabled, isDirectPostRotationCurationEnabled, runNextApifyDatasetJob } from './services/apify-dataset-jobs';
 
 export default {
 
@@ -96,6 +97,9 @@ export default {
           await runRssFallbackCoordinatorTick(env, _controller.scheduledTime ?? Date.now());
           return;
         }
+
+        let heavyPhaseConsumed = false;
+
         // 1. Scheduled curation is intentionally opt-in.
         // Webhooks should drive fresh Apify dataset ingestion; cron should not
         // repeatedly reprocess old datasets and risk unnecessary AI spend.
@@ -108,11 +112,12 @@ export default {
             selected: r.itemsAiSelected,
             queued: r.itemsQueued,
           })));
+          heavyPhaseConsumed = true;
         }
 
         // 1.5. Controlled Apify rotation. Disabled by default until native
         // Apify schedules are turned off, otherwise costs can double.
-        if (env.APIFY_ROTATION_ENABLED === 'true') {
+        if (!heavyPhaseConsumed && env.APIFY_ROTATION_ENABLED === 'true') {
           try {
             const fixedSourceId = getFixedCryptoV2ScheduleSourceId(env, scheduledTimeMs);
             let rotationResult: Awaited<ReturnType<typeof runApifyRotation>>;
@@ -154,6 +159,7 @@ export default {
               rotationResult = await runApifyRotation(env);
             }
             if (!rotationResult.skipped) {
+              heavyPhaseConsumed = true;
               console.log('[Scheduled] Apify rotation:', {
                 ok: rotationResult.ok,
                 bucket: rotationResult.bucket,
@@ -165,26 +171,30 @@ export default {
                 })),
               });
 
-              for (const plan of rotationResult.plans) {
-                if (!plan.sourceId || !plan.defaultDatasetId || plan.error) continue;
-                try {
-                  const scopedCuration = await runCuration(env, {
-                    sourceId: plan.sourceId,
-                    datasetId: plan.defaultDatasetId,
-                  }, { forceCurationEnabled: true });
-                  console.log('[Scheduled] Post-rotation curation:', {
-                    sourceId: plan.sourceId,
-                    datasetId: plan.defaultDatasetId,
-                    runs: scopedCuration.map(r => ({
-                      runId: r.runId,
-                      new: r.itemsNew,
-                      selected: r.itemsAiSelected,
-                      queued: r.itemsQueued,
-                    })),
-                  });
-                } catch (err) {
-                  console.error('[Scheduled] Post-rotation curation failed:', err instanceof Error ? err.message : String(err));
+              if (isDirectPostRotationCurationEnabled(env)) {
+                for (const plan of rotationResult.plans) {
+                  if (!plan.sourceId || !plan.defaultDatasetId || plan.error) continue;
+                  try {
+                    const scopedCuration = await runCuration(env, {
+                      sourceId: plan.sourceId,
+                      datasetId: plan.defaultDatasetId,
+                    }, { forceCurationEnabled: true });
+                    console.log('[Scheduled] Post-rotation curation:', {
+                      sourceId: plan.sourceId,
+                      datasetId: plan.defaultDatasetId,
+                      runs: scopedCuration.map(r => ({
+                        runId: r.runId,
+                        new: r.itemsNew,
+                        selected: r.itemsAiSelected,
+                        queued: r.itemsQueued,
+                      })),
+                    });
+                  } catch (err) {
+                    console.error('[Scheduled] Post-rotation curation failed:', err instanceof Error ? err.message : String(err));
+                  }
                 }
+              } else {
+                console.log('[Scheduled] Direct post-rotation curation disabled; dataset jobs recorded for processor.');
               }
             }
           } catch (err) {
@@ -205,10 +215,22 @@ export default {
         const publishResult = await publishDueItems(env);
         console.log('[Scheduled] Published:', publishResult);
 
+        if (!heavyPhaseConsumed && isDatasetJobProcessorEnabled(env)) {
+          try {
+            const datasetJobResult = await runNextApifyDatasetJob(env);
+            if (!datasetJobResult.skipped) {
+              heavyPhaseConsumed = true;
+              console.log('[Scheduled] Apify dataset job processor:', datasetJobResult);
+            }
+          } catch (err) {
+            console.error('[Scheduled] Apify dataset job processor failed:', err instanceof Error ? err.message : String(err));
+          }
+        }
+
         // 2.5. RSS feed ingestion (independent, zero-Apify-cost). After publish
         // (must not delay due posts), before backlog drain (new items get scored
         // this tick). Isolated: a slow/bad feed never affects the Apify path.
-        if (String(env.RSS_INGEST_ENABLED ?? '').toLowerCase() === 'true') {
+        if (!heavyPhaseConsumed && String(env.RSS_INGEST_ENABLED ?? '').toLowerCase() === 'true') {
           try {
             const rss = await runRssIngestion(env);
             if (!rss.skipped) {
@@ -221,7 +243,7 @@ export default {
 
         // 3. Controlled AI candidate backlog drain. Runs only when explicitly enabled.
         // Publishing stays first; backlog errors are isolated so cleanup still runs.
-        if (isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
+        if (!heavyPhaseConsumed && isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
           try {
             const recovered = await recoverStaleScoringCandidates(env);
             const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);

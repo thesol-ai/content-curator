@@ -31,6 +31,8 @@ export interface Env {
   AI_SCORE_THRESHOLD_DEFAULT: string;
   AI_MAX_CALLS_PER_DAY: string;
   AI_DAILY_TOKEN_BUDGET: string;
+  AI_SCORING_HOURLY_CALL_BUDGET?: string;
+  AI_SCORING_HOURLY_TOKEN_BUDGET?: string;
   AI_MAX_CANDIDATES_PER_RUN: string;
   AI_MAX_TEXT_CHARS_PER_ITEM: string;
   AI_MAX_OUTPUT_TOKENS: string;
@@ -101,6 +103,9 @@ export interface Env {
   QUEUE_HEALTH_STARVING_MAX_BATCHES?: string;      // default: "3"
   QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS?: string; // default: "50"
   QUEUE_HEALTH_CHANNEL_ID?: string;                // controller target channel
+  QUEUE_POLICY_ENFORCEMENT_ENABLED?: string;        // default false; explicit opt-in only
+  WEAK_POST_AI_GATE_OVERRIDE_ENABLED?: string;     // default false; soften only editorial capacity gates while all target queues starve
+  WEAK_POST_AI_GATE_OVERRIDE_SCORE_MARGIN?: string;// default 5; required score above category threshold
   APIFY_ROTATION_CONTINUOUS_ENABLED?: string;      // default: "false"
   APIFY_ROTATION_SLOT_MINUTES?: string;            // default: "30"
   // ── Apify cost control (single paid actor event per source/slot) ──

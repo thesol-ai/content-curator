@@ -736,27 +736,44 @@ export function applyPostScoringHardGate(
 
 // استخراج JSON از پاسخ AI — مقاوم در برابر markdown fences و متن اضافه
 function extractJsonObject(text: string): { items: any[] } | null {
-  // ابتدا markdown code blocks را حذف کن
-  const cleaned = text
+  // Strip markdown fences and tolerate both the requested object shape:
+  //   {"items":[...]}
+  // and the common model mistake:
+  //   [...]
+  const cleaned = String(text ?? '')
     .replace(/```json\s*/gi, '')
     .replace(/```\s*/g, '')
     .trim();
 
-  // پیدا کن اولین { و آخرین } را
+  const tryParse = (candidate: string): { items: any[] } | null => {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) return { items: parsed };
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) return parsed;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryParse(cleaned);
+  if (direct) return direct;
+
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
-
-  const candidate = cleaned.slice(firstBrace, lastBrace + 1);
-  try {
-    const parsed = JSON.parse(candidate);
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const parsedObject = tryParse(cleaned.slice(firstBrace, lastBrace + 1));
+    if (parsedObject) return parsedObject;
   }
+
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    const parsedArray = tryParse(cleaned.slice(firstBracket, lastBracket + 1));
+    if (parsedArray) return parsedArray;
+  }
+
+  return null;
 }
 
 function statusIdFromUrl(raw: unknown): string | null {
@@ -1775,9 +1792,11 @@ function loadConfig(env: Env): Config {
 async function checkScoringBudget(env: Env, cfg: Config): Promise<AIBudgetCheck> {
   const maxCalls = Math.max(0, parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0);
   const tokenBudget = Math.max(0, parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0);
+  const hourlyMaxCalls = Math.max(0, parseInt(env.AI_SCORING_HOURLY_CALL_BUDGET || '0', 10) || 0);
+  const hourlyTokenBudget = Math.max(0, parseInt(env.AI_SCORING_HOURLY_TOKEN_BUDGET || '0', 10) || 0);
   const fallback: AIBudgetCheck = { allowed: true, callsToday: 0, tokensToday: 0, maxCalls, tokenBudget };
 
-  if (!env.DB || (maxCalls === 0 && tokenBudget === 0)) return fallback;
+  if (!env.DB || (maxCalls === 0 && tokenBudget === 0 && hourlyMaxCalls === 0 && hourlyTokenBudget === 0)) return fallback;
 
   try {
     const row = await env.DB.prepare(`
@@ -1797,6 +1816,29 @@ async function checkScoringBudget(env: Env, cfg: Config): Promise<AIBudgetCheck>
     if (tokenBudget > 0 && tokensToday >= tokenBudget) {
       return { allowed: false, reason: `AI_DAILY_TOKEN_BUDGET reached (${tokensToday}/${tokenBudget})`, callsToday, tokensToday, maxCalls, tokenBudget };
     }
+
+    if (hourlyMaxCalls > 0 || hourlyTokenBudget > 0) {
+      const hourlyRow = await env.DB.prepare(`
+        SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+        FROM ai_usage
+        WHERE provider='anthropic'
+          AND purpose='scoring'
+          AND status='success'
+          AND created_at > datetime('now','-1 hour')
+      `).first<{ calls: number; tokens: number }>();
+
+      const callsThisHour = Number(hourlyRow?.calls ?? 0);
+      const tokensThisHour = Number(hourlyRow?.tokens ?? 0);
+
+      if (hourlyMaxCalls > 0 && callsThisHour >= hourlyMaxCalls) {
+        return { allowed: false, reason: `AI_SCORING_HOURLY_CALL_BUDGET reached (${callsThisHour}/${hourlyMaxCalls})`, callsToday, tokensToday, maxCalls, tokenBudget };
+      }
+
+      if (hourlyTokenBudget > 0 && tokensThisHour >= hourlyTokenBudget) {
+        return { allowed: false, reason: `AI_SCORING_HOURLY_TOKEN_BUDGET reached (${tokensThisHour}/${hourlyTokenBudget})`, callsToday, tokensToday, maxCalls, tokenBudget };
+      }
+    }
+
     return { allowed: true, callsToday, tokensToday, maxCalls, tokenBudget };
   } catch (e) {
     // Migration may not be applied yet. Do not take the whole curation system down because of telemetry.

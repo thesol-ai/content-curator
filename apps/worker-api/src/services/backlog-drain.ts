@@ -799,6 +799,12 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   let selected = 0;
   let queued = 0;
 
+  const weakGateOverrideEnabled = isWeakPostAiGateOverrideEnabled(env);
+  const weakGateOverrideScoreMargin = getWeakPostAiGateOverrideScoreMargin(env);
+  const queueStarvationSnapshot = weakGateOverrideEnabled
+    ? await getPublishQueueStarvationSnapshot(env, channels)
+    : emptyPublishQueueStarvationSnapshot();
+
   if (!translateAfterGates) {
     // ── Legacy path: decide + queue interleaved (unchanged behavior). ──
     for (let i = 0; i < prepared.length; i++) {
@@ -818,7 +824,28 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       }
 
       const ev = await evaluateCandidateDb(env, channels, candidate, ai);
-      const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+      let rejectReason = resolveCandidateRejectReason(
+        ev,
+        ai,
+        category,
+        candidate.item,
+        similarTopicRejects.has(i),
+      );
+
+      rejectReason = await maybeOverrideSoftEditorialReject(
+        env,
+        category,
+        candidate,
+        ai,
+        ev,
+        rejectReason,
+        {
+          enabled: weakGateOverrideEnabled,
+          scoreMargin: weakGateOverrideScoreMargin,
+          snapshot: queueStarvationSnapshot,
+        },
+      );
+
       const counts = await persistCandidateDecision(env, channels, category, candidate, ai, ev, rejectReason);
       selected += counts.selected;
       rejected += counts.rejected;
@@ -905,7 +932,28 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       }
     }
 
-    const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+    let rejectReason = resolveCandidateRejectReason(
+      ev,
+      ai,
+      category,
+      candidate.item,
+      similarTopicRejects.has(i),
+    );
+
+    rejectReason = await maybeOverrideSoftEditorialReject(
+      env,
+      category,
+      candidate,
+      ai,
+      ev,
+      rejectReason,
+      {
+        enabled: weakGateOverrideEnabled,
+        scoreMargin: weakGateOverrideScoreMargin,
+        snapshot: queueStarvationSnapshot,
+      },
+    );
+
     if (rejectReason === null) {
       if (fpNorm) seenFingerprints.add(fpNorm);
       if (ev.storyClusterKey) seenStoryClusters.add(ev.storyClusterKey);
@@ -1097,7 +1145,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
 
 // ── Phase 6H helpers (shared by both paths) ───────────────────
 
-interface CandidateEvaluation {
+export interface CandidateEvaluation {
   itemId: string;
   storyClusterKey: string | null;
   themeKey: string | null;
@@ -1239,7 +1287,197 @@ async function getRssBriefPreflightRejectReason(
   return `rss_brief_preflight_blocked:${lastReason}`;
 }
 
-function resolveCandidateRejectReason(
+function isWeakPostAiGateOverrideEnabled(env: Env): boolean {
+  return String(env.WEAK_POST_AI_GATE_OVERRIDE_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+function getWeakPostAiGateOverrideScoreMargin(env: Env): number {
+  const raw = Number(env.WEAK_POST_AI_GATE_OVERRIDE_SCORE_MARGIN ?? 5);
+  return Number.isFinite(raw)
+    ? Math.max(0, Math.min(30, Math.floor(raw)))
+    : 5;
+}
+
+export interface PublishQueueStarvationSnapshot {
+  allEnabledChannelsStarving: boolean;
+  minScheduledNext6h: number;
+  channels: Array<{
+    channelId: string;
+    scheduledNext6h: number;
+    starving: boolean;
+  }>;
+}
+
+function emptyPublishQueueStarvationSnapshot(): PublishQueueStarvationSnapshot {
+  return {
+    allEnabledChannelsStarving: false,
+    minScheduledNext6h: 0,
+    channels: [],
+  };
+}
+
+async function getPublishQueueStarvationSnapshot(
+  env: Env,
+  channels: ChannelRow[],
+): Promise<PublishQueueStarvationSnapshot> {
+  if (!env.DB) return emptyPublishQueueStarvationSnapshot();
+
+  const enabledChannels = channels.filter(channel => channel.enabled);
+  if (enabledChannels.length === 0) return emptyPublishQueueStarvationSnapshot();
+
+  const parsedFloor = parseInt(
+    String(env.QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H ?? '4'),
+    10,
+  );
+  const minScheduledNext6h = Number.isFinite(parsedFloor)
+    ? Math.max(1, Math.min(100, parsedFloor))
+    : 4;
+
+  const snapshots: PublishQueueStarvationSnapshot['channels'] = [];
+
+  for (const channel of enabledChannels) {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id = ?
+        AND status IN ('scheduled','retry')
+        AND scheduled_at >= unixepoch('now')
+        AND scheduled_at <= unixepoch('now') + 6 * 3600
+    `).bind(channel.id).first<{ count: number }>();
+
+    const scheduledNext6h = Number(row?.count ?? 0);
+    snapshots.push({
+      channelId: channel.id,
+      scheduledNext6h,
+      starving: scheduledNext6h < minScheduledNext6h,
+    });
+  }
+
+  return {
+    // The decision is made before per-channel persistence. Therefore the safe,
+    // channel-agnostic rule is to override only when EVERY target channel needs
+    // inventory. One starving channel must not weaken gates for healthy channels.
+    allEnabledChannelsStarving:
+      snapshots.length > 0 && snapshots.every(channel => channel.starving),
+    minScheduledNext6h,
+    channels: snapshots,
+  };
+}
+
+function hasHardQualityRisk(ai: AIGateResult): boolean {
+  const flags = (ai.riskFlags ?? []).map(flag => String(flag).toLowerCase());
+
+  return flags.some(flag =>
+    flag.includes('financial_advice')
+    || flag.includes('market_prediction')
+    || flag.includes('pump')
+    || flag.includes('promotional')
+    || flag.includes('scam')
+    || flag.includes('misleading')
+    || flag.includes('low_substance')
+    || flag.includes('engagement_bait')
+    || flag.includes('unverified')
+    || flag.includes('rumor')
+    || flag.includes('limited_text_context')
+  );
+}
+
+/**
+ * Editorial capacity gates are not duplicate evidence.
+ *
+ * This classification is intentionally generic:
+ * - any configured theme daily cap
+ * - any audience/profile policy whose meaning is "requires material impact"
+ *
+ * Semantic, topic, story-key and final-publish duplicate reasons are NEVER soft.
+ */
+export function isSoftEditorialGateReject(reason: string | null): boolean {
+  const normalized = String(reason ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+
+  return normalized.startsWith('theme_daily_cap:')
+    || normalized.endsWith('_requires_material_impact');
+}
+
+export function shouldOverrideSoftEditorialReject(args: {
+  enabled: boolean;
+  rejectReason: string | null;
+  ai: Pick<AIGateResult, 'publish' | 'score' | 'riskLevel' | 'riskFlags'>;
+  queueStarving: boolean;
+  categoryScoreThreshold: number;
+  scoreMargin: number;
+}): boolean {
+  if (!args.enabled) return false;
+  if (!args.queueStarving) return false;
+  if (!isSoftEditorialGateReject(args.rejectReason)) return false;
+
+  if (args.ai.publish !== true) return false;
+  if (args.ai.riskLevel === 'high') return false;
+  if (hasHardQualityRisk(args.ai as AIGateResult)) return false;
+
+  const score = Number(args.ai.score);
+  const threshold = Number(args.categoryScoreThreshold);
+  const margin = Math.max(0, Number(args.scoreMargin) || 0);
+
+  if (!Number.isFinite(score) || !Number.isFinite(threshold)) return false;
+  if (score < threshold + margin) return false;
+
+  return true;
+}
+
+async function maybeOverrideSoftEditorialReject(
+  env: Env,
+  category: CategoryRow,
+  candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
+  ai: AIGateResult,
+  ev: CandidateEvaluation,
+  rejectReason: string | null,
+  policy: {
+    enabled: boolean;
+    scoreMargin: number;
+    snapshot: PublishQueueStarvationSnapshot;
+  },
+): Promise<string | null> {
+  const shouldOverride = shouldOverrideSoftEditorialReject({
+    enabled: policy.enabled,
+    rejectReason,
+    ai,
+    queueStarving: policy.snapshot.allEnabledChannelsStarving,
+    categoryScoreThreshold: Number(category.score_threshold),
+    scoreMargin: policy.scoreMargin,
+  });
+
+  if (!shouldOverride) return rejectReason;
+
+  await recordCandidateItemEvent(
+    env,
+    candidate.row,
+    itemIdForCandidate(candidate.row.id),
+    candidate.item,
+    'weak_post_ai_gate_overridden',
+    rejectReason,
+    ai,
+    {
+      originalRejectReason: rejectReason,
+      overrideReason: 'all_target_queues_starving_strong_ai_candidate',
+      categoryScoreThreshold: Number(category.score_threshold),
+      scoreMargin: policy.scoreMargin,
+      requiredScore: Number(category.score_threshold) + policy.scoreMargin,
+      queueStarvationSnapshot: policy.snapshot,
+      storyKey: ev.storyKey,
+      storyKeyRejectReason: ev.storyKeyRejectReason,
+      storyClusterKey: ev.storyClusterKey,
+      themeKey: ev.themeKey,
+      themeCapRejectReason: ev.themeCapRejectReason,
+      audienceRejectReason: ev.audienceRejectReason,
+    },
+  );
+
+  return null;
+}
+
+
+export function resolveCandidateRejectReason(
   ev: CandidateEvaluation,
   ai: AIGateResult,
   category: CategoryRow,
@@ -1250,14 +1488,30 @@ function resolveCandidateRejectReason(
   const themeReject = mustCover ? null : ev.themeCapRejectReason;
   const audienceReject = mustCover ? null : ev.audienceRejectReason;
 
-  return ev.recentTopicDuplicate
-    ? 'similar_topic_recent_channel'
-    : ev.recentStoryClusterDuplicate
-      ? 'similar_story_cluster_recent_channel'
-      : ev.storyKeyRejectReason
-        ?? themeReject
-        ?? audienceReject
-        ?? getItemRejectReason(ai, category, item, similarTopicRejected);
+  // Hard deterministic duplicate checks must never be hidden behind a soft
+  // editorial gate. This also prevents starvation overrides from rescuing an
+  // exact same-batch duplicate.
+  if (ev.recentTopicDuplicate) return 'similar_topic_recent_channel';
+  if (similarTopicRejected) return 'similar_topic_in_run';
+
+  // Quality eligibility must be decided before theme/audience capacity gates.
+  // Otherwise a theme cap can mask below_threshold/high_risk/media rules.
+  const hardItemReject = getItemRejectReason(
+    ai,
+    category,
+    item,
+    false,
+  );
+  if (hardItemReject) return hardItemReject;
+
+  // Story-key and semantic story matches remain hard duplicate evidence.
+  // Queue starvation is deliberately not allowed to override them.
+  if (ev.storyKeyRejectReason) return ev.storyKeyRejectReason;
+
+  // Story clusters remain advisory-only and are intentionally absent here.
+  return themeReject
+    ?? audienceReject
+    ?? null;
 }
 
 /**
@@ -1286,7 +1540,8 @@ async function persistCandidateDecision(
     recentStoryClusterDuplicate: ev.recentStoryClusterDuplicate,
     themeCapRejectReason: ev.themeCapRejectReason,
     audienceRejectReason: ev.audienceRejectReason,
-    storyKey: ai.storyKey ?? null, // Phase 6K observe-only: recorded, not enforced
+    storyKey: ai.storyKey ?? null,
+    storyKeyRejectReason: ev.storyKeyRejectReason,
   });
 
   // Phase 6K: also record into the queryable story_intelligence_events table
@@ -1339,6 +1594,7 @@ async function persistCandidateDecision(
   const mediaTypes = extractMediaTypes(candidate.item.media, category.media_mode as any);
   let candidateQueued = 0;
   let translationMissingCount = 0; // PATCH D: track translation_missing across channels
+  let finalDuplicateBlockedCount = 0;
   // v4.1: define enabledChannels/Count up front so the needs_translation lastError
   // (translationMissingCount/enabledChannelCount) has a defined denominator.
   const enabledChannels = channels.filter(channel => channel.enabled);
@@ -1378,6 +1634,40 @@ async function persistCandidateDecision(
         await recordCandidateItemEvent(env, candidate.row, itemId, candidate.item, 'rule_gate_rejected', 'source_daily_cap', ai, { channelId: channel.id, language: channel.language, sourceAccount: candidate.item.sourceAccount, alreadyFromSource, cap });
         continue;
       }
+    }
+
+    const finalDuplicate = await findFinalPublishDuplicate(env, {
+      channel,
+      item: candidate.item,
+      ai,
+      captionShort: translation.captionShort,
+      captionFull: translation.captionFull,
+    });
+
+    if (finalDuplicate) {
+      finalDuplicateBlockedCount++;
+      await recordCandidateItemEvent(
+        env,
+        candidate.row,
+        itemId,
+        candidate.item,
+        'ai_rejected',
+        'final_publish_duplicate_guard',
+        {
+          ...ai,
+          riskFlags: Array.from(new Set([
+            ...(ai.riskFlags ?? []),
+            'final_publish_duplicate_guard',
+            `final_duplicate_reason:${finalDuplicate.reason}`,
+          ])).slice(0, 10),
+        },
+        {
+          channelId: channel.id,
+          language: channel.language,
+          finalDuplicate,
+        },
+      );
+      continue;
     }
 
     const scheduledAt = await adjustScheduledAtForFairSourceSpacing(env, channel, candidate.item.sourceAccount, rule.scheduledAt);
@@ -1423,9 +1713,16 @@ async function persistCandidateDecision(
   // purely by a missing translation, mark needs_translation so the next backlog
   // drain retries translation (instead of stranding it as ai_selected forever).
   // candidate-queue's fetch/claim/fail/stale all recognise needs_translation.
+  const blockedOnlyByFinalDuplicate = candidateQueued === 0
+    && finalDuplicateBlockedCount > 0
+    && translationMissingCount === 0;
+
   const finalCandidateStatus: AICandidateStatus = candidateQueued > 0
     ? 'queued'
-    : (translationMissingCount > 0 ? 'needs_translation' : 'ai_selected');
+    : (translationMissingCount > 0
+      ? 'needs_translation'
+      : (blockedOnlyByFinalDuplicate ? 'ai_rejected' : 'ai_selected'));
+
   // v4: record WHY on needs_translation so diagnosis doesn't require digging
   // through run_item_events. enabledChannelCount-translationMissingCount tells
   // us how many channels were blocked by OTHER reasons (rule gate, caps).
@@ -1435,9 +1732,16 @@ async function persistCandidateDecision(
     finalCandidateStatus,
     finalCandidateStatus === 'needs_translation'
       ? { lastError: `translation_missing:${translationMissingCount}/${enabledChannelCount}` }
-      : {},
+      : (blockedOnlyByFinalDuplicate
+        ? { lastError: `final_publish_duplicate_guard:${finalDuplicateBlockedCount}/${enabledChannelCount}` }
+        : {}),
   );
-  return { selected: 1, rejected: 0, queued: candidateQueued };
+
+  return {
+    selected: blockedOnlyByFinalDuplicate ? 0 : 1,
+    rejected: blockedOnlyByFinalDuplicate ? 1 : 0,
+    queued: candidateQueued,
+  };
 }
 
 function parseCandidateRow(row: AICandidateRow): { item: NormalizedItem; keys: string[] } | null {
@@ -1708,6 +2012,532 @@ async function adjustScheduledAtForFairSourceSpacing(
 
   return proposedScheduledAt;
 }
+
+
+interface FinalPublishDuplicateGuardInput {
+  channel: ChannelRow;
+  item: NormalizedItem;
+  ai: AIGateResult;
+  captionShort: string;
+  captionFull: string;
+}
+
+interface FinalPublishDuplicateMatch {
+  reason: string;
+  matchedQueueId: string;
+  matchedSourceUrl: string | null;
+  matchedSourceAccount: string | null;
+  matchedTopicFingerprint: string | null;
+  matchedStoryKey: string | null;
+  score: number;
+}
+
+function isFinalPublishDuplicateGuardEnabled(env: Env): boolean {
+  return String((env as any).FINAL_PUBLISH_DUPLICATE_GUARD_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+function getFinalPublishDuplicateGuardWindowHours(env: Env): number {
+  const raw = Number((env as any).FINAL_PUBLISH_DUPLICATE_GUARD_WINDOW_HOURS ?? (env as any).STORY_INTELLIGENCE_WINDOW_HOURS ?? 72);
+  return Number.isFinite(raw) ? Math.max(6, Math.min(168, Math.floor(raw))) : 72;
+}
+
+function normalizeFinalDupeText(value: unknown): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/&amp;/g, ' and ')
+    .replace(/[۰-۹٠-٩]/g, ch => {
+      const map: Record<string, string> = {
+        '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9',
+        '٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9',
+      };
+      return map[ch] ?? ch;
+    })
+    .replace(/[ي]/g, 'ی')
+    .replace(/[ك]/g, 'ک')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\u0600-\u06ff.%$]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const FINAL_DUPE_STOP_TERMS = new Set([
+  'the','and','for','with','that','this','from','into','onto','over','under','more','less',
+  'new','now','latest','just','breaking','bullish','watch','whale','crypto','market','markets',
+  'report','reports','says','said','according','per','data','today','yesterday','tomorrow',
+  'chain','network','protocol','ecosystem','price','prices','token','tokens','coin','coins',
+  'big','insight','via','daily','weekly','monthly','year','years','month','months','june','july',
+  '2024','2025','2026','2027','million','billion','thousand','dollar','dollars','usd',
+  'institutional','corporate','analysis','activity','commentary','structure','product','infrastructure',
+  'signal','metric','metrics','finance','supply','framework','wallet','performance','strategy',
+  'خبر','جدید','بازار','رمزارز','کریپتو','گزارش','طبق','اعلام','امروز','دیروز','فردا',
+  'این','آن','برای','از','به','در','با','که','شد','می‌شود','کرد','کرده','است','هست',
+  'است.','های','نشان','دهنده','کوین','دلار','دارایی','شده','بیت','خود','میلیون',
+  'شرکت','سرمایه','کند','کند.','تواند','اقدام','گذاری','صرافی','مالی','سال','قانون',
+  'داده','رمزارزها','بیش','شبکه','توسط','استفاده','میلیارد','اتریوم','کاربران',
+  'آمریکا','دهد','دهد.','رمزارزی','حدود','شود','شود.','پیش','ارزش','قابل',
+  'تراکنش','بلاکچین','حجم','بازارهای','دلاری','خدمات','باشد','باشد.','پلتفرم',
+  'حال','بین','فعالیت','حوزه','بیشتر','توکن','راه','رشد','دارد','دارد.','هدف',
+  'خواهد','معاملات','ماه','ارائه','ثبت','گذاران','قیمت','درصد','سهام','روی',
+  'گذشته','روند','قرار','دلیل','دریافت','معامله',
+]);
+
+const FINAL_DUPE_GENERIC_ASSET_TERMS = new Set([
+  'bitcoin','btc','ethereum','eth','solana','sol','xrp','bnb','trx','doge','ada','usdt','usdc',
+]);
+
+const FINAL_DUPE_ACTION_TERMS = new Set([
+  'buy','buys','bought','purchase','purchases','purchased','sell','sells','sold','selling',
+  'acquire','acquires','acquired','acquisition','merge','merger','partnership',
+  'launch','launches','launched','listing','lists','listed','delist','delists','delisted','delisting',
+  'approve','approves','approved','approval','authorize','authorizes','authorized',
+  'secure','secures','secured','receive','receives','received',
+  'reject','rejects','rejected','file','files','filed','filing','pass','passes','passed',
+  'defend','defends','defended','veto','vetoes','vetoed',
+  'regulation','regulatory','law','act','bill','license','licence','licensing',
+  'sanction','sanctions','enforce','enforces','enforced','enforcement',
+  'lawsuit','litigation','settlement','fraud',
+  'hack','exploit','exploited','drain','drained','attack','bug','audit','security','phishing',
+  'volume','tvl','inflow','inflows','outflow','outflows','flow','flows','liquidity',
+  'treasury','reserve','reserves','holdings','custody',
+  'funding','raise','raises','raised','investment','invests','invested',
+  'upgrade','upgrades','upgraded','governance','vote','votes',
+  'flip','flips','flipped','overtake','overtakes','overtook','exceed','exceeds','exceeded',
+  'surge','surges','surged','record','records','recorded','milestone',
+  'drop','drops','dropped','decline','declines','declined','rise','rises','rose',
+  'increase','increases','increased','decrease','decreases','decreased',
+  'crash','crashes','crashed','plunge','plunges','plunged',
+  'migrate','migrates','migrated','migration','integrate','integrates','integrated','integration',
+  'bridge','bridges','bridged','closure','close','closes','closed',
+  'stake','stakes','staked','staking','include','includes','included','inclusion',
+  'terminate','terminates','terminated','termination','movement','move','moves','moved',
+  'خرید','فروش','تصاحب','ادغام','همکاری','راه‌اندازی','مجوز','قانون','تحریم','هک',
+  'حمله','آسیب‌پذیری','حجم','ذخایر','دارایی','سرمایه‌گذاری','ارتقا','دادگاه',
+  'عبور','پیشی','رکورد','افزایش','کاهش','سقوط','تصویب','رد','دریافت','مهاجرت',
+  'یکپارچه‌سازی','حذف','تعلیق','شکایت','تسویه','کلاهبرداری','مجوزدهی','اجرایی',
+]);
+
+function canonicalFinalDupeToken(raw: unknown): string | null {
+  const token = String(raw ?? '')
+    .toLowerCase()
+    .replace(/^[$#]+/, '')
+    .replace(/&amp;/g, 'and')
+    .replace(/[^a-z0-9\u0600-\u06ff.%]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!token || token.length < 3) return null;
+
+  const aliases: Record<string, string> = {
+    bit_coin: 'bitcoin',
+    btc: 'bitcoin',
+    ether: 'ethereum',
+    eth: 'ethereum',
+    stable_coin: 'stablecoin',
+    stablecoins: 'stablecoin',
+    etfs: 'etf',
+    dexes: 'dex',
+    companies: 'company',
+    corporates: 'corporate',
+    regulations: 'regulation',
+    sanctions: 'sanction',
+    reserves: 'reserve',
+    holdings: 'holding',
+    bought: 'buy',
+    buys: 'buy',
+    purchased: 'purchase',
+    purchases: 'purchase',
+    sold: 'sell',
+    sells: 'sell',
+    selling: 'sell',
+    acquired: 'acquire',
+    acquires: 'acquire',
+    launches: 'launch',
+    launched: 'launch',
+    approved: 'approval',
+    approves: 'approval',
+    filings: 'filing',
+  };
+
+  return aliases[token] ?? token;
+}
+
+function finalDupeTokens(value: unknown): Set<string> {
+  const text = normalizeFinalDupeText(value);
+  const out = new Set<string>();
+
+  for (const raw of text.split(' ')) {
+    const token = canonicalFinalDupeToken(raw);
+    if (!token) continue;
+    if (FINAL_DUPE_STOP_TERMS.has(token)) continue;
+    out.add(token);
+
+    if (token.includes('_')) {
+      for (const part of token.split('_')) {
+        const p = canonicalFinalDupeToken(part);
+        if (p && !FINAL_DUPE_STOP_TERMS.has(p)) out.add(p);
+      }
+    }
+  }
+
+  return out;
+}
+
+function finalDupeNumbers(value: unknown): Set<string> {
+  const text = normalizeFinalDupeText(value).replace(/,/g, '');
+  const out = new Set<string>();
+  const re = /(?:[$]\s*)?(\d+(?:\.\d+)?)\s*(k|m|mn|b|bn|t|million|billion|thousand|trillion|%|percent|btc|eth|trx|usd|usdt|usdc)?/gi;
+  const multipliers: Record<string, number> = {
+    k: 1_000,
+    m: 1_000_000,
+    b: 1_000_000_000,
+    t: 1_000_000_000_000,
+  };
+  const taggedUnits = new Set(['btc', 'eth', 'trx', 'usd', 'usdt', 'usdc']);
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    const rawNumber = match[1];
+    const n = Number(rawNumber);
+    if (!Number.isFinite(n)) continue;
+
+    let unit = String(match[2] ?? '').toLowerCase();
+    if (['mn', 'million'].includes(unit)) unit = 'm';
+    if (['bn', 'billion'].includes(unit)) unit = 'b';
+    if (unit === 'thousand') unit = 'k';
+    if (unit === 'trillion') unit = 't';
+    if (unit === 'percent') unit = '%';
+
+    if (unit === '%') {
+      if (n >= 1) out.add(`${rawNumber}%`);
+      continue;
+    }
+
+    const multiplier = multipliers[unit] ?? 1;
+    const normalized = Math.round(n * multiplier);
+
+    // Tiny bare numbers and standalone years are noisy in crypto headlines.
+    if (!unit && normalized < 100) continue;
+    if (!unit && normalized >= 1900 && normalized <= 2100) continue;
+
+    if (normalized <= 0) continue;
+
+    // Add a unitless normalized value so 110k and 110,000 BTC can match.
+    out.add(String(normalized));
+
+    if (taggedUnits.has(unit)) {
+      out.add(`${normalized}${unit}`);
+    }
+  }
+
+  return out;
+}
+
+function normalizeFinalDupeKey(value: unknown): string | null {
+  const key = String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0600-\u06ff]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!key) return null;
+  if (key.startsWith('ns_') || key.startsWith('fp_') || key.startsWith('err_') || key.startsWith('budget_')) return null;
+  return key;
+}
+
+function finalDupeCombinedText(args: {
+  sourceText?: string | null;
+  captionShort?: string | null;
+  captionFull?: string | null;
+  topicFingerprint?: string | null;
+  storyKey?: string | null;
+  eventType?: string | null;
+  primaryEntities?: unknown;
+}): string {
+  return [
+    args.sourceText,
+    args.captionShort,
+    args.captionFull,
+    args.topicFingerprint,
+    args.storyKey,
+    args.eventType,
+    Array.isArray(args.primaryEntities) ? args.primaryEntities.join(' ') : '',
+  ].filter(Boolean).join(' ');
+}
+
+function intersectionCountSet(a: Set<string>, b: Set<string>): number {
+  let n = 0;
+  for (const x of a) if (b.has(x)) n++;
+  return n;
+}
+
+function jaccardSet(a: Set<string>, b: Set<string>): number {
+  const overlap = intersectionCountSet(a, b);
+  if (overlap <= 0) return 0;
+  return overlap / (a.size + b.size - overlap);
+}
+
+function finalDupeSpecificAnchors(tokens: Set<string>): Set<string> {
+  const out = new Set<string>();
+
+  for (const token of tokens) {
+    if (FINAL_DUPE_STOP_TERMS.has(token)) continue;
+    if (FINAL_DUPE_ACTION_TERMS.has(token)) continue;
+    // Generic assets like bitcoin/ethereum are too broad to be treated as
+    // specific story anchors. They remain useful as tokens/numbers context,
+    // but should not make unrelated BTC/ETH stories look duplicate.
+    if (FINAL_DUPE_GENERIC_ASSET_TERMS.has(token)) continue;
+    if (/^\d/.test(token)) continue;
+    if (token.length < 4) continue;
+    out.add(token);
+  }
+
+  return out;
+}
+
+function finalDupeActionTokens(tokens: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const token of tokens) {
+    if (FINAL_DUPE_ACTION_TERMS.has(token)) out.add(token);
+  }
+  return out;
+}
+
+function buildFinalDupeSignal(args: {
+  sourceUrl?: string | null;
+  sourceAccount?: string | null;
+  sourceText?: string | null;
+  captionShort?: string | null;
+  captionFull?: string | null;
+  topicFingerprint?: string | null;
+  storyKey?: string | null;
+  storyFields?: AIGateResult['storyFields'] | null;
+}) {
+  const eventType = args.storyFields?.eventType ?? null;
+  const combined = finalDupeCombinedText({
+    sourceText: args.sourceText,
+    captionShort: args.captionShort,
+    captionFull: args.captionFull,
+    topicFingerprint: args.topicFingerprint,
+    storyKey: args.storyKey,
+    eventType,
+    primaryEntities: args.storyFields?.primaryEntities,
+  });
+
+  const tokens = finalDupeTokens(combined);
+  const anchors = finalDupeSpecificAnchors(tokens);
+  const actions = finalDupeActionTokens(tokens);
+  const numbers = finalDupeNumbers(combined);
+
+  return {
+    sourceUrl: String(args.sourceUrl ?? '').trim() || null,
+    sourceAccount: String(args.sourceAccount ?? '').trim() || null,
+    topicKey: normalizeFinalDupeKey(args.topicFingerprint),
+    storyKey: normalizeFinalDupeKey(args.storyKey),
+    storyFields: args.storyFields ?? null,
+    eventType,
+    topicFingerprint: args.topicFingerprint ?? null,
+    text: args.sourceText ?? null,
+    tokens,
+    anchors,
+    actions,
+    numbers,
+  };
+}
+
+function scoreFinalPublishDuplicate(
+  current: ReturnType<typeof buildFinalDupeSignal>,
+  prior: ReturnType<typeof buildFinalDupeSignal>,
+  followupAllowEnabled: boolean,
+): { duplicate: boolean; score: number; reason: string } {
+  if (current.sourceUrl && prior.sourceUrl && current.sourceUrl === prior.sourceUrl) {
+    return { duplicate: true, score: 1, reason: 'same_source_url' };
+  }
+
+  if (current.storyKey && prior.storyKey && current.storyKey === prior.storyKey) {
+    if (followupAllowEnabled && isFollowUpEventType(current.eventType)) {
+      return { duplicate: false, score: 0, reason: 'same_story_key_followup_allowed' };
+    }
+    return { duplicate: true, score: 0.98, reason: 'same_story_key' };
+  }
+
+  if (current.topicKey && prior.topicKey && current.topicKey === prior.topicKey) {
+    return { duplicate: true, score: 0.96, reason: 'same_topic_fingerprint' };
+  }
+
+  if (shouldRejectBySemanticStorySimilarity({
+    rejectEnabled: true,
+    current: {
+      storyKey: current.storyKey,
+      fields: current.storyFields,
+      topicFingerprint: current.topicFingerprint,
+      eventType: current.eventType,
+      text: current.text,
+    },
+    prior: {
+      storyKey: prior.storyKey,
+      fields: prior.storyFields,
+      topicFingerprint: prior.topicFingerprint,
+      eventType: prior.eventType,
+      text: prior.text,
+    },
+    followupAllowEnabled,
+  })) {
+    return { duplicate: true, score: 0.92, reason: 'semantic_story_similarity' };
+  }
+
+  // Strict generic fallback. The 7-day audit showed broad entity+number
+  // matching creates false positives, so only very high-confidence paraphrases
+  // are blocked here. Everything else is left to exact/story/semantic checks.
+  if (followupAllowEnabled && isFollowUpEventType(current.eventType)) {
+    return { duplicate: false, score: 0, reason: 'followup_allowed' };
+  }
+
+  const sharedAnchors = intersectionCountSet(current.anchors, prior.anchors);
+  const sharedActions = intersectionCountSet(current.actions, prior.actions);
+  const sharedNumbers = intersectionCountSet(current.numbers, prior.numbers);
+  const tokenOverlap = intersectionCountSet(current.tokens, prior.tokens);
+  const tokenJaccard = jaccardSet(current.tokens, prior.tokens);
+
+  // Strong rewritten-story duplicate:
+  // same specific entities + same event action + strong textual overlap.
+  if (sharedAnchors >= 3 && sharedActions >= 1 && tokenOverlap >= 8 && tokenJaccard >= 0.32) {
+    return { duplicate: true, score: Math.max(0.9, tokenJaccard), reason: 'strict_shared_entities_action' };
+  }
+
+  // Number-heavy story duplicate:
+  // same specific entities + same material numbers + strong overlap.
+  if (sharedAnchors >= 2 && sharedNumbers >= 2 && tokenOverlap >= 8 && tokenJaccard >= 0.30) {
+    return { duplicate: true, score: Math.max(0.9, tokenJaccard), reason: 'strict_shared_entities_numbers' };
+  }
+
+  // One shared material number is allowed only with strong entity/action overlap.
+  if (sharedAnchors >= 3 && sharedActions >= 1 && sharedNumbers >= 1 && tokenOverlap >= 9 && tokenJaccard >= 0.34) {
+    return { duplicate: true, score: Math.max(0.9, tokenJaccard), reason: 'strict_entities_action_number' };
+  }
+
+  // Near-copy / heavy paraphrase duplicate.
+  if (sharedAnchors >= 2 && tokenOverlap >= 16 && tokenJaccard >= 0.50) {
+    return { duplicate: true, score: Math.max(0.88, tokenJaccard), reason: 'strict_near_copy_overlap' };
+  }
+
+  return { duplicate: false, score: tokenJaccard, reason: 'no_strong_match' };
+}
+
+function parseFinalDupePriorStoryFields(row: any): AIGateResult['storyFields'] | null {
+  const entitiesRaw = row.primary_entities_json;
+  let primaryEntities: string[] = [];
+
+  if (entitiesRaw) {
+    try {
+      const parsed = JSON.parse(String(entitiesRaw));
+      if (Array.isArray(parsed)) primaryEntities = parsed.map(x => String(x));
+    } catch {
+      primaryEntities = [];
+    }
+  }
+
+  const eventType = String(row.event_type ?? '').trim();
+  const canonicalDate = String(row.canonical_date ?? '').trim();
+
+  if (primaryEntities.length === 0 && !eventType && !canonicalDate) return null;
+
+  return {
+    primaryEntities,
+    eventType: eventType || 'unknown',
+    canonicalDate: canonicalDate || '',
+  } as AIGateResult['storyFields'];
+}
+
+async function findFinalPublishDuplicate(env: Env, input: FinalPublishDuplicateGuardInput): Promise<FinalPublishDuplicateMatch | null> {
+  if (!isFinalPublishDuplicateGuardEnabled(env)) return null;
+
+  // First rollout: X only. RSS has a different brief/copyright path and should not
+  // be behavior-coupled to this X incident fix.
+  if (input.item.platform !== 'x') return null;
+
+  const channelId = input.channel.id;
+  if (!channelId) return null;
+
+  const current = buildFinalDupeSignal({
+    sourceUrl: input.item.sourceUrl,
+    sourceAccount: input.item.sourceAccount,
+    sourceText: input.item.text,
+    captionShort: input.captionShort,
+    captionFull: input.captionFull,
+    topicFingerprint: input.ai.topicFingerprint,
+    storyKey: input.ai.storyKey ?? null,
+    storyFields: input.ai.storyFields ?? null,
+  });
+
+  const windowHours = getFinalPublishDuplicateGuardWindowHours(env);
+  const followupAllowEnabled = isStoryFollowupAllowEnabled(env);
+
+  try {
+    const res = await env.DB.prepare(`
+      SELECT
+        q.id AS queue_id,
+        q.source_url AS queue_source_url,
+        q.caption_short,
+        q.caption_full,
+        q.scheduled_at,
+        q.published_at,
+        d.source_account,
+        d.source_url AS item_source_url,
+        d.text AS source_text,
+        d.topic_fingerprint,
+        sie.story_key,
+        sie.event_type,
+        sie.canonical_date,
+        sie.primary_entities_json,
+        sie.topic_fingerprint AS story_topic_fingerprint
+      FROM publish_queue q
+      JOIN discovery_items d ON d.id = q.item_id
+      LEFT JOIN story_intelligence_events sie
+        ON sie.candidate_id = q.candidate_id
+       AND sie.status IN ('queued','published')
+      WHERE q.channel_id = ?
+        AND q.status IN ('scheduled','retry','publishing','published')
+        AND COALESCE(q.published_at, q.scheduled_at, 0) >= unixepoch('now') - ?
+      ORDER BY COALESCE(q.published_at, q.scheduled_at, 0) DESC
+      LIMIT 180
+    `).bind(channelId, String(windowHours * 3600)).all<any>();
+
+    let best: FinalPublishDuplicateMatch | null = null;
+
+    for (const row of res.results ?? []) {
+      const prior = buildFinalDupeSignal({
+        sourceUrl: row.item_source_url ?? row.queue_source_url,
+        sourceAccount: row.source_account,
+        sourceText: row.source_text,
+        captionShort: row.caption_short,
+        captionFull: row.caption_full,
+        topicFingerprint: row.story_topic_fingerprint ?? row.topic_fingerprint,
+        storyKey: row.story_key,
+        storyFields: parseFinalDupePriorStoryFields(row),
+      });
+
+      const scored = scoreFinalPublishDuplicate(current, prior, followupAllowEnabled);
+      if (!scored.duplicate) continue;
+
+      const match: FinalPublishDuplicateMatch = {
+        reason: scored.reason,
+        matchedQueueId: String(row.queue_id ?? ''),
+        matchedSourceUrl: String(row.item_source_url ?? row.queue_source_url ?? '') || null,
+        matchedSourceAccount: String(row.source_account ?? '') || null,
+        matchedTopicFingerprint: String(row.story_topic_fingerprint ?? row.topic_fingerprint ?? '') || null,
+        matchedStoryKey: String(row.story_key ?? '') || null,
+        score: Math.round(scored.score * 1000) / 1000,
+      };
+
+      if (!best || match.score > best.score) best = match;
+    }
+
+    return best;
+  } catch (err) {
+    console.warn('[BacklogDrain] final publish duplicate guard skipped:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
 
 async function saveQueueItem(env: Env, data: {
   candidateId: string;

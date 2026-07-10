@@ -52,11 +52,10 @@ describe('Phase 9A discovery quality', () => {
   it('locks Persian caption start without static caption injection', () => {
     const system = buildTranslationSystem([target()], category());
 
-    expect(system).toContain('Optional leading emoji is allowed');
-    expect(system).toContain('first real word after any emoji');
-    expect(system).toContain('MUST be Persian');
-    expect(system).toContain('Do not use a fixed or static prefix');
-    expect(system).toContain('Do not force emojis');
+    expect(system).toContain('Use exactly one relevant formal emoji at the start');
+    expect(system).toContain('The first real word after the emoji/spacing MUST be Persian');
+    expect(system).toContain('Do not use a fixed or static Persian prefix');
+    expect(system).toContain('Use only one emoji, only at the start');
   });
 
   it('normalizes only useful story fingerprints', () => {

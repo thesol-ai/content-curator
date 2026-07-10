@@ -1505,23 +1505,42 @@ export async function publishDueItems(
 
 async function recoverStalePublishingItems(env: Env, now: number): Promise<number> {
   const staleAfterSec = 15 * 60;
+  const retryDelaySec = 5 * 60;
+  const maxRetries = 3;
 
   try {
     const result = await env.DB.prepare(`
       UPDATE publish_queue
       SET
-        status='failed',
-        retry_count=COALESCE(retry_count,0) + 1,
-        publish_error='stale_publishing_quarantined_possible_telegram_duplicate'
+        status = CASE
+          WHEN COALESCE(retry_count,0) + 1 >= ? THEN 'failed'
+          ELSE 'retry'
+        END,
+        retry_count = COALESCE(retry_count,0) + 1,
+        scheduled_at = CASE
+          WHEN COALESCE(retry_count,0) + 1 >= ? THEN scheduled_at
+          ELSE ?
+        END,
+        publish_error = CASE
+          WHEN COALESCE(retry_count,0) + 1 >= ?
+            THEN 'stale_publishing_failed_after_retries_possible_telegram_duplicate'
+          ELSE 'stale_publishing_recovered_to_retry'
+        END
       WHERE status='publishing'
         AND published_at IS NULL
         AND (telegram_message_id IS NULL OR telegram_message_id='')
         AND scheduled_at <= ?
-    `).bind(now - staleAfterSec).run();
+    `).bind(
+      maxRetries,
+      maxRetries,
+      now + retryDelaySec,
+      maxRetries,
+      now - staleAfterSec,
+    ).run();
 
     return Number(result.meta.changes ?? 0);
   } catch (err) {
-    console.warn('[Publisher] stale publishing quarantine skipped:', err instanceof Error ? err.message : String(err));
+    console.warn('[Publisher] stale publishing recovery skipped:', err instanceof Error ? err.message : String(err));
     return 0;
   }
 }
