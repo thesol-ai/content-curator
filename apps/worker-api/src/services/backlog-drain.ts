@@ -839,6 +839,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     text: string | null;
   }> = [];
   const themeBatchCounts = new Map<string, number>();
+  const queueStarvingForWeakGateOverride = await isPublishQueueStarvingForAnyChannel(env, channels);
   const decisions: Array<{
     candidate: typeof prepared[number];
     ai: AIGateResult;
@@ -905,7 +906,40 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       }
     }
 
-    const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+    let rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+    const originalWeakRejectReason = rejectReason;
+
+    if (shouldOverrideWeakRejectForStarvingQueue({
+      rejectReason,
+      ai,
+      queueStarving: queueStarvingForWeakGateOverride,
+    })) {
+      rejectReason = null;
+
+      await recordCandidateItemEvent(
+        env,
+        candidate.row,
+        itemIdForCandidate(candidate.row.id),
+        candidate.item,
+        'weak_post_ai_gate_overridden',
+        originalWeakRejectReason,
+        ai,
+        {
+          queueStarving: queueStarvingForWeakGateOverride,
+          originalRejectReason: originalWeakRejectReason,
+          overrideReason: 'queue_starving_ai_publish_true_no_hard_quality_risk',
+          score: ai.score,
+          riskFlags: ai.riskFlags ?? [],
+          topicFingerprint: ai.topicFingerprint,
+          storyKey: ev.storyKey,
+          storyClusterKey: ev.storyClusterKey,
+          themeKey: ev.themeKey,
+          themeCapRejectReason: ev.themeCapRejectReason,
+          audienceRejectReason: ev.audienceRejectReason,
+        },
+      );
+    }
+
     if (rejectReason === null) {
       if (fpNorm) seenFingerprints.add(fpNorm);
       if (ev.storyClusterKey) seenStoryClusters.add(ev.storyClusterKey);
@@ -1238,6 +1272,68 @@ async function getRssBriefPreflightRejectReason(
 
   return `rss_brief_preflight_blocked:${lastReason}`;
 }
+
+function hasHardQualityRisk(ai: AIGateResult): boolean {
+  const flags = (ai.riskFlags ?? []).map(flag => String(flag).toLowerCase());
+  return flags.some(flag =>
+    flag.includes('financial_advice')
+    || flag.includes('market_prediction')
+    || flag.includes('pump')
+    || flag.includes('promotional')
+    || flag.includes('scam')
+    || flag.includes('misleading')
+    || flag.includes('low_substance_market_commentary')
+    || flag.includes('engagement_bait')
+  );
+}
+
+function isWeakPostAiGateReject(reason: string | null): boolean {
+  if (!reason) return false;
+
+  return reason === 'similar_semantic_story_recent_channel'
+    || reason === 'similar_semantic_story_recent_batch'
+    || reason.startsWith('theme_daily_cap:')
+    || reason === 'iran_audience_watch_source_requires_material_impact';
+}
+
+async function isPublishQueueStarvingForAnyChannel(env: Env, channels: ChannelRow[]): Promise<boolean> {
+  if (!env.DB) return false;
+
+  const enabled = channels.filter(channel => channel.enabled);
+  if (enabled.length === 0) return false;
+
+  const minScheduledNext6h = Math.max(
+    0,
+    parseInt(String((env as any).QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H ?? '4'), 10) || 4,
+  );
+
+  for (const channel of enabled) {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM publish_queue
+      WHERE channel_id = ?
+        AND status IN ('scheduled','retry')
+        AND scheduled_at >= unixepoch('now')
+        AND scheduled_at <= unixepoch('now') + 6 * 3600
+    `).bind(channel.id).first<{ count: number }>();
+
+    if (Number(row?.count ?? 0) < minScheduledNext6h) return true;
+  }
+
+  return false;
+}
+
+function shouldOverrideWeakRejectForStarvingQueue(args: {
+  rejectReason: string | null;
+  ai: AIGateResult;
+  queueStarving: boolean;
+}): boolean {
+  if (!args.queueStarving) return false;
+  if (args.ai.publish !== true) return false;
+  if (hasHardQualityRisk(args.ai)) return false;
+  return isWeakPostAiGateReject(args.rejectReason);
+}
+
 
 function resolveCandidateRejectReason(
   ev: CandidateEvaluation,
