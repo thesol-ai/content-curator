@@ -164,7 +164,7 @@ STORY_INTELLIGENCE_FOLLOWUP_ALLOW_ENABLED = "true"
 STORY_INTELLIGENCE_SEMANTIC_REJECT_ENABLED = "true"
 STORY_INTELLIGENCE_RETENTION_DAYS = "30"
 # ── Final publish duplicate guard: generic last gate before publish_queue insert ──
-FINAL_PUBLISH_DUPLICATE_GUARD_ENABLED = "false"
+FINAL_PUBLISH_DUPLICATE_GUARD_ENABLED = "true"
 FINAL_PUBLISH_DUPLICATE_GUARD_WINDOW_HOURS = "72"
 # ── RSS feed ingestion (independent, zero-Apify-cost; default OFF for dark launch) ──
 RSS_INGEST_ENABLED = "false"

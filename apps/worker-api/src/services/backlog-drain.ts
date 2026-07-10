@@ -1810,8 +1810,20 @@ const FINAL_DUPE_STOP_TERMS = new Set([
   'new','now','latest','just','breaking','bullish','watch','whale','crypto','market','markets',
   'report','reports','says','said','according','per','data','today','yesterday','tomorrow',
   'chain','network','protocol','ecosystem','price','prices','token','tokens','coin','coins',
+  'big','insight','via','daily','weekly','monthly','year','years','month','months','june','july',
+  '2024','2025','2026','2027','million','billion','thousand','dollar','dollars','usd',
+  'institutional','corporate','analysis','activity','commentary','structure','product','infrastructure',
+  'signal','metric','metrics','finance','supply','framework','wallet','performance','strategy',
   'خبر','جدید','بازار','رمزارز','کریپتو','گزارش','طبق','اعلام','امروز','دیروز','فردا',
   'این','آن','برای','از','به','در','با','که','شد','می‌شود','کرد','کرده','است','هست',
+  'است.','های','نشان','دهنده','کوین','دلار','دارایی','شده','بیت','خود','میلیون',
+  'شرکت','سرمایه','کند','کند.','تواند','اقدام','گذاری','صرافی','مالی','سال','قانون',
+  'داده','رمزارزها','بیش','شبکه','توسط','استفاده','میلیارد','اتریوم','کاربران',
+  'آمریکا','دهد','دهد.','رمزارزی','حدود','شود','شود.','پیش','ارزش','قابل',
+  'تراکنش','بلاکچین','حجم','بازارهای','دلاری','خدمات','باشد','باشد.','پلتفرم',
+  'حال','بین','فعالیت','حوزه','بیشتر','توکن','راه','رشد','دارد','دارد.','هدف',
+  'خواهد','معاملات','ماه','ارائه','ثبت','گذاران','قیمت','درصد','سهام','روی',
+  'گذشته','روند','قرار','دلیل','دریافت','معامله',
 ]);
 
 const FINAL_DUPE_GENERIC_ASSET_TERMS = new Set([
@@ -1821,15 +1833,32 @@ const FINAL_DUPE_GENERIC_ASSET_TERMS = new Set([
 const FINAL_DUPE_ACTION_TERMS = new Set([
   'buy','buys','bought','purchase','purchases','purchased','sell','sells','sold','selling',
   'acquire','acquires','acquired','acquisition','merge','merger','partnership',
-  'launch','launches','launched','listing','lists','listed','approve','approves','approved',
-  'approval','reject','rejects','rejected','file','files','filed','filing',
-  'regulation','regulatory','law','act','bill','license','licence','sanction','sanctions',
-  'hack','exploit','exploited','drain','drained','attack','bug','audit','security',
-  'volume','tvl','inflow','outflow','flows','treasury','reserve','reserves','holdings',
+  'launch','launches','launched','listing','lists','listed','delist','delists','delisted','delisting',
+  'approve','approves','approved','approval','authorize','authorizes','authorized',
+  'secure','secures','secured','receive','receives','received',
+  'reject','rejects','rejected','file','files','filed','filing','pass','passes','passed',
+  'defend','defends','defended','veto','vetoes','vetoed',
+  'regulation','regulatory','law','act','bill','license','licence','licensing',
+  'sanction','sanctions','enforce','enforces','enforced','enforcement',
+  'lawsuit','litigation','settlement','fraud',
+  'hack','exploit','exploited','drain','drained','attack','bug','audit','security','phishing',
+  'volume','tvl','inflow','inflows','outflow','outflows','flow','flows','liquidity',
+  'treasury','reserve','reserves','holdings','custody',
   'funding','raise','raises','raised','investment','invests','invested',
-  'upgrade','upgrades','upgraded','governance','vote','votes','settlement','lawsuit',
+  'upgrade','upgrades','upgraded','governance','vote','votes',
+  'flip','flips','flipped','overtake','overtakes','overtook','exceed','exceeds','exceeded',
+  'surge','surges','surged','record','records','recorded','milestone',
+  'drop','drops','dropped','decline','declines','declined','rise','rises','rose',
+  'increase','increases','increased','decrease','decreases','decreased',
+  'crash','crashes','crashed','plunge','plunges','plunged',
+  'migrate','migrates','migrated','migration','integrate','integrates','integrated','integration',
+  'bridge','bridges','bridged','closure','close','closes','closed',
+  'stake','stakes','staked','staking','include','includes','included','inclusion',
+  'terminate','terminates','terminated','termination','movement','move','moves','moved',
   'خرید','فروش','تصاحب','ادغام','همکاری','راه‌اندازی','مجوز','قانون','تحریم','هک',
   'حمله','آسیب‌پذیری','حجم','ذخایر','دارایی','سرمایه‌گذاری','ارتقا','دادگاه',
+  'عبور','پیشی','رکورد','افزایش','کاهش','سقوط','تصویب','رد','دریافت','مهاجرت',
+  'یکپارچه‌سازی','حذف','تعلیق','شکایت','تسویه','کلاهبرداری','مجوزدهی','اجرایی',
 ]);
 
 function canonicalFinalDupeToken(raw: unknown): string | null {
@@ -1902,22 +1931,47 @@ function finalDupeNumbers(value: unknown): Set<string> {
   const text = normalizeFinalDupeText(value).replace(/,/g, '');
   const out = new Set<string>();
   const re = /(?:[$]\s*)?(\d+(?:\.\d+)?)\s*(k|m|mn|b|bn|t|million|billion|thousand|trillion|%|percent|btc|eth|trx|usd|usdt|usdc)?/gi;
+  const multipliers: Record<string, number> = {
+    k: 1_000,
+    m: 1_000_000,
+    b: 1_000_000_000,
+    t: 1_000_000_000_000,
+  };
+  const taggedUnits = new Set(['btc', 'eth', 'trx', 'usd', 'usdt', 'usdc']);
   let match: RegExpExecArray | null;
 
   while ((match = re.exec(text)) !== null) {
-    const n = Number(match[1]);
+    const rawNumber = match[1];
+    const n = Number(rawNumber);
     if (!Number.isFinite(n)) continue;
 
     let unit = String(match[2] ?? '').toLowerCase();
     if (['mn', 'million'].includes(unit)) unit = 'm';
     if (['bn', 'billion'].includes(unit)) unit = 'b';
     if (unit === 'thousand') unit = 'k';
+    if (unit === 'trillion') unit = 't';
     if (unit === 'percent') unit = '%';
 
-    // Tiny bare numbers are too noisy for crypto headlines.
-    if (!unit && n < 100) continue;
+    if (unit === '%') {
+      if (n >= 1) out.add(`${rawNumber}%`);
+      continue;
+    }
 
-    out.add(`${match[1]}${unit}`);
+    const multiplier = multipliers[unit] ?? 1;
+    const normalized = Math.round(n * multiplier);
+
+    // Tiny bare numbers and standalone years are noisy in crypto headlines.
+    if (!unit && normalized < 100) continue;
+    if (!unit && normalized >= 1900 && normalized <= 2100) continue;
+
+    if (normalized <= 0) continue;
+
+    // Add a unitless normalized value so 110k and 110,000 BTC can match.
+    out.add(String(normalized));
+
+    if (taggedUnits.has(unit)) {
+      out.add(`${normalized}${unit}`);
+    }
   }
 
   return out;
@@ -1972,8 +2026,12 @@ function finalDupeSpecificAnchors(tokens: Set<string>): Set<string> {
   for (const token of tokens) {
     if (FINAL_DUPE_STOP_TERMS.has(token)) continue;
     if (FINAL_DUPE_ACTION_TERMS.has(token)) continue;
+    // Generic assets like bitcoin/ethereum are too broad to be treated as
+    // specific story anchors. They remain useful as tokens/numbers context,
+    // but should not make unrelated BTC/ETH stories look duplicate.
+    if (FINAL_DUPE_GENERIC_ASSET_TERMS.has(token)) continue;
     if (/^\d/.test(token)) continue;
-    if (token.length < 4 && !FINAL_DUPE_GENERIC_ASSET_TERMS.has(token)) continue;
+    if (token.length < 4) continue;
     out.add(token);
   }
 
@@ -2071,7 +2129,9 @@ function scoreFinalPublishDuplicate(
     return { duplicate: true, score: 0.92, reason: 'semantic_story_similarity' };
   }
 
-  // Conservative generic fallback. No topic-specific names here.
+  // Strict generic fallback. The 7-day audit showed broad entity+number
+  // matching creates false positives, so only very high-confidence paraphrases
+  // are blocked here. Everything else is left to exact/story/semantic checks.
   if (followupAllowEnabled && isFollowUpEventType(current.eventType)) {
     return { duplicate: false, score: 0, reason: 'followup_allowed' };
   }
@@ -2082,24 +2142,26 @@ function scoreFinalPublishDuplicate(
   const tokenOverlap = intersectionCountSet(current.tokens, prior.tokens);
   const tokenJaccard = jaccardSet(current.tokens, prior.tokens);
 
-  // Same named entities + same material number is a strong general duplicate signal.
-  if (sharedAnchors >= 1 && sharedNumbers >= 1 && (sharedActions >= 1 || tokenOverlap >= 5 || tokenJaccard >= 0.16)) {
-    return { duplicate: true, score: Math.max(0.88, tokenJaccard), reason: 'shared_entity_and_material_number' };
+  // Strong rewritten-story duplicate:
+  // same specific entities + same event action + strong textual overlap.
+  if (sharedAnchors >= 3 && sharedActions >= 1 && tokenOverlap >= 8 && tokenJaccard >= 0.32) {
+    return { duplicate: true, score: Math.max(0.9, tokenJaccard), reason: 'strict_shared_entities_action' };
   }
 
-  // Multiple shared specific anchors + action overlap catches same story with rewritten wording.
-  if (sharedAnchors >= 2 && sharedActions >= 1 && (tokenOverlap >= 5 || tokenJaccard >= 0.18)) {
-    return { duplicate: true, score: Math.max(0.86, tokenJaccard), reason: 'shared_entities_and_action' };
+  // Number-heavy story duplicate:
+  // same specific entities + same material numbers + strong overlap.
+  if (sharedAnchors >= 2 && sharedNumbers >= 2 && tokenOverlap >= 8 && tokenJaccard >= 0.30) {
+    return { duplicate: true, score: Math.max(0.9, tokenJaccard), reason: 'strict_shared_entities_numbers' };
   }
 
-  // High lexical overlap with at least one specific anchor catches retells without material numbers.
-  if (sharedAnchors >= 1 && tokenOverlap >= 8 && tokenJaccard >= 0.28) {
-    return { duplicate: true, score: Math.max(0.84, tokenJaccard), reason: 'high_lexical_overlap_with_anchor' };
+  // One shared material number is allowed only with strong entity/action overlap.
+  if (sharedAnchors >= 3 && sharedActions >= 1 && sharedNumbers >= 1 && tokenOverlap >= 9 && tokenJaccard >= 0.34) {
+    return { duplicate: true, score: Math.max(0.9, tokenJaccard), reason: 'strict_entities_action_number' };
   }
 
-  // Very high overlap alone is accepted, but threshold is high to avoid blocking distinct updates.
-  if (tokenOverlap >= 10 && tokenJaccard >= 0.36) {
-    return { duplicate: true, score: Math.max(0.82, tokenJaccard), reason: 'very_high_lexical_overlap' };
+  // Near-copy / heavy paraphrase duplicate.
+  if (sharedAnchors >= 2 && tokenOverlap >= 16 && tokenJaccard >= 0.50) {
+    return { duplicate: true, score: Math.max(0.88, tokenJaccard), reason: 'strict_near_copy_overlap' };
   }
 
   return { duplicate: false, score: tokenJaccard, reason: 'no_strong_match' };
