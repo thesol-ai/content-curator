@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildEditorialFrameUser,
   buildTranslationSystem,
   buildTranslationUser,
+  isFinalTranslationCandidate,
   parseEditorialFactFrame,
   type TranslationTarget,
 } from '../apps/worker-api/src/services/ai-gate';
 import type {
+  AIGateResult,
   CategoryRow,
   EditorialFactFrame,
   NormalizedItem,
@@ -122,6 +125,62 @@ describe('editorial fact frame', () => {
     expect(user).toContain(
       'The CEO said the schedule remains conditional',
     );
+  });
+
+  it('builds Claude framing input only from supplied final survivors', () => {
+    const finalItem = item({
+      postId: 'final-1',
+      sourceUrl: 'https://example.com/final-1',
+      text: 'Final selected story.',
+    });
+
+    const rejectedItem = item({
+      postId: 'rejected-1',
+      sourceUrl: 'https://example.com/rejected-1',
+      text: 'Rejected story.',
+    });
+
+    const user = buildEditorialFrameUser([finalItem], 1200);
+
+    expect(user).toContain(finalItem.postId);
+    expect(user).toContain('Final selected story.');
+    expect(user).not.toContain(rejectedItem.postId);
+    expect(user).not.toContain('Rejected story.');
+  });
+
+  it('accepts only publish-eligible untranslated results as final candidates', () => {
+    const base: AIGateResult = {
+      publish: true,
+      score: 82,
+      riskLevel: 'low',
+      riskFlags: [],
+      topicFingerprint: 'company-product-launch',
+      publishPriority: 'normal',
+      translations: {},
+    };
+
+    expect(isFinalTranslationCandidate(base, 75)).toBe(true);
+
+    expect(
+      isFinalTranslationCandidate({ ...base, publish: false }, 75),
+    ).toBe(false);
+
+    expect(
+      isFinalTranslationCandidate({ ...base, score: 70 }, 75),
+    ).toBe(false);
+
+    expect(
+      isFinalTranslationCandidate({
+        ...base,
+        translations: {
+          fa: {
+            captionShort: 'تیتر',
+            captionFull: 'تیتر\n\nمتن',
+            hashtags: [],
+          },
+        },
+      }, 75),
+    ).toBe(false);
   });
 
   it('tells the writer to use the frame without copying it mechanically', () => {

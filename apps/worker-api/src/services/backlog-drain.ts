@@ -1028,7 +1028,15 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
         channelId: channels[0]?.id ?? null,
       }));
       try {
-        const translated = await attachTranslations(env, survivorItems, survivorAi, category, channels, survivorAttribution);
+        const translated = await attachTranslations(
+          env,
+          survivorItems,
+          survivorAi,
+          category,
+          channels,
+          survivorAttribution,
+          { finalCandidates: true },
+        );
         nonRssSurvivorIdx.forEach((i, k) => { decisions[i]!.ai = translated[k]!; });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

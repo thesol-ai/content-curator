@@ -308,9 +308,6 @@ export interface AIGateResult {
   topicFingerprint: string;
   publishPriority: PublishPriority;
   translations: Record<string, TranslationOutput>;
-  /** Optional Claude-produced factual boundary passed to the caption writer.
-   *  It does not affect selection, scoring, or publishing eligibility. */
-  editorialFactFrame?: EditorialFactFrame | null;
   /** Phase 6K (observe-only): structured story key derived from the model's
    *  primary_entities/event_type/canonical_date. Logged, never used to reject yet. */
   storyKey?: string | null;

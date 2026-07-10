@@ -36,7 +36,7 @@ const GEMINI_URL = (model: string) =>
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
 type AIProvider = 'anthropic' | 'gemini' | 'openai' | 'claude';
-type AIPurpose = 'scoring' | 'translation';
+type AIPurpose = 'scoring' | 'translation' | 'editorial_frame';
 
 interface AIUsageRecord {
   provider: AIProvider;
@@ -222,6 +222,23 @@ export async function scoreItems(
   return runScoring(env, cfg, items, category, whitelistedAccounts, attributionItems);
 }
 
+export interface AttachTranslationOptions {
+  /**
+   * Set true only after deterministic editorial, duplicate, audience,
+   * theme, and queue-eligibility gates have selected final survivors.
+   */
+  finalCandidates?: boolean;
+}
+
+export function isFinalTranslationCandidate(
+  result: AIGateResult | undefined,
+  scoreThreshold: number,
+): boolean {
+  if (!result || !result.publish) return false;
+  if ((result.score ?? 0) < scoreThreshold) return false;
+  return Object.keys(result.translations ?? {}).length === 0;
+}
+
 /**
  * Phase 6H — Stage 2: produce translations for the publish-eligible items that
  * do not already have them, and merge into the score results. Safe to call on
@@ -235,6 +252,7 @@ export async function attachTranslations(
   category: CategoryRow,
   channels: ChannelRow[] = [],
   attributionItems?: AttributionItem[],
+  options: AttachTranslationOptions = {},
 ): Promise<AIGateResult[]> {
   if (items.length === 0) return scoreResults;
 
@@ -242,12 +260,8 @@ export async function attachTranslations(
   cfg.languageTargets = JSON.parse(category.language_targets || '["fa"]');
   cfg.translationTargets = buildTranslationTargets(cfg.languageTargets, channels);
 
-  const needsTranslation = (i: number): boolean => {
-    const r = scoreResults[i];
-    if (!r || !r.publish) return false;
-    if ((r.score ?? 0) < category.score_threshold) return false;
-    return Object.keys(r.translations ?? {}).length === 0;
-  };
+  const needsTranslation = (i: number): boolean =>
+    isFinalTranslationCandidate(scoreResults[i], category.score_threshold);
 
   const selectedForTranslation = items.filter((_, i) => needsTranslation(i));
 
@@ -258,12 +272,15 @@ export async function attachTranslations(
   const attrByPostId = new Map<string, AttributionItem>(
     items.map((it, i) => [it.postId, attributionItems?.[i] ?? { sourceAccount: it.sourceAccount }] as const),
   );
-  const editorialFrameByPostId = new Map<string, EditorialFactFrame | null>(
-    items.map((it, i) => [
-      it.postId,
-      scoreResults[i]?.editorialFactFrame ?? null,
-    ] as const),
-  );
+  const editorialFrameByPostId = options.finalCandidates === true
+    ? await buildEditorialFramesForFinalCandidates(
+        env,
+        cfg,
+        selectedForTranslation,
+        category,
+        attrByPostId,
+      )
+    : new Map<string, EditorialFactFrame | null>();
 
   const translationsMap = await runTranslation(
     env,
@@ -586,18 +603,6 @@ async function runScoring(
       ].join('\n')
     : '';
 
-  const editorialFactFrameInstr = [
-    'For every item, also return an "editorial_frame" object.',
-    'This is NOT a proposed headline and must not contain promotional or creative wording.',
-    '"headline_fact": one short neutral sentence stating only the main source-supported event or claim, preferably in the source language.',
-    '"claim_type": exactly one of "fact", "opinion", "forecast", "allegation", "estimate", or "unknown".',
-    '"attribution": the explicit speaker, organization, report, filing, or source responsible for a non-factual claim; otherwise an empty string.',
-    '"must_include": up to 6 source-supported names, figures, dates, products, or technical terms that matter to an accurate rewrite.',
-    '"forbidden_inferences": up to 4 tempting but unsupported conclusions the caption must not introduce.',
-    'If the source is unclear, disputed, conditional, or speculative, preserve that uncertainty in headline_fact and claim_type.',
-    'For rejected or unusable items, still return a minimal editorial_frame when the main claim is identifiable; otherwise use an empty headline_fact.',
-  ].join('\n');
-
   const system = [
     `You are an expert content curator. ${profile}`,
     scoringEditorialPolicy,
@@ -606,14 +611,13 @@ async function runScoring(
     trustedCryptoRssGuidance,
     mustCoverCryptoAssetGuidance,
     storyIntelInstr,
-    editorialFactFrameInstr,
     '',
     `Score each item 0-100. Select items >= ${threshold}.`,
     '',
     'Return ONLY a JSON object with this exact structure (no markdown, no explanation):',
     storyIntelEnabled
-      ? '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","primary_entities":["Tether","Monero"],"event_type":"security_laundering","canonical_date":"2026-06-13","editorial_frame":{"headline_fact":"A neutral source-supported statement of the main event.","claim_type":"fact","attribution":"","must_include":["Tether","Monero"],"forbidden_inferences":["Do not invent a motive or market impact."]}}]}'
-      : '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","editorial_frame":{"headline_fact":"A neutral source-supported statement of the main event.","claim_type":"fact","attribution":"","must_include":[],"forbidden_inferences":[]}}]}',
+      ? '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal","primary_entities":["Tether","Monero"],"event_type":"security_laundering","canonical_date":"2026-06-13"}]}'
+      : '{"items":[{"url":"...","post_id":"...","publish":true,"score":85,"risk_level":"low","risk_flags":[],"topic_fingerprint":"short-slug","publish_priority":"normal"}]}',
     '',
     'publish_priority: "breaking"|"high"|"normal"|"low"',
     'risk_level: "low"|"medium"|"high" — set publish=false if high risk',
@@ -888,6 +892,299 @@ export function parseEditorialFactFrame(value: unknown): EditorialFactFrame | nu
   };
 }
 
+export function buildEditorialFrameUser(
+  items: NormalizedItem[],
+  maxChars: number,
+): string {
+  return JSON.stringify({
+    items: items.map(item => ({
+      post_id: item.postId,
+      url: item.sourceUrl,
+      platform: item.platform,
+      account: item.sourceAccount,
+      text: buildTranslationSourceText(item, maxChars),
+    })),
+  });
+}
+
+function buildEditorialFrameSystem(category: CategoryRow): string {
+  return [
+    `You extract factual boundaries for final publish candidates in category "${category.id}" (${category.label}).`,
+    'Every supplied item has already passed scoring and deterministic editorial gates.',
+    'Do not score, rank, reject, translate, or write the final headline.',
+    'Return ONLY JSON with this exact structure:',
+    '{"items":[{"post_id":"...","url":"...","editorial_frame":{"headline_fact":"...","claim_type":"fact","attribution":"","must_include":[],"forbidden_inferences":[]}}]}',
+    'Return exactly one result for every supplied post_id.',
+    '"headline_fact": one short neutral sentence stating only the main source-supported event or claim.',
+    '"claim_type": exactly one of "fact", "opinion", "forecast", "allegation", "estimate", or "unknown".',
+    '"attribution": the explicit speaker, organization, report, filing, or source responsible for a non-factual claim; otherwise empty.',
+    '"must_include": up to 6 source-supported names, figures, dates, products, or technical terms.',
+    '"forbidden_inferences": up to 4 tempting but unsupported conclusions the caption must not introduce.',
+    'Preserve uncertainty, attribution, conditions, and disputed status.',
+    'Do not add information absent from the source.',
+  ].join('\n');
+}
+
+function mapEditorialFrames(
+  parsedItems: any[],
+  originals: NormalizedItem[],
+): Map<string, EditorialFactFrame | null> {
+  const byPostId = new Map<string, EditorialFactFrame>();
+  const byUrl = new Map<string, EditorialFactFrame>();
+
+  for (const parsed of parsedItems) {
+    const frame = parseEditorialFactFrame(parsed?.editorial_frame);
+    if (!frame) continue;
+
+    const postId = sanitizeEditorialFrameText(parsed?.post_id, 200);
+    const url = sanitizeEditorialFrameText(parsed?.url, 1000);
+
+    if (postId) byPostId.set(postId, frame);
+
+    if (url) {
+      for (const key of urlLookupKeys(url)) {
+        byUrl.set(key, frame);
+      }
+    }
+  }
+
+  const result = new Map<string, EditorialFactFrame | null>();
+
+  for (const item of originals) {
+    const urlFrame = urlLookupKeys(item.sourceUrl)
+      .map(key => byUrl.get(key))
+      .find((value): value is EditorialFactFrame => value != null);
+
+    result.set(
+      item.postId,
+      byPostId.get(item.postId) ?? urlFrame ?? null,
+    );
+  }
+
+  return result;
+}
+
+async function checkEditorialFrameBudget(
+  env: Env,
+): Promise<AIBudgetCheck> {
+  const maxCalls = Math.max(
+    0,
+    parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0,
+  );
+  const tokenBudget = Math.max(
+    0,
+    parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0,
+  );
+
+  const fallback: AIBudgetCheck = {
+    allowed: true,
+    callsToday: 0,
+    tokensToday: 0,
+    maxCalls,
+    tokenBudget,
+  };
+
+  if (!env.DB || (maxCalls === 0 && tokenBudget === 0)) {
+    return fallback;
+  }
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) as calls,
+             COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+      FROM ai_usage
+      WHERE provider='anthropic'
+        AND purpose IN ('scoring','editorial_frame')
+        AND status='success'
+        AND created_at > datetime('now','-1 day')
+    `).first<{ calls: number; tokens: number }>();
+
+    const callsToday = Number(row?.calls ?? 0);
+    const tokensToday = Number(row?.tokens ?? 0);
+
+    if (maxCalls > 0 && callsToday >= maxCalls) {
+      return {
+        allowed: false,
+        reason: `AI_MAX_CALLS_PER_DAY reached (${callsToday}/${maxCalls})`,
+        callsToday,
+        tokensToday,
+        maxCalls,
+        tokenBudget,
+      };
+    }
+
+    if (tokenBudget > 0 && tokensToday >= tokenBudget) {
+      return {
+        allowed: false,
+        reason: `AI_DAILY_TOKEN_BUDGET reached (${tokensToday}/${tokenBudget})`,
+        callsToday,
+        tokensToday,
+        maxCalls,
+        tokenBudget,
+      };
+    }
+
+    return {
+      allowed: true,
+      callsToday,
+      tokensToday,
+      maxCalls,
+      tokenBudget,
+    };
+  } catch (error) {
+    console.warn(
+      '[EditorialFrame] budget check skipped:',
+      error instanceof Error ? error.message : String(error),
+    );
+    return fallback;
+  }
+}
+
+async function buildEditorialFramesForFinalCandidates(
+  env: Env,
+  cfg: Config,
+  items: NormalizedItem[],
+  category: CategoryRow,
+  attributionByPostId?: Map<string, AttributionItem>,
+): Promise<Map<string, EditorialFactFrame | null>> {
+  const empty = new Map<string, EditorialFactFrame | null>();
+
+  if (items.length === 0) return empty;
+
+  const apiKey = env.ANTHROPIC_API_KEY?.trim();
+
+  if (!apiKey) {
+    console.warn(
+      '[EditorialFrame] ANTHROPIC_API_KEY missing; continuing without frames.',
+    );
+    return empty;
+  }
+
+  const budget = await checkEditorialFrameBudget(env);
+
+  if (!budget.allowed) {
+    console.warn(`[EditorialFrame] skipped: ${budget.reason}`);
+
+    await recordAIUsage(env, {
+      provider: 'anthropic',
+      purpose: 'editorial_frame',
+      model: cfg.scoringModel,
+      inputTokens: 0,
+      outputTokens: 0,
+      status: 'skipped',
+      errorMessage: budget.reason,
+    });
+
+    return empty;
+  }
+
+  const system = buildEditorialFrameSystem(category);
+  const user = buildEditorialFrameUser(
+    items,
+    translationTextMaxChars(cfg, category),
+  );
+  const maxTokens = Math.min(
+    cfg.maxOutputTokens,
+    Math.max(512, items.length * 320),
+  );
+
+  let lastError = '';
+
+  for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+    if (attempt > 0) await sleep(1500 * attempt);
+
+    try {
+      const response = await fetch(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VER,
+        },
+        body: JSON.stringify({
+          model: cfg.scoringModel,
+          max_tokens: maxTokens,
+          system,
+          messages: [{ role: 'user', content: user }],
+        }),
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      if (!response.ok) {
+        lastError = `Claude HTTP ${response.status}`;
+        continue;
+      }
+
+      const body = await response.json() as any;
+      const usage = extractAnthropicUsage(body);
+
+      const usageId = await recordAIUsage(env, {
+        provider: 'anthropic',
+        purpose: 'editorial_frame',
+        model: cfg.scoringModel,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        status: 'success',
+      });
+
+      await recordUsageAttribution(env, {
+        categoryId: category.id,
+        purpose: 'editorial_frame',
+        provider: 'anthropic',
+        model: cfg.scoringModel,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        items: items.map(item =>
+          attributionByPostId?.get(item.postId)
+          ?? { sourceAccount: item.sourceAccount }
+        ),
+        aiUsageId: usageId,
+      });
+
+      const responseText = String(body.content?.[0]?.text ?? '');
+      const parsed = extractJsonObject(responseText);
+
+      if (!parsed || !Array.isArray(parsed.items)) {
+        console.warn(
+          '[EditorialFrame] invalid JSON; continuing without frames.',
+        );
+        return empty;
+      }
+
+      const frames = mapEditorialFrames(parsed.items, items);
+      const usable = Array.from(frames.values())
+        .filter(value => value != null)
+        .length;
+
+      console.log(
+        `[EditorialFrame] final_candidates=${items.length} usable_frames=${usable}`,
+      );
+
+      return frames;
+    } catch (error) {
+      lastError = error instanceof Error
+        ? error.message
+        : String(error);
+    }
+  }
+
+  console.warn(
+    `[EditorialFrame] failed for ${items.length} final candidate(s): ${lastError}`,
+  );
+
+  await recordAIUsage(env, {
+    provider: 'anthropic',
+    purpose: 'editorial_frame',
+    model: cfg.scoringModel,
+    inputTokens: 0,
+    outputTokens: 0,
+    status: 'failed',
+    errorMessage: lastError,
+  });
+
+  return empty;
+}
+
 function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateResult[] {
   const byUrl = new Map<string, any>();
   const byPostId = new Map<string, any>();
@@ -938,7 +1235,6 @@ function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateRes
         : `fp-${item.postId}`,
       publishPriority: (validPriorities.includes(p.publish_priority) ? p.publish_priority : 'normal') as any,
       translations: {},
-      editorialFactFrame: parseEditorialFactFrame(p.editorial_frame),
       storyKey: buildStoryKey(parseStoryFields(p)),
       storyFields: parseStoryFields(p),
     };
@@ -1987,7 +2283,7 @@ async function checkScoringBudget(env: Env, cfg: Config): Promise<AIBudgetCheck>
       SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
       FROM ai_usage
       WHERE provider='anthropic'
-        AND purpose='scoring'
+        AND purpose IN ('scoring','editorial_frame')
         AND status='success'
         AND created_at > datetime('now','-1 day')
     `).first<{ calls: number; tokens: number }>();
