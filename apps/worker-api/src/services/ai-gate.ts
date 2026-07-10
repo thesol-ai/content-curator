@@ -215,6 +215,61 @@ export async function scoreItems(
   return runScoring(env, cfg, items, category, whitelistedAccounts, attributionItems);
 }
 
+export interface TranslationScoringContext {
+  score: number;
+  risk_level: AIGateResult['riskLevel'];
+  risk_flags: string[];
+  topic_fingerprint: string;
+  publish_priority: AIGateResult['publishPriority'];
+  story_key: string | null;
+  primary_entities: string[];
+  event_type: string;
+  canonical_date: string;
+}
+
+/**
+ * Build advisory context from data already returned by Claude scoring.
+ *
+ * This function does not call an AI provider, does not alter eligibility, and
+ * does not affect queue or publish decisions. The source text remains the
+ * authoritative input for caption writing.
+ */
+export function buildTranslationScoringContext(
+  result: AIGateResult | undefined,
+): TranslationScoringContext | null {
+  if (!result) return null;
+
+  const story = result.storyFields;
+
+  return {
+    score: Number.isFinite(Number(result.score))
+      ? Number(result.score)
+      : 0,
+    risk_level: result.riskLevel,
+    risk_flags: Array.isArray(result.riskFlags)
+      ? result.riskFlags
+          .filter(flag => typeof flag === 'string')
+          .slice(0, 10)
+      : [],
+    topic_fingerprint: String(result.topicFingerprint ?? '').slice(0, 160),
+    publish_priority: result.publishPriority,
+    story_key: result.storyKey
+      ? String(result.storyKey).slice(0, 240)
+      : null,
+    primary_entities: Array.isArray(story?.primaryEntities)
+      ? story.primaryEntities
+          .filter(entity => typeof entity === 'string')
+          .slice(0, 3)
+      : [],
+    event_type: typeof story?.eventType === 'string'
+      ? story.eventType.slice(0, 100)
+      : '',
+    canonical_date: typeof story?.canonicalDate === 'string'
+      ? story.canonicalDate.slice(0, 20)
+      : '',
+  };
+}
+
 /**
  * Phase 6H — Stage 2: produce translations for the publish-eligible items that
  * do not already have them, and merge into the score results. Safe to call on
@@ -249,9 +304,32 @@ export async function attachTranslations(
   }
 
   const attrByPostId = new Map<string, AttributionItem>(
-    items.map((it, i) => [it.postId, attributionItems?.[i] ?? { sourceAccount: it.sourceAccount }] as const),
+    items.map((it, i) => [
+      it.postId,
+      attributionItems?.[i] ?? { sourceAccount: it.sourceAccount },
+    ] as const),
   );
-  const translationsMap = await runTranslation(env, cfg, selectedForTranslation, category, attrByPostId);
+
+  const scoringContextByPostId =
+    new Map<string, TranslationScoringContext>();
+
+  items.forEach((item, index) => {
+    if (!needsTranslation(index)) return;
+
+    const context = buildTranslationScoringContext(scoreResults[index]);
+    if (context) {
+      scoringContextByPostId.set(item.postId, context);
+    }
+  });
+
+  const translationsMap = await runTranslation(
+    env,
+    cfg,
+    selectedForTranslation,
+    category,
+    attrByPostId,
+    scoringContextByPostId,
+  );
 
   return scoreResults.map((result, i) => {
     const item = items[i]!;
@@ -1128,6 +1206,7 @@ async function runTranslation(
   items: NormalizedItem[],
   category: CategoryRow,
   attrByPostId?: Map<string, AttributionItem>,
+  scoringContextByPostId?: Map<string, TranslationScoringContext>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const result = new Map<string, any>();
   if (items.length === 0) return result;
@@ -1136,7 +1215,15 @@ async function runTranslation(
 
   for (let offset = 0; offset < items.length; offset += batchSize) {
     const chunk = items.slice(offset, offset + batchSize);
-    const chunkMap = await runTranslationChunk(env, cfg, chunk, category, offset, attrByPostId);
+    const chunkMap = await runTranslationChunk(
+      env,
+      cfg,
+      chunk,
+      category,
+      offset,
+      attrByPostId,
+      scoringContextByPostId,
+    );
     for (const [key, value] of chunkMap.entries()) result.set(key, value);
   }
 
@@ -1151,6 +1238,7 @@ async function runTranslationChunk(
   category: CategoryRow,
   offset: number,
   attrByPostId?: Map<string, AttributionItem>,
+  scoringContextByPostId?: Map<string, TranslationScoringContext>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const provider = cfg.translationProvider;
   const result = new Map<string, any>();
@@ -1158,7 +1246,12 @@ async function runTranslationChunk(
   const captureUsage = (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => { chunkUsage = u; };
 
   const system = buildTranslationSystem(cfg.translationTargets, category);
-  const user = buildTranslationUser(items, cfg.translationTargets, translationTextMaxChars(cfg, category));
+  const user = buildTranslationUser(
+    items,
+    cfg.translationTargets,
+    translationTextMaxChars(cfg, category),
+    scoringContextByPostId,
+  );
 
   let responseText = '';
   let lastErr = '';
@@ -1549,6 +1642,10 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     `You are an expert content curator and Telegram channel editor for category "${category.id}" (${category.label}).`,
     'For each item, write Telegram-ready posts for every translation target below.',
     'Rewrite for the target audience. Do not produce literal tweet translations.',
+    'Before writing each item, privately construct an editorial fact frame containing: the central source-supported fact, claim type, attribution, must-include details, and forbidden unsupported inferences.',
+    'Use scoring_context only as advisory metadata to identify the likely event, entities, risk, and uncertainty. The supplied source text is authoritative whenever the two differ.',
+    'Do not output the editorial fact frame, hidden analysis, or reasoning. Return only the translations JSON contract below.',
+    'Use the same private fact frame for caption_short and caption_full so their title, certainty, attribution, figures, dates, and central event remain consistent.',
     ...universalCaptionGuidance,
     ...cryptoCaptionGuidance,
     'Make the post feel like a real channel post: news, educational, or analytical based on the target settings.',
@@ -1610,13 +1707,19 @@ function translationTextMaxChars(cfg: Config, category: CategoryRow): number {
   return isCryptoCategory(category) ? Math.max(cfg.translationMaxTextChars, 1200) : cfg.translationMaxTextChars;
 }
 
-function buildTranslationUser(items: NormalizedItem[], targets: TranslationTarget[], maxChars: number): string {
+export function buildTranslationUser(
+  items: NormalizedItem[],
+  targets: TranslationTarget[],
+  maxChars: number,
+  scoringContextByPostId?: Map<string, TranslationScoringContext>,
+): string {
   const data = items.map(it => ({
     post_id: it.postId,
     url: it.sourceUrl,
     platform: it.platform,
     account: it.sourceAccount,
     text: it.text.slice(0, maxChars),
+    scoring_context: scoringContextByPostId?.get(it.postId) ?? null,
     has_media: it.media.length > 0,
     media_count: it.media.length,
     is_reply: it.isReply === true,
