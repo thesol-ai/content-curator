@@ -1250,14 +1250,17 @@ function resolveCandidateRejectReason(
   const themeReject = mustCover ? null : ev.themeCapRejectReason;
   const audienceReject = mustCover ? null : ev.audienceRejectReason;
 
+  // Story clusters are intentionally broad editorial buckets. The 7-day audit
+  // showed that a cluster match alone can create false positives across unrelated
+  // stories. Treat cluster matches as advisory metadata only; hard duplicate
+  // rejection must come from exact topic fingerprints, story-key checks,
+  // semantic story similarity, the AI duplicate judge, or the final publish guard.
   return ev.recentTopicDuplicate
     ? 'similar_topic_recent_channel'
-    : ev.recentStoryClusterDuplicate
-      ? 'similar_story_cluster_recent_channel'
-      : ev.storyKeyRejectReason
-        ?? themeReject
-        ?? audienceReject
-        ?? getItemRejectReason(ai, category, item, similarTopicRejected);
+    : ev.storyKeyRejectReason
+      ?? themeReject
+      ?? audienceReject
+      ?? getItemRejectReason(ai, category, item, similarTopicRejected);
 }
 
 /**
