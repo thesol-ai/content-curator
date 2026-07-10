@@ -5,14 +5,7 @@
 //   مرحله ۲ — Gemini یا OpenAI: Translation + Caption نوشتن
 // ══════════════════════════════════════════════════════════════
 
-import type {
-  Env,
-  NormalizedItem,
-  AIGateResult,
-  CategoryRow,
-  ChannelRow,
-  EditorialFactFrame,
-} from '../types';
+import type { Env, NormalizedItem, AIGateResult, CategoryRow, ChannelRow } from '../types';
 import { getPreAiContentRejectReason } from './content-policy';
 import { getHardPreAiCryptoAudienceRejectReason } from './story-quality-guard';
 import { getCategoryPolicy } from '../categories/registry';
@@ -36,7 +29,7 @@ const GEMINI_URL = (model: string) =>
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
 type AIProvider = 'anthropic' | 'gemini' | 'openai' | 'claude';
-type AIPurpose = 'scoring' | 'translation' | 'editorial_frame';
+type AIPurpose = 'scoring' | 'translation';
 
 interface AIUsageRecord {
   provider: AIProvider;
@@ -222,21 +215,59 @@ export async function scoreItems(
   return runScoring(env, cfg, items, category, whitelistedAccounts, attributionItems);
 }
 
-export interface AttachTranslationOptions {
-  /**
-   * Set true only after deterministic editorial, duplicate, audience,
-   * theme, and queue-eligibility gates have selected final survivors.
-   */
-  finalCandidates?: boolean;
+export interface TranslationScoringContext {
+  score: number;
+  risk_level: AIGateResult['riskLevel'];
+  risk_flags: string[];
+  topic_fingerprint: string;
+  publish_priority: AIGateResult['publishPriority'];
+  story_key: string | null;
+  primary_entities: string[];
+  event_type: string;
+  canonical_date: string;
 }
 
-export function isFinalTranslationCandidate(
+/**
+ * Build advisory context from data already returned by Claude scoring.
+ *
+ * This function does not call an AI provider, does not alter eligibility, and
+ * does not affect queue or publish decisions. The source text remains the
+ * authoritative input for caption writing.
+ */
+export function buildTranslationScoringContext(
   result: AIGateResult | undefined,
-  scoreThreshold: number,
-): boolean {
-  if (!result || !result.publish) return false;
-  if ((result.score ?? 0) < scoreThreshold) return false;
-  return Object.keys(result.translations ?? {}).length === 0;
+): TranslationScoringContext | null {
+  if (!result) return null;
+
+  const story = result.storyFields;
+
+  return {
+    score: Number.isFinite(Number(result.score))
+      ? Number(result.score)
+      : 0,
+    risk_level: result.riskLevel,
+    risk_flags: Array.isArray(result.riskFlags)
+      ? result.riskFlags
+          .filter(flag => typeof flag === 'string')
+          .slice(0, 10)
+      : [],
+    topic_fingerprint: String(result.topicFingerprint ?? '').slice(0, 160),
+    publish_priority: result.publishPriority,
+    story_key: result.storyKey
+      ? String(result.storyKey).slice(0, 240)
+      : null,
+    primary_entities: Array.isArray(story?.primaryEntities)
+      ? story.primaryEntities
+          .filter(entity => typeof entity === 'string')
+          .slice(0, 3)
+      : [],
+    event_type: typeof story?.eventType === 'string'
+      ? story.eventType.slice(0, 100)
+      : '',
+    canonical_date: typeof story?.canonicalDate === 'string'
+      ? story.canonicalDate.slice(0, 20)
+      : '',
+  };
 }
 
 /**
@@ -252,7 +283,6 @@ export async function attachTranslations(
   category: CategoryRow,
   channels: ChannelRow[] = [],
   attributionItems?: AttributionItem[],
-  options: AttachTranslationOptions = {},
 ): Promise<AIGateResult[]> {
   if (items.length === 0) return scoreResults;
 
@@ -260,8 +290,12 @@ export async function attachTranslations(
   cfg.languageTargets = JSON.parse(category.language_targets || '["fa"]');
   cfg.translationTargets = buildTranslationTargets(cfg.languageTargets, channels);
 
-  const needsTranslation = (i: number): boolean =>
-    isFinalTranslationCandidate(scoreResults[i], category.score_threshold);
+  const needsTranslation = (i: number): boolean => {
+    const r = scoreResults[i];
+    if (!r || !r.publish) return false;
+    if ((r.score ?? 0) < category.score_threshold) return false;
+    return Object.keys(r.translations ?? {}).length === 0;
+  };
 
   const selectedForTranslation = items.filter((_, i) => needsTranslation(i));
 
@@ -270,17 +304,23 @@ export async function attachTranslations(
   }
 
   const attrByPostId = new Map<string, AttributionItem>(
-    items.map((it, i) => [it.postId, attributionItems?.[i] ?? { sourceAccount: it.sourceAccount }] as const),
+    items.map((it, i) => [
+      it.postId,
+      attributionItems?.[i] ?? { sourceAccount: it.sourceAccount },
+    ] as const),
   );
-  const editorialFrameByPostId = options.finalCandidates === true
-    ? await buildEditorialFramesForFinalCandidates(
-        env,
-        cfg,
-        selectedForTranslation,
-        category,
-        attrByPostId,
-      )
-    : new Map<string, EditorialFactFrame | null>();
+
+  const scoringContextByPostId =
+    new Map<string, TranslationScoringContext>();
+
+  items.forEach((item, index) => {
+    if (!needsTranslation(index)) return;
+
+    const context = buildTranslationScoringContext(scoreResults[index]);
+    if (context) {
+      scoringContextByPostId.set(item.postId, context);
+    }
+  });
 
   const translationsMap = await runTranslation(
     env,
@@ -288,7 +328,7 @@ export async function attachTranslations(
     selectedForTranslation,
     category,
     attrByPostId,
-    editorialFrameByPostId,
+    scoringContextByPostId,
   );
 
   return scoreResults.map((result, i) => {
@@ -819,372 +859,6 @@ function statusIdFromUrl(raw: unknown): string | null {
   return m ? m[1]! : null;
 }
 
-const EDITORIAL_CLAIM_TYPES = new Set([
-  'fact',
-  'opinion',
-  'forecast',
-  'allegation',
-  'estimate',
-  'unknown',
-]);
-
-function sanitizeEditorialFrameText(value: unknown, maxLength: number): string {
-  return String(value ?? '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, maxLength);
-}
-
-function sanitizeEditorialFrameList(
-  value: unknown,
-  maxItems: number,
-  maxItemLength: number,
-): string[] {
-  if (!Array.isArray(value)) return [];
-
-  const unique = new Set<string>();
-
-  for (const item of value) {
-    const cleaned = sanitizeEditorialFrameText(item, maxItemLength);
-    if (!cleaned) continue;
-    unique.add(cleaned);
-    if (unique.size >= maxItems) break;
-  }
-
-  return Array.from(unique);
-}
-
-export function parseEditorialFactFrame(value: unknown): EditorialFactFrame | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-
-  const raw = value as Record<string, unknown>;
-  const headlineFact = sanitizeEditorialFrameText(
-    raw.headline_fact ?? raw.headlineFact,
-    500,
-  );
-
-  if (!headlineFact) return null;
-
-  const requestedClaimType = sanitizeEditorialFrameText(
-    raw.claim_type ?? raw.claimType,
-    24,
-  ).toLowerCase();
-
-  const claimType = EDITORIAL_CLAIM_TYPES.has(requestedClaimType)
-    ? requestedClaimType as EditorialFactFrame['claimType']
-    : 'unknown';
-
-  return {
-    headlineFact,
-    claimType,
-    attribution: sanitizeEditorialFrameText(raw.attribution, 200),
-    mustInclude: sanitizeEditorialFrameList(
-      raw.must_include ?? raw.mustInclude,
-      6,
-      120,
-    ),
-    forbiddenInferences: sanitizeEditorialFrameList(
-      raw.forbidden_inferences ?? raw.forbiddenInferences,
-      4,
-      240,
-    ),
-  };
-}
-
-export function buildEditorialFrameUser(
-  items: NormalizedItem[],
-  maxChars: number,
-): string {
-  return JSON.stringify({
-    items: items.map(item => ({
-      post_id: item.postId,
-      url: item.sourceUrl,
-      platform: item.platform,
-      account: item.sourceAccount,
-      text: buildTranslationSourceText(item, maxChars),
-    })),
-  });
-}
-
-function buildEditorialFrameSystem(category: CategoryRow): string {
-  return [
-    `You extract factual boundaries for final publish candidates in category "${category.id}" (${category.label}).`,
-    'Every supplied item has already passed scoring and deterministic editorial gates.',
-    'Do not score, rank, reject, translate, or write the final headline.',
-    'Return ONLY JSON with this exact structure:',
-    '{"items":[{"post_id":"...","url":"...","editorial_frame":{"headline_fact":"...","claim_type":"fact","attribution":"","must_include":[],"forbidden_inferences":[]}}]}',
-    'Return exactly one result for every supplied post_id.',
-    '"headline_fact": one short neutral sentence stating only the main source-supported event or claim.',
-    '"claim_type": exactly one of "fact", "opinion", "forecast", "allegation", "estimate", or "unknown".',
-    '"attribution": the explicit speaker, organization, report, filing, or source responsible for a non-factual claim; otherwise empty.',
-    '"must_include": up to 6 source-supported names, figures, dates, products, or technical terms.',
-    '"forbidden_inferences": up to 4 tempting but unsupported conclusions the caption must not introduce.',
-    'Preserve uncertainty, attribution, conditions, and disputed status.',
-    'Do not add information absent from the source.',
-  ].join('\n');
-}
-
-function mapEditorialFrames(
-  parsedItems: any[],
-  originals: NormalizedItem[],
-): Map<string, EditorialFactFrame | null> {
-  const byPostId = new Map<string, EditorialFactFrame>();
-  const byUrl = new Map<string, EditorialFactFrame>();
-
-  for (const parsed of parsedItems) {
-    const frame = parseEditorialFactFrame(parsed?.editorial_frame);
-    if (!frame) continue;
-
-    const postId = sanitizeEditorialFrameText(parsed?.post_id, 200);
-    const url = sanitizeEditorialFrameText(parsed?.url, 1000);
-
-    if (postId) byPostId.set(postId, frame);
-
-    if (url) {
-      for (const key of urlLookupKeys(url)) {
-        byUrl.set(key, frame);
-      }
-    }
-  }
-
-  const result = new Map<string, EditorialFactFrame | null>();
-
-  for (const item of originals) {
-    const urlFrame = urlLookupKeys(item.sourceUrl)
-      .map(key => byUrl.get(key))
-      .find((value): value is EditorialFactFrame => value != null);
-
-    result.set(
-      item.postId,
-      byPostId.get(item.postId) ?? urlFrame ?? null,
-    );
-  }
-
-  return result;
-}
-
-async function checkEditorialFrameBudget(
-  env: Env,
-): Promise<AIBudgetCheck> {
-  const maxCalls = Math.max(
-    0,
-    parseInt(env.AI_MAX_CALLS_PER_DAY || '0', 10) || 0,
-  );
-  const tokenBudget = Math.max(
-    0,
-    parseInt(env.AI_DAILY_TOKEN_BUDGET || '0', 10) || 0,
-  );
-
-  const fallback: AIBudgetCheck = {
-    allowed: true,
-    callsToday: 0,
-    tokensToday: 0,
-    maxCalls,
-    tokenBudget,
-  };
-
-  if (!env.DB || (maxCalls === 0 && tokenBudget === 0)) {
-    return fallback;
-  }
-
-  try {
-    const row = await env.DB.prepare(`
-      SELECT COUNT(*) as calls,
-             COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
-      FROM ai_usage
-      WHERE provider='anthropic'
-        AND purpose IN ('scoring','editorial_frame')
-        AND status='success'
-        AND created_at > datetime('now','-1 day')
-    `).first<{ calls: number; tokens: number }>();
-
-    const callsToday = Number(row?.calls ?? 0);
-    const tokensToday = Number(row?.tokens ?? 0);
-
-    if (maxCalls > 0 && callsToday >= maxCalls) {
-      return {
-        allowed: false,
-        reason: `AI_MAX_CALLS_PER_DAY reached (${callsToday}/${maxCalls})`,
-        callsToday,
-        tokensToday,
-        maxCalls,
-        tokenBudget,
-      };
-    }
-
-    if (tokenBudget > 0 && tokensToday >= tokenBudget) {
-      return {
-        allowed: false,
-        reason: `AI_DAILY_TOKEN_BUDGET reached (${tokensToday}/${tokenBudget})`,
-        callsToday,
-        tokensToday,
-        maxCalls,
-        tokenBudget,
-      };
-    }
-
-    return {
-      allowed: true,
-      callsToday,
-      tokensToday,
-      maxCalls,
-      tokenBudget,
-    };
-  } catch (error) {
-    console.warn(
-      '[EditorialFrame] budget check skipped:',
-      error instanceof Error ? error.message : String(error),
-    );
-    return fallback;
-  }
-}
-
-async function buildEditorialFramesForFinalCandidates(
-  env: Env,
-  cfg: Config,
-  items: NormalizedItem[],
-  category: CategoryRow,
-  attributionByPostId?: Map<string, AttributionItem>,
-): Promise<Map<string, EditorialFactFrame | null>> {
-  const empty = new Map<string, EditorialFactFrame | null>();
-
-  if (items.length === 0) return empty;
-
-  const apiKey = env.ANTHROPIC_API_KEY?.trim();
-
-  if (!apiKey) {
-    console.warn(
-      '[EditorialFrame] ANTHROPIC_API_KEY missing; continuing without frames.',
-    );
-    return empty;
-  }
-
-  const budget = await checkEditorialFrameBudget(env);
-
-  if (!budget.allowed) {
-    console.warn(`[EditorialFrame] skipped: ${budget.reason}`);
-
-    await recordAIUsage(env, {
-      provider: 'anthropic',
-      purpose: 'editorial_frame',
-      model: cfg.scoringModel,
-      inputTokens: 0,
-      outputTokens: 0,
-      status: 'skipped',
-      errorMessage: budget.reason,
-    });
-
-    return empty;
-  }
-
-  const system = buildEditorialFrameSystem(category);
-  const user = buildEditorialFrameUser(
-    items,
-    translationTextMaxChars(cfg, category),
-  );
-  const maxTokens = Math.min(
-    cfg.maxOutputTokens,
-    Math.max(512, items.length * 320),
-  );
-
-  let lastError = '';
-
-  for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
-    if (attempt > 0) await sleep(1500 * attempt);
-
-    try {
-      const response = await fetch(ANTHROPIC_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': ANTHROPIC_VER,
-        },
-        body: JSON.stringify({
-          model: cfg.scoringModel,
-          max_tokens: maxTokens,
-          system,
-          messages: [{ role: 'user', content: user }],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-
-      if (!response.ok) {
-        lastError = `Claude HTTP ${response.status}`;
-        continue;
-      }
-
-      const body = await response.json() as any;
-      const usage = extractAnthropicUsage(body);
-
-      const usageId = await recordAIUsage(env, {
-        provider: 'anthropic',
-        purpose: 'editorial_frame',
-        model: cfg.scoringModel,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        status: 'success',
-      });
-
-      await recordUsageAttribution(env, {
-        categoryId: category.id,
-        purpose: 'editorial_frame',
-        provider: 'anthropic',
-        model: cfg.scoringModel,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        items: items.map(item =>
-          attributionByPostId?.get(item.postId)
-          ?? { sourceAccount: item.sourceAccount }
-        ),
-        aiUsageId: usageId,
-      });
-
-      const responseText = String(body.content?.[0]?.text ?? '');
-      const parsed = extractJsonObject(responseText);
-
-      if (!parsed || !Array.isArray(parsed.items)) {
-        console.warn(
-          '[EditorialFrame] invalid JSON; continuing without frames.',
-        );
-        return empty;
-      }
-
-      const frames = mapEditorialFrames(parsed.items, items);
-      const usable = Array.from(frames.values())
-        .filter(value => value != null)
-        .length;
-
-      console.log(
-        `[EditorialFrame] final_candidates=${items.length} usable_frames=${usable}`,
-      );
-
-      return frames;
-    } catch (error) {
-      lastError = error instanceof Error
-        ? error.message
-        : String(error);
-    }
-  }
-
-  console.warn(
-    `[EditorialFrame] failed for ${items.length} final candidate(s): ${lastError}`,
-  );
-
-  await recordAIUsage(env, {
-    provider: 'anthropic',
-    purpose: 'editorial_frame',
-    model: cfg.scoringModel,
-    inputTokens: 0,
-    outputTokens: 0,
-    status: 'failed',
-    errorMessage: lastError,
-  });
-
-  return empty;
-}
-
 function mapScoringResults(parsed: any[], original: NormalizedItem[]): AIGateResult[] {
   const byUrl = new Map<string, any>();
   const byPostId = new Map<string, any>();
@@ -1532,7 +1206,7 @@ async function runTranslation(
   items: NormalizedItem[],
   category: CategoryRow,
   attrByPostId?: Map<string, AttributionItem>,
-  editorialFrameByPostId?: Map<string, EditorialFactFrame | null>,
+  scoringContextByPostId?: Map<string, TranslationScoringContext>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const result = new Map<string, any>();
   if (items.length === 0) return result;
@@ -1548,7 +1222,7 @@ async function runTranslation(
       category,
       offset,
       attrByPostId,
-      editorialFrameByPostId,
+      scoringContextByPostId,
     );
     for (const [key, value] of chunkMap.entries()) result.set(key, value);
   }
@@ -1564,7 +1238,7 @@ async function runTranslationChunk(
   category: CategoryRow,
   offset: number,
   attrByPostId?: Map<string, AttributionItem>,
-  editorialFrameByPostId?: Map<string, EditorialFactFrame | null>,
+  scoringContextByPostId?: Map<string, TranslationScoringContext>,
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const provider = cfg.translationProvider;
   const result = new Map<string, any>();
@@ -1576,7 +1250,7 @@ async function runTranslationChunk(
     items,
     cfg.translationTargets,
     translationTextMaxChars(cfg, category),
-    editorialFrameByPostId,
+    scoringContextByPostId,
   );
 
   let responseText = '';
@@ -1941,12 +1615,6 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- If the source does not provide enough context for an explanatory sentence, omit that sentence instead of guessing.',
     '- Proper names, brands, products, tickers, abbreviations, and newly created terms may remain unchanged.',
     '- For RTL targets, every non-empty title/body block must begin naturally in the target script; place Latin names or technical terms after that native-language lead.',
-    '- When editorial_frame is supplied, treat it as a factual boundary for the rewrite, not as ready-made copy.',
-    '- The title must express the same central event as editorial_frame.headline_fact while remaining natural in the target language.',
-    '- Do not translate headline_fact word-for-word or copy its sentence structure mechanically.',
-    '- Preserve editorial_frame.claim_type and editorial_frame.attribution. Never turn an opinion, forecast, allegation, or estimate into a confirmed fact.',
-    '- Preserve relevant editorial_frame.must_include values and do not introduce any editorial_frame.forbidden_inferences.',
-    '- If editorial_frame conflicts with the supplied source text, the source text is authoritative and the frame must be ignored.',
   ];
 
   const cryptoCaptionGuidance = isCryptoCategory(category) ? [
@@ -1974,6 +1642,10 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     `You are an expert content curator and Telegram channel editor for category "${category.id}" (${category.label}).`,
     'For each item, write Telegram-ready posts for every translation target below.',
     'Rewrite for the target audience. Do not produce literal tweet translations.',
+    'Before writing each item, privately construct an editorial fact frame containing: the central source-supported fact, claim type, attribution, must-include details, and forbidden unsupported inferences.',
+    'Use scoring_context only as advisory metadata to identify the likely event, entities, risk, and uncertainty. The supplied source text is authoritative whenever the two differ.',
+    'Do not output the editorial fact frame, hidden analysis, or reasoning. Return only the translations JSON contract below.',
+    'Use the same private fact frame for caption_short and caption_full so their title, certainty, attribution, figures, dates, and central event remain consistent.',
     ...universalCaptionGuidance,
     ...cryptoCaptionGuidance,
     'Make the post feel like a real channel post: news, educational, or analytical based on the target settings.',
@@ -2035,47 +1707,19 @@ function translationTextMaxChars(cfg: Config, category: CategoryRow): number {
   return isCryptoCategory(category) ? Math.max(cfg.translationMaxTextChars, 1200) : cfg.translationMaxTextChars;
 }
 
-function buildTranslationSourceText(item: NormalizedItem, maxChars: number): string {
-  const parts = [item.text, item.fullText]
-    .map(value => String(value ?? '').trim())
-    .filter(Boolean);
-
-  const uniqueParts = parts.filter(
-    (value, index) => parts.indexOf(value) === index,
-  );
-
-  return uniqueParts.join('\n\n').slice(0, maxChars);
-}
-
-function serializeEditorialFactFrame(
-  frame: EditorialFactFrame | null | undefined,
-): Record<string, unknown> | undefined {
-  if (!frame) return undefined;
-
-  return {
-    headline_fact: frame.headlineFact,
-    claim_type: frame.claimType,
-    attribution: frame.attribution,
-    must_include: frame.mustInclude,
-    forbidden_inferences: frame.forbiddenInferences,
-  };
-}
-
 export function buildTranslationUser(
   items: NormalizedItem[],
   targets: TranslationTarget[],
   maxChars: number,
-  editorialFrameByPostId?: Map<string, EditorialFactFrame | null>,
+  scoringContextByPostId?: Map<string, TranslationScoringContext>,
 ): string {
   const data = items.map(it => ({
     post_id: it.postId,
     url: it.sourceUrl,
     platform: it.platform,
     account: it.sourceAccount,
-    text: buildTranslationSourceText(it, maxChars),
-    editorial_frame: serializeEditorialFactFrame(
-      editorialFrameByPostId?.get(it.postId),
-    ),
+    text: it.text.slice(0, maxChars),
+    scoring_context: scoringContextByPostId?.get(it.postId) ?? null,
     has_media: it.media.length > 0,
     media_count: it.media.length,
     is_reply: it.isReply === true,
@@ -2283,7 +1927,7 @@ async function checkScoringBudget(env: Env, cfg: Config): Promise<AIBudgetCheck>
       SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
       FROM ai_usage
       WHERE provider='anthropic'
-        AND purpose IN ('scoring','editorial_frame')
+        AND purpose='scoring'
         AND status='success'
         AND created_at > datetime('now','-1 day')
     `).first<{ calls: number; tokens: number }>();

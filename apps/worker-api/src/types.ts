@@ -279,27 +279,6 @@ export interface TranslationOutput {
   hashtags: string[];
 }
 
-export type EditorialClaimType =
-  | 'fact'
-  | 'opinion'
-  | 'forecast'
-  | 'allegation'
-  | 'estimate'
-  | 'unknown';
-
-export interface EditorialFactFrame {
-  /** Neutral source-supported statement of the main event; not a ready-made title. */
-  headlineFact: string;
-  /** Whether the central statement is confirmed fact, opinion, prediction, etc. */
-  claimType: EditorialClaimType;
-  /** Explicit speaker/source for opinions, forecasts, allegations, and estimates. */
-  attribution: string;
-  /** Names, figures, dates, or terms that the rewrite should preserve when relevant. */
-  mustInclude: string[];
-  /** Unsupported conclusions the caption must not introduce. */
-  forbiddenInferences: string[];
-}
-
 export interface AIGateResult {
   publish: boolean;
   score: number;

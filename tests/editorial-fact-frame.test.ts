@@ -1,28 +1,32 @@
 import { describe, expect, it } from 'vitest';
+
 import {
-  buildEditorialFrameUser,
+  buildTranslationScoringContext,
   buildTranslationSystem,
   buildTranslationUser,
-  isFinalTranslationCandidate,
-  parseEditorialFactFrame,
-  type TranslationTarget,
 } from '../apps/worker-api/src/services/ai-gate';
+
+import type {
+  TranslationScoringContext,
+  TranslationTarget,
+} from '../apps/worker-api/src/services/ai-gate';
+
 import type {
   AIGateResult,
   CategoryRow,
-  EditorialFactFrame,
   NormalizedItem,
 } from '../apps/worker-api/src/types';
 
-function item(overrides: Partial<NormalizedItem> = {}): NormalizedItem {
+function item(
+  overrides: Partial<NormalizedItem> = {},
+): NormalizedItem {
   return {
-    platform: 'rss',
-    sourceAccount: 'example',
-    sourceUrl: 'https://example.com/news/1',
-    postId: 'news-1',
-    publishedAt: 1_700_000_000,
-    text: 'Company X said its product could launch in Q4.',
-    fullText: 'The CEO said the schedule remains conditional and no exact release date has been confirmed.',
+    platform: 'x',
+    sourceAccount: 'example_account',
+    sourceUrl: 'https://x.com/example/status/123',
+    postId: '123',
+    publishedAt: 1_720_000_000,
+    text: 'The company said the product could launch in Q4.',
     media: [],
     engagementLikes: 0,
     engagementShares: 0,
@@ -41,7 +45,7 @@ function target(): TranslationTarget {
     customInstructions: '',
     editorialMode: 'news',
     audienceLevel: 'intermediate',
-    captionStyle: 'straight_news',
+    captionStyle: 'contextual',
     creativityLevel: 0.2,
     captionMaxChars: 1200,
     captionShortMaxChars: 280,
@@ -53,9 +57,9 @@ function target(): TranslationTarget {
 
 function category(): CategoryRow {
   return {
-    id: 'general',
-    label: 'General',
-    prompt_profile: 'default_editorial',
+    id: 'crypto',
+    label: 'Crypto',
+    prompt_profile: 'crypto_editorial',
     custom_prompt: null,
     score_threshold: 75,
     freshness_hours: 24,
@@ -67,133 +71,128 @@ function category(): CategoryRow {
     required_context: null,
     avoid_duplicate_people_stories: 1,
     enabled: 1,
-  };
+  } as CategoryRow;
 }
 
-describe('editorial fact frame', () => {
-  it('parses and sanitizes a valid Claude editorial frame', () => {
-    const frame = parseEditorialFactFrame({
-      headline_fact: '  The CEO said the product could launch in Q4.  ',
-      claim_type: 'forecast',
-      attribution: 'The CEO',
-      must_include: ['Company X', 'Q4', 'Company X'],
-      forbidden_inferences: [
-        'The launch is confirmed.',
-        'An exact release date is known.',
-      ],
-    });
-
-    expect(frame).toEqual({
-      headlineFact: 'The CEO said the product could launch in Q4.',
-      claimType: 'forecast',
-      attribution: 'The CEO',
-      mustInclude: ['Company X', 'Q4'],
-      forbiddenInferences: [
-        'The launch is confirmed.',
-        'An exact release date is known.',
-      ],
-    });
-  });
-
-  it('returns null when no usable headline fact exists', () => {
-    expect(parseEditorialFactFrame(null)).toBeNull();
-    expect(parseEditorialFactFrame({ headline_fact: '   ' })).toBeNull();
-  });
-
-  it('passes the frame and fuller source context to Gemini', () => {
-    const source = item();
-    const frame: EditorialFactFrame = {
-      headlineFact: 'The CEO said the product could launch in Q4.',
-      claimType: 'forecast',
-      attribution: 'The CEO',
-      mustInclude: ['Company X', 'Q4'],
-      forbiddenInferences: ['The launch is confirmed.'],
+describe('Gemini-only editorial fact framing', () => {
+  it('converts existing Claude scoring metadata into advisory translation context', () => {
+    const result: AIGateResult = {
+      publish: true,
+      score: 88,
+      riskLevel: 'medium',
+      riskFlags: ['unverified_claims'],
+      topicFingerprint: 'company-product-q4-launch',
+      publishPriority: 'high',
+      translations: {},
+      storyKey: 'company|product_launch_forecast|2026-07-11',
+      storyFields: {
+        primaryEntities: ['Company X', 'Product Y'],
+        eventType: 'product_launch_forecast',
+        canonicalDate: '2026-07-11',
+      },
     };
 
-    const user = buildTranslationUser(
-      [source],
-      [target()],
-      1200,
-      new Map([[source.postId, frame]]),
-    );
-
-    expect(user).toContain(
-      '"headline_fact":"The CEO said the product could launch in Q4."',
-    );
-    expect(user).toContain('"claim_type":"forecast"');
-    expect(user).toContain('"attribution":"The CEO"');
-    expect(user).toContain(
-      'The CEO said the schedule remains conditional',
-    );
+    expect(buildTranslationScoringContext(result)).toEqual({
+      score: 88,
+      risk_level: 'medium',
+      risk_flags: ['unverified_claims'],
+      topic_fingerprint: 'company-product-q4-launch',
+      publish_priority: 'high',
+      story_key: 'company|product_launch_forecast|2026-07-11',
+      primary_entities: ['Company X', 'Product Y'],
+      event_type: 'product_launch_forecast',
+      canonical_date: '2026-07-11',
+    });
   });
 
-  it('builds Claude framing input only from supplied final survivors', () => {
+  it('sends context only for the items already passed to translation', () => {
     const finalItem = item({
       postId: 'final-1',
-      sourceUrl: 'https://example.com/final-1',
-      text: 'Final selected story.',
+      sourceUrl: 'https://x.com/example/status/final-1',
+      text: 'The CEO said Product Y could launch in Q4.',
     });
 
-    const rejectedItem = item({
-      postId: 'rejected-1',
-      sourceUrl: 'https://example.com/rejected-1',
-      text: 'Rejected story.',
-    });
+    const finalContext: TranslationScoringContext = {
+      score: 88,
+      risk_level: 'medium',
+      risk_flags: [],
+      topic_fingerprint: 'product-y-q4-forecast',
+      publish_priority: 'high',
+      story_key: null,
+      primary_entities: ['Product Y'],
+      event_type: 'product_launch_forecast',
+      canonical_date: '',
+    };
 
-    const user = buildEditorialFrameUser([finalItem], 1200);
+    const contexts = new Map<string, TranslationScoringContext>([
+      [finalItem.postId, finalContext],
+      [
+        'rejected-1',
+        {
+          ...finalContext,
+          topic_fingerprint: 'rejected-story',
+        },
+      ],
+    ]);
 
-    expect(user).toContain(finalItem.postId);
-    expect(user).toContain('Final selected story.');
-    expect(user).not.toContain(rejectedItem.postId);
-    expect(user).not.toContain('Rejected story.');
+    const user = buildTranslationUser(
+      [finalItem],
+      [target()],
+      1200,
+      contexts,
+    );
+
+    const serializedPayload = user.split('\n').at(-1);
+    const payload = JSON.parse(serializedPayload ?? '[]');
+
+    expect(payload).toHaveLength(1);
+    expect(payload[0].post_id).toBe('final-1');
+    expect(payload[0].scoring_context).toEqual(finalContext);
+    expect(user).not.toContain('rejected-1');
+    expect(user).not.toContain('rejected-story');
   });
 
-  it('accepts only publish-eligible untranslated results as final candidates', () => {
-    const base: AIGateResult = {
+  it('keeps the translation response schema unchanged', () => {
+    const system = buildTranslationSystem([target()], category());
+
+    expect(system).toContain(
+      'privately construct an editorial fact frame',
+    );
+    expect(system).toContain(
+      'The supplied source text is authoritative',
+    );
+    expect(system).toContain(
+      'Do not output the editorial fact frame',
+    );
+
+    expect(system).toContain(
+      '{"items":[{"post_id":"...","url":"...","translations":',
+    );
+
+    expect(system).not.toContain('"editorial_frame"');
+  });
+
+  it('works without optional story-intelligence fields', () => {
+    const result: AIGateResult = {
       publish: true,
-      score: 82,
+      score: 80,
       riskLevel: 'low',
       riskFlags: [],
-      topicFingerprint: 'company-product-launch',
+      topicFingerprint: 'plain-topic',
       publishPriority: 'normal',
       translations: {},
     };
 
-    expect(isFinalTranslationCandidate(base, 75)).toBe(true);
-
-    expect(
-      isFinalTranslationCandidate({ ...base, publish: false }, 75),
-    ).toBe(false);
-
-    expect(
-      isFinalTranslationCandidate({ ...base, score: 70 }, 75),
-    ).toBe(false);
-
-    expect(
-      isFinalTranslationCandidate({
-        ...base,
-        translations: {
-          fa: {
-            captionShort: 'تیتر',
-            captionFull: 'تیتر\n\nمتن',
-            hashtags: [],
-          },
-        },
-      }, 75),
-    ).toBe(false);
-  });
-
-  it('tells the writer to use the frame without copying it mechanically', () => {
-    const system = buildTranslationSystem([target()], category());
-
-    expect(system).toContain(
-      'treat it as a factual boundary for the rewrite',
-    );
-    expect(system).toContain(
-      'Do not translate headline_fact word-for-word',
-    );
-    expect(system).toContain(
-      'Never turn an opinion, forecast, allegation, or estimate into a confirmed fact',
-    );
+    expect(buildTranslationScoringContext(result)).toEqual({
+      score: 80,
+      risk_level: 'low',
+      risk_flags: [],
+      topic_fingerprint: 'plain-topic',
+      publish_priority: 'normal',
+      story_key: null,
+      primary_entities: [],
+      event_type: '',
+      canonical_date: '',
+    });
   });
 });
