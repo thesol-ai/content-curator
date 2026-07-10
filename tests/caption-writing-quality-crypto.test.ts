@@ -57,8 +57,14 @@ describe('crypto Persian caption writing quality', () => {
     expect(cryptoSystem).toContain('mixed skill levels');
     expect(cryptoSystem).toContain('TVL = پولی که داخل پروتکل‌های دیفای قفل شده');
     expect(cryptoSystem).toContain('caption_short should usually be 1-2 sentences');
-    expect(cryptoSystem).toContain('Use exactly one relevant formal emoji at the start');
+    expect(cryptoSystem).toContain('Emoji is optional');
+    expect(cryptoSystem).toContain('Universal factual caption rules');
+    expect(cryptoSystem).toContain('every non-empty title/body block');
 
+    expect(financeSystem).toContain('Universal factual caption rules');
+    expect(financeSystem).toContain(
+      'Every title and body claim must be directly supported by the supplied source text',
+    );
     expect(financeSystem).not.toContain('Crypto Persian caption writing mode');
     expect(financeSystem).not.toContain('TVL = پولی که داخل پروتکل‌های دیفای قفل شده');
   });

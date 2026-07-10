@@ -289,6 +289,25 @@ describe('RSS title rendering in Telegram captions', () => {
     expect(result.html).toContain('<b>📌 بانک مرکزی انگلیس محدودیت استیبل‌کوین را کاهش داد.</b>\n\nمتن اصلی خبر');
   });
 
+  it('preserves a Persian question mark at the end of a title', () => {
+    const result = formatTelegramMessage({
+      body: `آیا این گزارش با داده‌های منبع هم‌خوان است؟
+
+متن اصلی خبر با جزئیات بیشتری ادامه پیدا می‌کند.`,
+      sourceUrl: 'https://example.com',
+      language: 'fa',
+      channel: channel({ source_enabled: 0 }),
+      maxLength: 4096,
+    });
+
+    expect(result.html).toContain(
+      '<b>آیا این گزارش با داده‌های منبع هم‌خوان است؟</b>',
+    );
+    expect(result.html).not.toContain(
+      'آیا این گزارش با داده‌های منبع هم‌خوان است.</b>',
+    );
+  });
+
   it('does not duplicate the title period', () => {
     const result = formatTelegramMessage({
       body: `📌 بیت‌کوین دوباره به محدوده حساس رسید.
