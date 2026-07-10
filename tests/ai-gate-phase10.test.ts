@@ -115,7 +115,7 @@ describe('phase 10 AI reliability and cost guardrails', () => {
         usageMetadata: { promptTokenCount: 333, candidatesTokenCount: 44 },
         candidates: [{ content: { parts: [{ text: JSON.stringify({ items: [{
           url: 'https://x.com/marketwatch/status/123',
-          translations: { fa: { caption_short: 'خبر کوتاه', caption_full: 'متن کامل\nhttps://x.com/marketwatch/status/123', hashtags: ['مالی'] } },
+          translations: { fa: { caption_short: 'خبر کوتاه', caption_full: 'متن کامل خبر با توضیح فارسی', hashtags: ['مالی'] } },
         }] }) }] } }],
       });
     }));
@@ -220,6 +220,28 @@ describe('phase 10 AI reliability and cost guardrails', () => {
     expect(hasValidRtlCaptionLead('📊 Bitcoin rallied', 'fa')).toBe(false);
     expect(hasValidRtlCaptionLead('$BTC rallied', 'fa')).toBe(false);
     expect(hasValidRtlCaptionLead('«بیت‌کوین» رشد کرد', 'fa')).toBe(true);
+
+    expect(
+      hasValidRtlCaptionLead(
+        '📊 تیتر فارسی معتبر است.\n\nNewCompany محصول تازه‌ای معرفی کرد.',
+        'fa',
+      ),
+    ).toBe(false);
+
+    expect(
+      hasValidRtlCaptionLead(
+        '📊 تیتر فارسی معتبر است.\n\nشرکت NewCompany محصول تازه‌ای معرفی کرد.',
+        'fa',
+      ),
+    ).toBe(true);
+
+    expect(
+      hasValidRtlCaptionLead(
+        '📊 تیتر فارسی معتبر است.\n\n۲۰ شرکت در این طرح حضور دارند.',
+        'fa',
+      ),
+    ).toBe(false);
+
     expect(hasValidRtlCaptionLead('Bitcoin rallied', 'en')).toBe(true);
   });
 

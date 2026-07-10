@@ -129,7 +129,7 @@ function formatBodyWithBoldLeadTitle(text: string, language: string): string {
   if (lang === 'fa' || lang === 'ar') {
     const m = raw.match(TITLE_SEPARATOR_RE);
     if (m) {
-      const title = ensureTitleEndsWithPeriod(m[1]!.trim());
+      const title = ensureTitleEndsWithTerminalPunctuation(m[1]!.trim());
       const body = m[2]!.trim();
       return `<b>${escapeHtml(title)}</b>\n\n${escapeHtml(body)}`;
     }
@@ -138,9 +138,16 @@ function formatBodyWithBoldLeadTitle(text: string, language: string): string {
   return escapeHtml(raw);
 }
 
-function ensureTitleEndsWithPeriod(title: string): string {
-  const cleaned = String(title ?? '').trim().replace(/[.。؟?!،؛:]+$/u, '').trim();
-  return cleaned ? `${cleaned}.` : cleaned;
+function ensureTitleEndsWithTerminalPunctuation(title: string): string {
+  const cleaned = String(title ?? '')
+    .trim()
+    .replace(/[،؛:]+$/u, '')
+    .trim();
+
+  if (!cleaned) return cleaned;
+  if (/[.。؟?!]$/u.test(cleaned)) return cleaned;
+
+  return `${cleaned}.`;
 }
 
 
