@@ -799,6 +799,12 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   let selected = 0;
   let queued = 0;
 
+  const weakGateOverrideEnabled = isWeakPostAiGateOverrideEnabled(env);
+  const weakGateOverrideScoreMargin = getWeakPostAiGateOverrideScoreMargin(env);
+  const queueStarvationSnapshot = weakGateOverrideEnabled
+    ? await getPublishQueueStarvationSnapshot(env, channels)
+    : emptyPublishQueueStarvationSnapshot();
+
   if (!translateAfterGates) {
     // ── Legacy path: decide + queue interleaved (unchanged behavior). ──
     for (let i = 0; i < prepared.length; i++) {
@@ -818,7 +824,28 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       }
 
       const ev = await evaluateCandidateDb(env, channels, candidate, ai);
-      const rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
+      let rejectReason = resolveCandidateRejectReason(
+        ev,
+        ai,
+        category,
+        candidate.item,
+        similarTopicRejects.has(i),
+      );
+
+      rejectReason = await maybeOverrideSoftEditorialReject(
+        env,
+        category,
+        candidate,
+        ai,
+        ev,
+        rejectReason,
+        {
+          enabled: weakGateOverrideEnabled,
+          scoreMargin: weakGateOverrideScoreMargin,
+          snapshot: queueStarvationSnapshot,
+        },
+      );
+
       const counts = await persistCandidateDecision(env, channels, category, candidate, ai, ev, rejectReason);
       selected += counts.selected;
       rejected += counts.rejected;
@@ -839,7 +866,6 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
     text: string | null;
   }> = [];
   const themeBatchCounts = new Map<string, number>();
-  const queueStarvingForWeakGateOverride = await isPublishQueueStarvingForAnyChannel(env, channels);
   const decisions: Array<{
     candidate: typeof prepared[number];
     ai: AIGateResult;
@@ -906,39 +932,27 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       }
     }
 
-    let rejectReason = resolveCandidateRejectReason(ev, ai, category, candidate.item, similarTopicRejects.has(i));
-    const originalWeakRejectReason = rejectReason;
-
-    if (shouldOverrideWeakRejectForStarvingQueue({
-      rejectReason,
+    let rejectReason = resolveCandidateRejectReason(
+      ev,
       ai,
-      queueStarving: queueStarvingForWeakGateOverride,
-    })) {
-      rejectReason = null;
+      category,
+      candidate.item,
+      similarTopicRejects.has(i),
+    );
 
-      await recordCandidateItemEvent(
-        env,
-        candidate.row,
-        itemIdForCandidate(candidate.row.id),
-        candidate.item,
-        'weak_post_ai_gate_overridden',
-        originalWeakRejectReason,
-        ai,
-        {
-          queueStarving: queueStarvingForWeakGateOverride,
-          originalRejectReason: originalWeakRejectReason,
-          overrideReason: 'queue_starving_ai_publish_true_no_hard_quality_risk',
-          score: ai.score,
-          riskFlags: ai.riskFlags ?? [],
-          topicFingerprint: ai.topicFingerprint,
-          storyKey: ev.storyKey,
-          storyClusterKey: ev.storyClusterKey,
-          themeKey: ev.themeKey,
-          themeCapRejectReason: ev.themeCapRejectReason,
-          audienceRejectReason: ev.audienceRejectReason,
-        },
-      );
-    }
+    rejectReason = await maybeOverrideSoftEditorialReject(
+      env,
+      category,
+      candidate,
+      ai,
+      ev,
+      rejectReason,
+      {
+        enabled: weakGateOverrideEnabled,
+        scoreMargin: weakGateOverrideScoreMargin,
+        snapshot: queueStarvationSnapshot,
+      },
+    );
 
     if (rejectReason === null) {
       if (fpNorm) seenFingerprints.add(fpNorm);
@@ -1131,7 +1145,7 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
 
 // ── Phase 6H helpers (shared by both paths) ───────────────────
 
-interface CandidateEvaluation {
+export interface CandidateEvaluation {
   itemId: string;
   storyClusterKey: string | null;
   themeKey: string | null;
@@ -1273,41 +1287,55 @@ async function getRssBriefPreflightRejectReason(
   return `rss_brief_preflight_blocked:${lastReason}`;
 }
 
-function hasHardQualityRisk(ai: AIGateResult): boolean {
-  const flags = (ai.riskFlags ?? []).map(flag => String(flag).toLowerCase());
-  return flags.some(flag =>
-    flag.includes('financial_advice')
-    || flag.includes('market_prediction')
-    || flag.includes('pump')
-    || flag.includes('promotional')
-    || flag.includes('scam')
-    || flag.includes('misleading')
-    || flag.includes('low_substance_market_commentary')
-    || flag.includes('engagement_bait')
-  );
+function isWeakPostAiGateOverrideEnabled(env: Env): boolean {
+  return String(env.WEAK_POST_AI_GATE_OVERRIDE_ENABLED ?? '').toLowerCase() === 'true';
 }
 
-function isWeakPostAiGateReject(reason: string | null): boolean {
-  if (!reason) return false;
-
-  return reason === 'similar_semantic_story_recent_channel'
-    || reason === 'similar_semantic_story_recent_batch'
-    || reason.startsWith('theme_daily_cap:')
-    || reason === 'iran_audience_watch_source_requires_material_impact';
+function getWeakPostAiGateOverrideScoreMargin(env: Env): number {
+  const raw = Number(env.WEAK_POST_AI_GATE_OVERRIDE_SCORE_MARGIN ?? 5);
+  return Number.isFinite(raw)
+    ? Math.max(0, Math.min(30, Math.floor(raw)))
+    : 5;
 }
 
-async function isPublishQueueStarvingForAnyChannel(env: Env, channels: ChannelRow[]): Promise<boolean> {
-  if (!env.DB) return false;
+export interface PublishQueueStarvationSnapshot {
+  allEnabledChannelsStarving: boolean;
+  minScheduledNext6h: number;
+  channels: Array<{
+    channelId: string;
+    scheduledNext6h: number;
+    starving: boolean;
+  }>;
+}
 
-  const enabled = channels.filter(channel => channel.enabled);
-  if (enabled.length === 0) return false;
+function emptyPublishQueueStarvationSnapshot(): PublishQueueStarvationSnapshot {
+  return {
+    allEnabledChannelsStarving: false,
+    minScheduledNext6h: 0,
+    channels: [],
+  };
+}
 
-  const minScheduledNext6h = Math.max(
-    0,
-    parseInt(String((env as any).QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H ?? '4'), 10) || 4,
+async function getPublishQueueStarvationSnapshot(
+  env: Env,
+  channels: ChannelRow[],
+): Promise<PublishQueueStarvationSnapshot> {
+  if (!env.DB) return emptyPublishQueueStarvationSnapshot();
+
+  const enabledChannels = channels.filter(channel => channel.enabled);
+  if (enabledChannels.length === 0) return emptyPublishQueueStarvationSnapshot();
+
+  const parsedFloor = parseInt(
+    String(env.QUEUE_HEALTH_MIN_SCHEDULED_NEXT_6H ?? '4'),
+    10,
   );
+  const minScheduledNext6h = Number.isFinite(parsedFloor)
+    ? Math.max(1, Math.min(100, parsedFloor))
+    : 4;
 
-  for (const channel of enabled) {
+  const snapshots: PublishQueueStarvationSnapshot['channels'] = [];
+
+  for (const channel of enabledChannels) {
     const row = await env.DB.prepare(`
       SELECT COUNT(*) AS count
       FROM publish_queue
@@ -1317,25 +1345,139 @@ async function isPublishQueueStarvingForAnyChannel(env: Env, channels: ChannelRo
         AND scheduled_at <= unixepoch('now') + 6 * 3600
     `).bind(channel.id).first<{ count: number }>();
 
-    if (Number(row?.count ?? 0) < minScheduledNext6h) return true;
+    const scheduledNext6h = Number(row?.count ?? 0);
+    snapshots.push({
+      channelId: channel.id,
+      scheduledNext6h,
+      starving: scheduledNext6h < minScheduledNext6h,
+    });
   }
 
-  return false;
+  return {
+    // The decision is made before per-channel persistence. Therefore the safe,
+    // channel-agnostic rule is to override only when EVERY target channel needs
+    // inventory. One starving channel must not weaken gates for healthy channels.
+    allEnabledChannelsStarving:
+      snapshots.length > 0 && snapshots.every(channel => channel.starving),
+    minScheduledNext6h,
+    channels: snapshots,
+  };
 }
 
-function shouldOverrideWeakRejectForStarvingQueue(args: {
+function hasHardQualityRisk(ai: AIGateResult): boolean {
+  const flags = (ai.riskFlags ?? []).map(flag => String(flag).toLowerCase());
+
+  return flags.some(flag =>
+    flag.includes('financial_advice')
+    || flag.includes('market_prediction')
+    || flag.includes('pump')
+    || flag.includes('promotional')
+    || flag.includes('scam')
+    || flag.includes('misleading')
+    || flag.includes('low_substance')
+    || flag.includes('engagement_bait')
+    || flag.includes('unverified')
+    || flag.includes('rumor')
+    || flag.includes('limited_text_context')
+  );
+}
+
+/**
+ * Editorial capacity gates are not duplicate evidence.
+ *
+ * This classification is intentionally generic:
+ * - any configured theme daily cap
+ * - any audience/profile policy whose meaning is "requires material impact"
+ *
+ * Semantic, topic, story-key and final-publish duplicate reasons are NEVER soft.
+ */
+export function isSoftEditorialGateReject(reason: string | null): boolean {
+  const normalized = String(reason ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+
+  return normalized.startsWith('theme_daily_cap:')
+    || normalized.endsWith('_requires_material_impact');
+}
+
+export function shouldOverrideSoftEditorialReject(args: {
+  enabled: boolean;
   rejectReason: string | null;
-  ai: AIGateResult;
+  ai: Pick<AIGateResult, 'publish' | 'score' | 'riskLevel' | 'riskFlags'>;
   queueStarving: boolean;
+  categoryScoreThreshold: number;
+  scoreMargin: number;
 }): boolean {
+  if (!args.enabled) return false;
   if (!args.queueStarving) return false;
+  if (!isSoftEditorialGateReject(args.rejectReason)) return false;
+
   if (args.ai.publish !== true) return false;
-  if (hasHardQualityRisk(args.ai)) return false;
-  return isWeakPostAiGateReject(args.rejectReason);
+  if (args.ai.riskLevel === 'high') return false;
+  if (hasHardQualityRisk(args.ai as AIGateResult)) return false;
+
+  const score = Number(args.ai.score);
+  const threshold = Number(args.categoryScoreThreshold);
+  const margin = Math.max(0, Number(args.scoreMargin) || 0);
+
+  if (!Number.isFinite(score) || !Number.isFinite(threshold)) return false;
+  if (score < threshold + margin) return false;
+
+  return true;
+}
+
+async function maybeOverrideSoftEditorialReject(
+  env: Env,
+  category: CategoryRow,
+  candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
+  ai: AIGateResult,
+  ev: CandidateEvaluation,
+  rejectReason: string | null,
+  policy: {
+    enabled: boolean;
+    scoreMargin: number;
+    snapshot: PublishQueueStarvationSnapshot;
+  },
+): Promise<string | null> {
+  const shouldOverride = shouldOverrideSoftEditorialReject({
+    enabled: policy.enabled,
+    rejectReason,
+    ai,
+    queueStarving: policy.snapshot.allEnabledChannelsStarving,
+    categoryScoreThreshold: Number(category.score_threshold),
+    scoreMargin: policy.scoreMargin,
+  });
+
+  if (!shouldOverride) return rejectReason;
+
+  await recordCandidateItemEvent(
+    env,
+    candidate.row,
+    itemIdForCandidate(candidate.row.id),
+    candidate.item,
+    'weak_post_ai_gate_overridden',
+    rejectReason,
+    ai,
+    {
+      originalRejectReason: rejectReason,
+      overrideReason: 'all_target_queues_starving_strong_ai_candidate',
+      categoryScoreThreshold: Number(category.score_threshold),
+      scoreMargin: policy.scoreMargin,
+      requiredScore: Number(category.score_threshold) + policy.scoreMargin,
+      queueStarvationSnapshot: policy.snapshot,
+      storyKey: ev.storyKey,
+      storyKeyRejectReason: ev.storyKeyRejectReason,
+      storyClusterKey: ev.storyClusterKey,
+      themeKey: ev.themeKey,
+      themeCapRejectReason: ev.themeCapRejectReason,
+      audienceRejectReason: ev.audienceRejectReason,
+    },
+  );
+
+  return null;
 }
 
 
-function resolveCandidateRejectReason(
+export function resolveCandidateRejectReason(
   ev: CandidateEvaluation,
   ai: AIGateResult,
   category: CategoryRow,
@@ -1346,17 +1488,30 @@ function resolveCandidateRejectReason(
   const themeReject = mustCover ? null : ev.themeCapRejectReason;
   const audienceReject = mustCover ? null : ev.audienceRejectReason;
 
-  // Story clusters are intentionally broad editorial buckets. The 7-day audit
-  // showed that a cluster match alone can create false positives across unrelated
-  // stories. Treat cluster matches as advisory metadata only; hard duplicate
-  // rejection must come from exact topic fingerprints, story-key checks,
-  // semantic story similarity, the AI duplicate judge, or the final publish guard.
-  return ev.recentTopicDuplicate
-    ? 'similar_topic_recent_channel'
-    : ev.storyKeyRejectReason
-      ?? themeReject
-      ?? audienceReject
-      ?? getItemRejectReason(ai, category, item, similarTopicRejected);
+  // Hard deterministic duplicate checks must never be hidden behind a soft
+  // editorial gate. This also prevents starvation overrides from rescuing an
+  // exact same-batch duplicate.
+  if (ev.recentTopicDuplicate) return 'similar_topic_recent_channel';
+  if (similarTopicRejected) return 'similar_topic_in_run';
+
+  // Quality eligibility must be decided before theme/audience capacity gates.
+  // Otherwise a theme cap can mask below_threshold/high_risk/media rules.
+  const hardItemReject = getItemRejectReason(
+    ai,
+    category,
+    item,
+    false,
+  );
+  if (hardItemReject) return hardItemReject;
+
+  // Story-key and semantic story matches remain hard duplicate evidence.
+  // Queue starvation is deliberately not allowed to override them.
+  if (ev.storyKeyRejectReason) return ev.storyKeyRejectReason;
+
+  // Story clusters remain advisory-only and are intentionally absent here.
+  return themeReject
+    ?? audienceReject
+    ?? null;
 }
 
 /**
@@ -1385,7 +1540,8 @@ async function persistCandidateDecision(
     recentStoryClusterDuplicate: ev.recentStoryClusterDuplicate,
     themeCapRejectReason: ev.themeCapRejectReason,
     audienceRejectReason: ev.audienceRejectReason,
-    storyKey: ai.storyKey ?? null, // Phase 6K observe-only: recorded, not enforced
+    storyKey: ai.storyKey ?? null,
+    storyKeyRejectReason: ev.storyKeyRejectReason,
   });
 
   // Phase 6K: also record into the queryable story_intelligence_events table

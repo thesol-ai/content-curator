@@ -103,6 +103,8 @@ export interface Env {
   QUEUE_HEALTH_STARVING_MAX_BATCHES?: string;      // default: "3"
   QUEUE_HEALTH_STARVING_SCORING_CALL_BONUS?: string; // default: "50"
   QUEUE_HEALTH_CHANNEL_ID?: string;                // controller target channel
+  WEAK_POST_AI_GATE_OVERRIDE_ENABLED?: string;     // default false; soften only editorial capacity gates while all target queues starve
+  WEAK_POST_AI_GATE_OVERRIDE_SCORE_MARGIN?: string;// default 5; required score above category threshold
   APIFY_ROTATION_CONTINUOUS_ENABLED?: string;      // default: "false"
   APIFY_ROTATION_SLOT_MINUTES?: string;            // default: "30"
   // ── Apify cost control (single paid actor event per source/slot) ──
