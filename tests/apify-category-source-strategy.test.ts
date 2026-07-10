@@ -27,6 +27,7 @@ const DISCOVERY_ROTATION_SOURCE_IDS = [
 ];
 
 const V2_ROTATION_SOURCE_IDS = [
+  'crypto_v2_hourly_all',
   'crypto_v2_news_a',
   'crypto_v2_news_b',
   'crypto_v2_market',

@@ -127,7 +127,7 @@ describe('editorial prompt controls', () => {
     expect(system).toContain('forbidden_phrases');
     expect(system).toContain('در پستی جدید');
     expect(system).toContain('Vitalik Buterin = Ethereum co-founder');
-    expect(system).toContain('caption_full":"≤900 chars');
+    expect(system).toContain('caption_full_max_chars=900');
     expect(system).not.toContain('Include source URL at the end');
   });
 });

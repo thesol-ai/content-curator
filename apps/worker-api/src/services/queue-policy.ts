@@ -39,7 +39,9 @@ function boolEnv(env: Env, key: string, fallback: boolean): boolean {
 }
 
 export function isQueuePolicyEnforcementEnabled(env: Env): boolean {
-  return boolEnv(env, 'QUEUE_POLICY_ENFORCEMENT_ENABLED', true);
+  // Fail closed. Queue policy can stop AI/backlog processing, so it must never
+  // become active merely because an environment variable is absent.
+  return boolEnv(env, 'QUEUE_POLICY_ENFORCEMENT_ENABLED', false);
 }
 
 export function policyEnvNumber(env: Env, key: string, fallback: number): number {

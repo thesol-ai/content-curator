@@ -211,11 +211,17 @@ describe('manual publish endpoints and shared queue publish path', () => {
     const recoveryCall = calls.find(call =>
       call.kind === 'run'
       && call.sql.includes("WHERE status='publishing'")
-      && call.sql.includes('recovered_from_stale_publishing')
+      && call.sql.includes('stale_publishing_recovered_to_retry')
+      && call.sql.includes('stale_publishing_failed_after_retries_possible_telegram_duplicate')
     );
 
     expect(recoveryCall).toBeTruthy();
-    expect(recoveryCall?.values).toEqual([expect.any(Number), expect.any(Number)]);
+    expect(recoveryCall?.values).toHaveLength(5);
+    expect(recoveryCall?.values[0]).toBe(3);
+    expect(recoveryCall?.values[1]).toBe(3);
+    expect(recoveryCall?.values[2]).toEqual(expect.any(Number));
+    expect(recoveryCall?.values[3]).toBe(3);
+    expect(recoveryCall?.values[4]).toEqual(expect.any(Number));
   });
 
   it('POST /internal/publish/due accepts a manual limit and returns due counters', async () => {
