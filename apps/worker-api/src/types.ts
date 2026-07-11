@@ -94,7 +94,6 @@ export interface Env {
   PUBLISH_DELAY_LOW_MINUTES?: string;
   PUBLISH_DELAY_EXPIRING_MEDIA_HIGH_MINUTES?: string;
   PUBLISH_DELAY_EXPIRING_MEDIA_DEFAULT_MINUTES?: string;
-  PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES?: string;
 
   // ── Phase 6E/6F — queue-health controller + adaptive rotation + scheduler ──
   QUEUE_HEALTH_CONTROLLER_ENABLED?: string;        // default: "false"

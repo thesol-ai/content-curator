@@ -596,12 +596,7 @@ export async function repairCapBlockedSelectedCandidates(
           continue;
         }
 
-        const scheduledAt = await adjustScheduledAtForFairSourceSpacing(
-          env,
-          channel,
-          candidate.item.sourceAccount,
-          rule.scheduledAt,
-        );
+        const scheduledAt = rule.scheduledAt;
 
         const inserted = await saveQueueItem(env, {
           candidateId: candidate.row.id,
@@ -1670,7 +1665,7 @@ async function persistCandidateDecision(
       continue;
     }
 
-    const scheduledAt = await adjustScheduledAtForFairSourceSpacing(env, channel, candidate.item.sourceAccount, rule.scheduledAt);
+    const scheduledAt = rule.scheduledAt;
     const inserted = await saveQueueItem(env, {
       candidateId: candidate.row.id,
       itemId,
@@ -1973,46 +1968,6 @@ async function countRecentThemeMatches(env: Env, channel: ChannelRow, themeKey: 
     return 0;
   }
 }
-
-async function adjustScheduledAtForFairSourceSpacing(
-  env: Env,
-  channel: ChannelRow,
-  sourceAccount: string,
-  proposedScheduledAt: number,
-): Promise<number> {
-  const account = normalizeAccount(sourceAccount);
-  if (!account) return proposedScheduledAt;
-
-  const gapMinutesRaw = Number((env as any).PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES);
-  const gapMinutes = Number.isFinite(gapMinutesRaw) && gapMinutesRaw > 0
-    ? Math.min(Math.max(Math.floor(gapMinutesRaw), 15), 360)
-    : 90;
-  const gapSeconds = gapMinutes * 60;
-  const windowStart = proposedScheduledAt - gapSeconds;
-  const windowEnd = proposedScheduledAt + gapSeconds;
-
-  try {
-    const row = await env.DB.prepare(`
-      SELECT MAX(q.scheduled_at) AS latest
-      FROM publish_queue q
-      JOIN discovery_items d ON d.id = q.item_id
-      WHERE q.channel_id = ?
-        AND q.status IN ('scheduled','retry','publishing')
-        AND lower(d.source_account) = ?
-        AND q.scheduled_at BETWEEN ? AND ?
-    `).bind(channel.id, account, windowStart, windowEnd).first<{ latest: number | null }>();
-
-    const latest = Number(row?.latest ?? 0);
-    if (Number.isFinite(latest) && latest > 0) {
-      return Math.max(proposedScheduledAt, latest + gapSeconds);
-    }
-  } catch (err) {
-    console.warn('[BacklogDrain] source spacing skipped:', err instanceof Error ? err.message : String(err));
-  }
-
-  return proposedScheduledAt;
-}
-
 
 interface FinalPublishDuplicateGuardInput {
   channel: ChannelRow;
