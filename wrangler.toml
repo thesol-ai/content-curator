@@ -52,10 +52,10 @@ AI_MAX_RETRIES                = "1"
 
 # ── AI Translation ────────────────────────────────────────────
 # TRANSLATION_PROVIDER: gemini | openai | claude
-# Gemini: gemini-2.5-flash-lite ($0.10/$0.40) | gemini-2.5-flash ($0.30/$2.50)
+# Gemini translation model is selected with TRANSLATION_MODEL
 # OpenAI: gpt-4.1-nano ($0.10/$0.40) | gpt-4o-mini ($0.15/$0.60)
 TRANSLATION_PROVIDER = "gemini"
-TRANSLATION_MODEL = "gemini-2.5-flash-lite"
+TRANSLATION_MODEL = "gemini-3.1-flash-lite"
 
 # ── Telegram ──────────────────────────────────────────────────
 TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
@@ -215,12 +215,13 @@ QUEUE_QUALITY_MAX_SOURCE_SHARE_NEXT_24H = "0.4"
 QUEUE_QUALITY_MIN_UNIQUE_STORIES_NEXT_6H = "2"
 # ── Caption quality repair-first (default OFF) ──
 CAPTION_QUALITY_REPAIR_ENABLED = "true"
-CAPTION_QUALITY_REJECT_ENABLED = "false"
+CAPTION_QUALITY_REJECT_ENABLED = "true"
+CAPTION_SAFETY_V2_ENABLED = "true"
 CAPTION_QUALITY_MIN_SCORE = "70"
 
 TRANSLATION_PROVIDER = "gemini"
-TRANSLATION_MODEL = "gemini-2.5-flash-lite"
-TRANSLATION_BATCH_SIZE = "6"
+TRANSLATION_MODEL = "gemini-3.1-flash-lite"
+TRANSLATION_BATCH_SIZE = "1"
 TRANSLATION_DEBUG_ENABLED = "false"
 TELEGRAM_FINAL_PUBLISH_ENABLED = "true"
 TELEGRAM_PUBLISH_SCHEDULER_ENABLED = "true"

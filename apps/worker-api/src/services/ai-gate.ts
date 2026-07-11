@@ -10,6 +10,7 @@ import { getPreAiContentRejectReason } from './content-policy';
 import { getHardPreAiCryptoAudienceRejectReason } from './story-quality-guard';
 import { getCategoryPolicy } from '../categories/registry';
 import { applyPersianCaptionQualityGuard } from './story-quality-guard';
+import { truncateCaptionAtBoundary } from './caption-safety';
 import {
   getAudienceProfileGuidance,
   isAudienceProfileScoringEnabled,
@@ -1039,11 +1040,27 @@ function buildRtlLeadRepairUser(translation: TranslationValue): string {
   });
 }
 
-function shouldRetryPersianCaptionQuality(reason: string | undefined): boolean {
-  return reason === 'caption_crypto_meta_or_audience_addressing'
-    || reason === 'caption_vague_or_formal'
-    || reason === 'caption_quality_low'
-    || reason === 'caption_generic_filler';
+function shouldRetryPersianCaptionQuality(
+  reason: string | undefined,
+): boolean {
+  if (!reason) return false;
+
+  if (reason.startsWith('caption_unsupported_number:')) {
+    return true;
+  }
+
+  return [
+    'caption_crypto_meta_or_audience_addressing',
+    'caption_vague_or_formal',
+    'caption_quality_low',
+    'caption_generic_filler',
+    'caption_title_missing',
+    'caption_title_mismatch',
+    'caption_missing_required_attribution',
+    'caption_incomplete_sentence',
+    'caption_unsupported_exact_figure',
+    'caption_unsupported_figure',
+  ].includes(reason);
 }
 
 function buildPersianCaptionStyleRepairSystem(): string {
@@ -1059,15 +1076,27 @@ function buildPersianCaptionStyleRepairSystem(): string {
     'Do not invent real names from @handles or account names. If the source does not clearly state a real person name, use neutral wording such as "این تحلیلگر" or "این مصاحبه".',
     'The first line is the title: make it clear, professional, concrete, and correctly punctuated. If it is a question, end it with "؟", not ".".',
     'caption_short must not end mid-sentence or mid-clause. If it is too long, shorten it into a complete sentence.',
+    'Use the exact same first-line title in caption_short and caption_full.',
+    'Every explicit number, date, percentage, amount, count, version, and year must appear in source_text. Remove or correct unsupported numbers.',
+    'If validation_reason requires attribution, the first-line title itself must preserve attribution or uncertainty using wording such as "به گفته"، "طبق گزارش"، "مدعی شد"، "احتمال" or an explicit named source.',
+    'Preserve procedural stages exactly: proposed, applied, approved, signed, became law, launched, completed, accused, and convicted are different events.',
+    'Do not infer refusal, intent, motive, impact, adoption, trust, importance, or market consequences unless source_text explicitly states them.',
     'Required Persian format: a clear factual Persian title on the first line, then one blank line, then the body. A formal emoji is optional.',
     'The first real word of every non-empty title/body block after any optional emoji must be Persian; never start a block with English, a ticker, a number, @handle, URL, or hashtag.',
     'Prioritize factual accuracy and clarity over attraction: no invented urgency, exaggerated impact, or unsupported claims.',
   ].join('\n');
 }
 
-function buildPersianCaptionStyleRepairUser(translation: TranslationValue, sourceText: string): string {
+function buildPersianCaptionStyleRepairUser(
+  translation: TranslationValue,
+  sourceText: string,
+  reason: string | undefined,
+  riskFlags: string[],
+): string {
   return JSON.stringify({
     source_text: sourceText,
+    validation_reason: reason ?? null,
+    risk_flags: riskFlags,
     caption_short: translation.captionShort,
     caption_full: translation.captionFull,
   });
@@ -1079,6 +1108,7 @@ async function repairPersianCaptionStyleIfNeeded(
   translation: TranslationValue,
   sourceText: string,
   reason: string | undefined,
+  riskFlags: string[],
   provider: Config['translationProvider'],
 ): Promise<TranslationValue | null> {
   if (!shouldRetryPersianCaptionQuality(reason)) return null;
@@ -1089,7 +1119,12 @@ async function repairPersianCaptionStyleIfNeeded(
       cfg,
       provider,
       buildPersianCaptionStyleRepairSystem(),
-      buildPersianCaptionStyleRepairUser(translation, sourceText),
+      buildPersianCaptionStyleRepairUser(
+        translation,
+        sourceText,
+        reason,
+        riskFlags,
+      ),
     );
     const parsed = extractLooseJsonObject(responseText);
     if (!parsed) return null;
@@ -1143,10 +1178,16 @@ async function repairRtlTranslationLeadIfNeeded(
 
     const repaired: TranslationValue = {
       captionShort: typeof parsed.caption_short === 'string'
-        ? parsed.caption_short.slice(0, target.captionShortMaxChars)
+        ? truncateCaptionAtBoundary(
+            parsed.caption_short,
+            target.captionShortMaxChars,
+          )
         : translation.captionShort,
       captionFull: typeof parsed.caption_full === 'string'
-        ? parsed.caption_full.slice(0, target.captionMaxChars)
+        ? truncateCaptionAtBoundary(
+            parsed.caption_full,
+            target.captionMaxChars,
+          )
         : translation.captionFull,
       hashtags: translation.hashtags,
     };
@@ -1311,13 +1352,24 @@ async function runTranslationChunk(
     const translations: Record<string, any> = {};
     let missingCount = 0;
     const originalItem = (postId ? originalByPostId.get(postId) : undefined) ?? (url ? originalByUrl.get(url) : undefined);
+    const scoringContext = originalItem
+      ? scoringContextByPostId?.get(originalItem.postId)
+      : postId
+        ? scoringContextByPostId?.get(postId)
+        : undefined;
 
     for (const target of cfg.translationTargets) {
       const t = p.translations?.[target.key];
       if (t && (t.caption_short || t.caption_full)) {
         const translation: TranslationValue = {
-          captionShort: String(t.caption_short ?? '').slice(0, target.captionShortMaxChars),
-          captionFull: String(t.caption_full ?? '').slice(0, target.captionMaxChars),
+          captionShort: truncateCaptionAtBoundary(
+            String(t.caption_short ?? ''),
+            target.captionShortMaxChars,
+          ),
+          captionFull: truncateCaptionAtBoundary(
+            String(t.caption_full ?? ''),
+            target.captionMaxChars,
+          ),
           hashtags: Array.isArray(t.hashtags)
             ? t.hashtags.filter((h: any) => typeof h === 'string').slice(0, 10)
             : [],
@@ -1330,6 +1382,12 @@ async function runTranslationChunk(
               rejectEnabled: String((env as any).CAPTION_QUALITY_REJECT_ENABLED ?? '').toLowerCase() === 'true',
               minScore: parseInt(String((env as any).CAPTION_QUALITY_MIN_SCORE ?? '70'), 10) || 70,
               categoryId: category.id,
+              safetyEnabled: String(
+                (env as any).CAPTION_SAFETY_V2_ENABLED ?? '',
+              ).toLowerCase() === 'true',
+              riskFlags: scoringContext?.risk_flags ?? [],
+              shortMaxChars: target.captionShortMaxChars,
+              fullMaxChars: target.captionMaxChars,
             })
           : { ok: false, reason: 'rtl_repair_failed' };
 
@@ -1340,6 +1398,7 @@ async function runTranslationChunk(
             repaired,
             originalItem?.text ?? '',
             qualityDecision.reason,
+            scoringContext?.risk_flags ?? [],
             provider,
           );
           if (styleRepaired) {
@@ -1350,6 +1409,12 @@ async function runTranslationChunk(
                   rejectEnabled: String((env as any).CAPTION_QUALITY_REJECT_ENABLED ?? '').toLowerCase() === 'true',
                   minScore: parseInt(String((env as any).CAPTION_QUALITY_MIN_SCORE ?? '70'), 10) || 70,
                   categoryId: category.id,
+                  safetyEnabled: String(
+                    (env as any).CAPTION_SAFETY_V2_ENABLED ?? '',
+                  ).toLowerCase() === 'true',
+                  riskFlags: scoringContext?.risk_flags ?? [],
+                  shortMaxChars: target.captionShortMaxChars,
+                  fullMaxChars: target.captionMaxChars,
                 })
               : { ok: false, reason: 'style_repair_rtl_failed' };
           }
@@ -1611,6 +1676,14 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- The title must state the main source-supported fact, not a generic claim about importance, growth, adoption, or market impact.',
     '- Every title and body claim must be directly supported by the supplied source text.',
     '- Preserve attribution: a claim, opinion, forecast, allegation, estimate, or analysis must not be rewritten as an established fact.',
+    '- Internally classify the source as one of: confirmed fact, reported claim, allegation, opinion, analysis, prediction, question, or roundup.',
+    '- For any claim that is not a confirmed fact, the title itself must preserve attribution or uncertainty. Do not hide attribution only in the body.',
+    '- Preserve the exact procedural stage of an event. Applied, proposed, approved, signed, became law, launched, completed, accused, and convicted are not interchangeable.',
+    '- Do not infer intent or motive from absence or inaction. For example, "did not sign" must not become "refused to sign" unless refusal is explicit.',
+    '- Compression means selecting supported facts, not inventing likely context, impact, adoption, confidence, importance, or market consequences.',
+    '- Do not introduce a proper noun, role, date, figure, organization, product, or location that is absent from the source text and supplied scoring context.',
+    '- caption_short and caption_full must use the exact same first-line title for a target.',
+    '- If the source text is brief or risk flags indicate limited context, use one concise body sentence and stop. Do not manufacture explanatory context.',
     '- Do not invent causes, motives, consequences, urgency, importance, sentiment, or likely market effects.',
     '- If the source does not provide enough context for an explanatory sentence, omit that sentence instead of guessing.',
     '- Proper names, brands, products, tickers, abbreviations, and newly created terms may remain unchanged.',
@@ -1662,6 +1735,9 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- caption_short: concise Telegram media caption; for Persian it MUST include a clear factual title, one blank line, then the short body; respect each target max chars',
     '- caption_full: complete Telegram post with context; for Persian it MUST include a clear factual title, one blank line, then the full body; respect each target max chars',
     '- Headline/title rule: the first line of caption_short and caption_full is the title. It must be professional, clear, concrete, and meaningful on its own. The title is what makes the reader continue reading; do not write vague, generic, awkward, or clickbait titles.',
+    '- Canonical title rule: produce one canonical title per target and repeat it exactly as the first line of both caption_short and caption_full.',
+    '- Headline grounding rule: the title must express the source actor, action, object, procedural stage, attribution, and uncertainty correctly whenever those elements are material.',
+    '- Headline selection rule: choose the source\'s actual new information, not merely the easiest statistic or the first sentence. For commentary and follow-ups, identify what is newly asserted compared with the underlying event.',
     '- Title punctuation rule: if a title is phrased as a question, it MUST end with a question mark. Use "؟" for Persian/Arabic and "?" for English/Latin-script titles. Never end a question title with a period.',
     '- Do not overuse question titles. Use a question title only when the source itself contains real uncertainty, debate, prediction, or choice. Otherwise write a direct factual title.',
     '- Name/handle rule: do NOT invent real personal names from @handles, account names, or ambiguous source labels. If the real name is not explicit in the source text, use a neutral role phrase such as "این تحلیلگر", "این مصاحبه", "این پلتفرم", or "این شرکت" instead of creating or translating a name.',
@@ -1754,7 +1830,11 @@ async function callGemini(env: Env, model: string, system: string, user: string,
       body: JSON.stringify({
         system_instruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: cfgMaxOutputTokens(env) },
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: cfgMaxOutputTokens(env),
+          responseMimeType: 'application/json',
+        },
       }),
       signal: AbortSignal.timeout(90_000),
     });
@@ -1887,7 +1967,7 @@ interface Config {
 function loadConfig(env: Env): Config {
   const provider = (env.TRANSLATION_PROVIDER || 'gemini').toLowerCase() as 'gemini' | 'openai' | 'claude';
 
-  let defaultModel = 'gemini-2.5-flash-lite';
+  let defaultModel = 'gemini-3.1-flash-lite';
   if (provider === 'openai') defaultModel = 'gpt-4o-mini';
   if (provider === 'claude') defaultModel = env.AI_SCORING_MODEL || 'claude-haiku-4-5-20251001';
 
