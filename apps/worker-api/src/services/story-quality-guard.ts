@@ -25,6 +25,44 @@ const WATCH_SOURCE_ACCOUNTS = new Set([
   'beincrypto',
 ]);
 
+const EXPLICIT_CRYPTO_DOMAIN_PATTERNS: readonly RegExp[] = [
+  /\b(?:bitcoin|btc|ethereum|ether|eth|solana|xrp|ripple|bnb chain|dogecoin|cardano|tron|toncoin|hyperliquid|avalanche|chainlink|polkadot|litecoin|bitcoin cash|sui|aptos|arbitrum|optimism|near protocol|injective|cosmos|aave|uniswap|usdt|usdc|tether)\b/iu,
+
+  /\b(?:crypto(?:currency|currencies)?|digital asset(?:s)?|blockchain|web3|defi|nft|stablecoin(?:s)?|cbdc|tokeni[sz](?:e|ed|ation)|real[- ]world asset(?:s)?|rwa|on[- ]?chain|smart contract(?:s)?|seed phrase|crypto wallet(?:s)?|crypto exchange(?:s)?|layer ?2|mainnet|testnet|validator(?:s)?|staking|crypto mining|liquidation(?:s)?|funding rate|open interest)\b/iu,
+
+  /\b(?:coinbase|kraken|binance|okx|bybit|bitget|gate\.io|metamask|polymarket|defillama|lido|makerdao|sky protocol|curve finance|compound finance|pancakeswap|circle internet|xstocks|metaplanet|robinhood chain|genlayer|ccip)\b/iu,
+
+  /(?:^|\s)\$[a-z][a-z0-9]{1,11}\b/iu,
+
+  /(?:بیت\s*کوین|اتریوم|رمز\s*ارز|ارز دیجیتال|دارایی دیجیتال|بلاکچین|وب\s*3|وب۳|دیفای|استیبل\s*کوین|تتر|توکن(?:ی|‌سازی|ایزه)?|کیف پول رمزارز|قرارداد هوشمند|ماینینگ|استخراج رمزارز|استیکینگ|لیکویید|صرافی رمزارز|ارز دیجیتال بانک مرکزی)/u,
+];
+
+export function hasExplicitCryptoDomainLink(value: unknown): boolean {
+  const body = normalizeText(value);
+  if (!body) return false;
+
+  return EXPLICIT_CRYPTO_DOMAIN_PATTERNS.some(
+    pattern => pattern.test(body),
+  );
+}
+
+export function getHardCryptoRelevanceRejectReason(
+  item: Pick<NormalizedItem, 'sourceAccount' | 'text'>,
+  ai?: Pick<AIGateResult, 'topicFingerprint' | 'riskFlags'>,
+): string | null {
+  const combined = [
+    item.text,
+    ai?.topicFingerprint ?? '',
+    ...(ai?.riskFlags ?? []),
+  ].join(' ');
+
+  if (hasExplicitCryptoDomainLink(combined)) {
+    return null;
+  }
+
+  return 'iran_audience_missing_explicit_crypto_relevance';
+}
+
 export function getSourceAudienceRejectReason(
   item: Pick<NormalizedItem, 'sourceAccount' | 'text'>,
   ai?: Pick<AIGateResult, 'score' | 'topicFingerprint' | 'riskFlags' | 'publishPriority'>,
@@ -57,6 +95,13 @@ export function getSourceAudienceRejectReason(
 
   if (isPrivateEquityRetailAccessWithoutIranUtility(combined)) {
     return 'iran_audience_private_asset_tokenization_low_utility';
+  }
+
+  const hardRelevanceReject =
+    getHardCryptoRelevanceRejectReason(item, ai);
+
+  if (hardRelevanceReject) {
+    return hardRelevanceReject;
   }
 
   const genericRejectReason = getGenericCryptoEditorialRejectReason(account, combined, ai);
