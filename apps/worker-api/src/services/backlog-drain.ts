@@ -324,6 +324,11 @@ export async function drainAICandidateQueue(env: Env, options: BacklogDrainOptio
       rssDeferredThisRun = true;
       rssDeferralWarnings.add('rss_brief_daily_cap');
     }
+    if (batchResult.stopRun) {
+      result.error = batchResult.error;
+      break;
+    }
+
     if (batchResult.stoppedByBudget) {
       result.stoppedByBudget = true;
       result.error = batchResult.error;
@@ -596,12 +601,7 @@ export async function repairCapBlockedSelectedCandidates(
           continue;
         }
 
-        const scheduledAt = await adjustScheduledAtForFairSourceSpacing(
-          env,
-          channel,
-          candidate.item.sourceAccount,
-          rule.scheduledAt,
-        );
+        const scheduledAt = rule.scheduledAt;
 
         const inserted = await saveQueueItem(env, {
           candidateId: candidate.row.id,
@@ -693,6 +693,8 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
   failed: number;
   skipped: number;
   stoppedByBudget: boolean;
+  /** Stop this drain invocation after a transient provider failure. */
+  stopRun?: boolean;
   /** RSS brief daily cap hit: stop pulling RSS for the rest of this tick WITHOUT
    *  stopping non-RSS drain (unlike stoppedByBudget, which halts everything). */
   rssBudgetExhausted?: boolean;
@@ -783,13 +785,67 @@ async function processClaimedBatch(env: Env, rows: AICandidateRow[], scoringCall
       : await runAIGate(env, items, category, whitelist, channels);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await releaseClaimedCandidatesToPending(env, prepared.map(x => x.row.id), `scoring_error: ${msg}`);
-    return { ...zero, rejected, skipped, error: msg };
+
+    await releaseClaimedCandidatesToPending(
+      env,
+      prepared.map(x => x.row.id),
+      `scoring_error: ${msg}`,
+      { decrementAttempt: true },
+    );
+
+    return {
+      ...zero,
+      rejected,
+      skipped: skipped + prepared.length,
+      stopRun: true,
+      error: 'scoring_error_retry',
+    };
   }
 
   if (aiResults.some(ai => ai.riskFlags?.includes('ai_budget_exceeded'))) {
-    await releaseClaimedCandidatesToPending(env, prepared.map(x => x.row.id), 'ai_budget_exceeded', { decrementAttempt: true });
-    return { ...zero, rejected, skipped, stoppedByBudget: true, error: 'ai_budget_exceeded' };
+    await releaseClaimedCandidatesToPending(
+      env,
+      prepared.map(x => x.row.id),
+      'ai_budget_exceeded',
+      { decrementAttempt: true },
+    );
+
+    return {
+      ...zero,
+      rejected,
+      skipped,
+      stoppedByBudget: true,
+      error: 'ai_budget_exceeded',
+    };
+  }
+
+  if (aiResults.some(ai => ai.riskFlags?.includes('scoring_error'))) {
+    await releaseClaimedCandidatesToPending(
+      env,
+      prepared.map(x => x.row.id),
+      'scoring_error_retry',
+      { decrementAttempt: true },
+    );
+
+    await recordRunEvent(env, {
+      runId: prepared[0]?.row.run_id ?? 'backlog_drain',
+      eventType: 'candidate.batch.scoring_transient_failure',
+      phase: 'ai_candidate_backlog',
+      severity: 'warn',
+      message: 'Scoring provider failed; candidates released for retry.',
+      categoryId: category.id,
+      metadata: {
+        candidateCount: prepared.length,
+      },
+    });
+
+    return {
+      ...zero,
+      rejected,
+      skipped: skipped + prepared.length,
+      stopRun: true,
+      error: 'scoring_error_retry',
+    };
   }
 
   const similarTopicRejects = channels.some(channel => channel.semantic_dedupe_enabled !== 0)
@@ -1670,7 +1726,7 @@ async function persistCandidateDecision(
       continue;
     }
 
-    const scheduledAt = await adjustScheduledAtForFairSourceSpacing(env, channel, candidate.item.sourceAccount, rule.scheduledAt);
+    const scheduledAt = rule.scheduledAt;
     const inserted = await saveQueueItem(env, {
       candidateId: candidate.row.id,
       itemId,
@@ -1973,46 +2029,6 @@ async function countRecentThemeMatches(env: Env, channel: ChannelRow, themeKey: 
     return 0;
   }
 }
-
-async function adjustScheduledAtForFairSourceSpacing(
-  env: Env,
-  channel: ChannelRow,
-  sourceAccount: string,
-  proposedScheduledAt: number,
-): Promise<number> {
-  const account = normalizeAccount(sourceAccount);
-  if (!account) return proposedScheduledAt;
-
-  const gapMinutesRaw = Number((env as any).PUBLISH_SOURCE_ACCOUNT_GAP_MINUTES);
-  const gapMinutes = Number.isFinite(gapMinutesRaw) && gapMinutesRaw > 0
-    ? Math.min(Math.max(Math.floor(gapMinutesRaw), 15), 360)
-    : 90;
-  const gapSeconds = gapMinutes * 60;
-  const windowStart = proposedScheduledAt - gapSeconds;
-  const windowEnd = proposedScheduledAt + gapSeconds;
-
-  try {
-    const row = await env.DB.prepare(`
-      SELECT MAX(q.scheduled_at) AS latest
-      FROM publish_queue q
-      JOIN discovery_items d ON d.id = q.item_id
-      WHERE q.channel_id = ?
-        AND q.status IN ('scheduled','retry','publishing')
-        AND lower(d.source_account) = ?
-        AND q.scheduled_at BETWEEN ? AND ?
-    `).bind(channel.id, account, windowStart, windowEnd).first<{ latest: number | null }>();
-
-    const latest = Number(row?.latest ?? 0);
-    if (Number.isFinite(latest) && latest > 0) {
-      return Math.max(proposedScheduledAt, latest + gapSeconds);
-    }
-  } catch (err) {
-    console.warn('[BacklogDrain] source spacing skipped:', err instanceof Error ? err.message : String(err));
-  }
-
-  return proposedScheduledAt;
-}
-
 
 interface FinalPublishDuplicateGuardInput {
   channel: ChannelRow;

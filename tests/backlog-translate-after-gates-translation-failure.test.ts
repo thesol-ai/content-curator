@@ -95,4 +95,66 @@ describe('6H translation-failure path (provider 503 must not strand survivors)',
     // survivors were returned to pending (release UPDATE), not left claimed
     expect(db.sqls.some(s => /UPDATE ai_candidate_queue/i.test(s) && /pending/i.test(s))).toBe(true);
   });
+
+  it('retries scoring_error without writing publish or dedupe state', async () => {
+    scoreItemsMock.mockResolvedValueOnce([{
+      publish: false,
+      score: 0,
+      riskLevel: 'medium',
+      riskFlags: ['scoring_error'],
+      topicFingerprint: 'err-1',
+      publishPriority: 'normal',
+      translations: {},
+    }]);
+
+    const db = buildDb([
+      candidate(
+        '1',
+        'Bitcoin ETF saw $500M net inflow today.',
+      ),
+    ]);
+
+    const result = await drainAICandidateQueue(
+      env(db.prepare),
+      {
+        categoryId: 'crypto',
+        maxBatches: 1,
+      },
+    );
+
+    expect(result.error).toBe('scoring_error_retry');
+    expect(result.stoppedByBudget).toBe(false);
+    expect(result.candidatesQueued).toBe(0);
+    expect(result.candidatesRejected).toBe(0);
+    expect(result.candidatesSkipped).toBe(1);
+
+    expect(
+      db.sqls.some(
+        sql => /INSERT OR IGNORE INTO publish_queue/i.test(sql),
+      ),
+    ).toBe(false);
+
+    expect(
+      db.sqls.some(
+        sql => /INSERT OR IGNORE INTO dedupe_keys/i.test(sql),
+      ),
+    ).toBe(false);
+
+    expect(
+      db.sqls.some(
+        sql =>
+          /UPDATE ai_candidate_queue/i.test(sql)
+          && /status='pending'/i.test(sql),
+      ),
+    ).toBe(true);
+
+    expect(
+      db.sqls.some(
+        sql => sql.includes(
+          'attempt_count=CASE WHEN ?',
+        ),
+      ),
+    ).toBe(true);
+  });
+
 });
