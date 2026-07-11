@@ -164,6 +164,7 @@ export interface Env {
   CAPTION_QUALITY_REPAIR_ENABLED?: string;          // default: "false" — repair-first caption quality
   CAPTION_QUALITY_REJECT_ENABLED?: string;          // default: "false" — reject if still low after repair
   CAPTION_QUALITY_MIN_SCORE?: string;               // default: "70"
+  CAPTION_SAFETY_V2_ENABLED?: string;              // default: "false" — strict factual/title/number validation
 
   // Media — سه حالت:
   //   direct_url    → URL مستقیم به Telegram (پیش‌فرض، سریع، بدون ضمانت)

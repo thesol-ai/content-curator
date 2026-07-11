@@ -1,4 +1,5 @@
 import type { AIGateResult, NormalizedItem, TranslationOutput } from '../types';
+import { validateAndCompactCaption } from './caption-safety';
 
 export interface CaptionQualityDecision {
   ok: boolean;
@@ -224,7 +225,16 @@ export function applyPersianCaptionQualityGuard(
   language: string,
   translation: TranslationOutput,
   sourceText: unknown,
-  opts?: { repairEnabled?: boolean; rejectEnabled?: boolean; minScore?: number; categoryId?: string },
+  opts?: {
+    repairEnabled?: boolean;
+    rejectEnabled?: boolean;
+    minScore?: number;
+    categoryId?: string;
+    safetyEnabled?: boolean;
+    riskFlags?: string[];
+    shortMaxChars?: number;
+    fullMaxChars?: number;
+  },
 ): CaptionQualityDecision {
   if (language !== 'fa') return { ok: true, translation };
 
@@ -288,7 +298,36 @@ export function applyPersianCaptionQualityGuard(
     }
   }
 
-  return { ok: true, translation: repaired };
+  // Safety V2 is explicitly enabled per environment. Keeping it gated avoids
+  // changing legacy categories/tests while production rollout is validated.
+  if (!opts?.safetyEnabled) {
+    return {
+      ok: true,
+      translation: repaired,
+    };
+  }
+
+  const safetyDecision = validateAndCompactCaption(
+    sourceText,
+    repaired,
+    {
+      riskFlags: opts?.riskFlags,
+      shortMaxChars: opts?.shortMaxChars,
+      fullMaxChars: opts?.fullMaxChars,
+    },
+  );
+
+  if (!safetyDecision.ok || !safetyDecision.translation) {
+    return {
+      ok: false,
+      reason: safetyDecision.reason ?? 'caption_safety_failed',
+    };
+  }
+
+  return {
+    ok: true,
+    translation: safetyDecision.translation,
+  };
 }
 
 
