@@ -103,9 +103,10 @@ describe('safe weak post-AI gate override', () => {
     )).toBe(semanticReason);
   });
 
-  it('recognizes editorial capacity gates without topic-specific names', () => {
+  it('keeps only capacity gates soft and treats relevance as hard', () => {
     expect(isSoftEditorialGateReject('theme_daily_cap:theme:anything')).toBe(true);
-    expect(isSoftEditorialGateReject('audience_profile_requires_material_impact')).toBe(true);
+    expect(isSoftEditorialGateReject('audience_profile_requires_material_impact')).toBe(false);
+    expect(isSoftEditorialGateReject('iran_audience_missing_explicit_crypto_relevance')).toBe(false);
     expect(isSoftEditorialGateReject('similar_story_key_recent_channel')).toBe(false);
   });
 
@@ -136,6 +137,18 @@ describe('safe weak post-AI gate override', () => {
       enabled: true,
       rejectReason: 'similar_semantic_story_recent_channel',
       ai: ai({ score: 95 }),
+      queueStarving: true,
+      categoryScoreThreshold: 75,
+      scoreMargin: 5,
+    })).toBe(false);
+
+    expect(shouldOverrideSoftEditorialReject({
+      enabled: true,
+      rejectReason: 'iran_audience_missing_explicit_crypto_relevance',
+      ai: ai({
+        score: 95,
+        riskFlags: [],
+      }),
       queueStarving: true,
       categoryScoreThreshold: 75,
       scoreMargin: 5,

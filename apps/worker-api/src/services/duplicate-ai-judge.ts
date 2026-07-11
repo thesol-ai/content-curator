@@ -515,17 +515,36 @@ function extractSymbolTokens(value: unknown): Set<string> {
 }
 
 function extractNumbers(value: unknown): Set<string> {
-  const text = normalizeLocalText(value).toLowerCase();
+  const text = normalizeLocalText(value)
+    .toLowerCase()
+    // Calendar dates are metadata, not material story numbers.
+    .replace(/\b(?:19|20)\d{2}\s+\d{1,2}\s+\d{1,2}\b/g, ' ');
+
   const out = new Set<string>();
-  const matches = text.match(/\$?\d+(?:[,.]\d+)*(?:\.\d+)?\s*(?:b|bn|m|k|btc|eth|sol|xrp|usd|usdt|usdc|٪|%|هزار|میلیون|میلیارد|تریلیون)?/gi) ?? [];
-  for (const raw of matches) {
-    const normalized = raw
-      .replace(/\s+/g, '')
-      .replace(/,/g, '')
-      .replace(/^\$/, '')
+  const re = /\$?(\d+(?:[,.]\d+)*(?:\.\d+)?)\s*(b|bn|m|k|btc|eth|sol|xrp|usd|usdt|usdc|٪|%|هزار|میلیون|میلیارد|تریلیون)?/gi;
+
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    const rawNumber = String(match[1] ?? '')
+      .replace(/,/g, '');
+
+    const number = Number(rawNumber);
+    if (!Number.isFinite(number)) continue;
+
+    const unit = String(match[2] ?? '')
+      .toLowerCase()
       .replace(/٪/g, '%');
-    if (normalized.length >= 2) out.add(normalized);
+
+    if (!unit) {
+      // Ignore small counters and plain calendar years.
+      if (number < 100) continue;
+      if (number >= 1900 && number <= 2100) continue;
+    }
+
+    out.add(`${rawNumber}${unit}`);
   }
+
   return out;
 }
 
@@ -710,6 +729,16 @@ function scoreLocalDuplicateCandidate(current: LocalDuplicateSignal, prior: Loca
   }
 
   return { score: Math.min(1, score), reasons };
+}
+
+export function scoreDuplicateAiJudgeLocalPair(
+  candidate: DuplicateAiJudgeCandidate,
+  prior: DuplicateAiJudgePrior,
+): { score: number; reasons: string[] } {
+  return scoreLocalDuplicateCandidate(
+    candidateLocalSignal(candidate),
+    priorLocalSignal(prior),
+  );
 }
 
 function buildLocalDuplicateSuspects(args: {

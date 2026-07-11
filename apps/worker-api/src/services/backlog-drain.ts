@@ -1451,8 +1451,7 @@ export function isSoftEditorialGateReject(reason: string | null): boolean {
   const normalized = String(reason ?? '').trim().toLowerCase();
   if (!normalized) return false;
 
-  return normalized.startsWith('theme_daily_cap:')
-    || normalized.endsWith('_requires_material_impact');
+  return normalized.startsWith('theme_daily_cap:');
 }
 
 export function shouldOverrideSoftEditorialReject(args: {
