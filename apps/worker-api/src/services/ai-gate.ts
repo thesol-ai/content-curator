@@ -1404,7 +1404,14 @@ async function runTranslationChunk(
     if (attempt > 0) await sleep(2000 * attempt);
     try {
       if (provider === 'gemini') {
-        responseText = await callGemini(env, cfg.translationModel, system, user, captureUsage);
+        responseText = await callGemini(
+          env,
+          cfg.translationModel,
+          system,
+          user,
+          buildTranslationResponseSchema(cfg.translationTargets),
+          captureUsage,
+        );
       } else if (provider === 'openai') {
         responseText = await callOpenAI(env, cfg.translationModel, system, user, captureUsage);
       } else {
@@ -1936,7 +1943,89 @@ export function buildTranslationUser(
 
 // ── Provider callers ──────────────────────────────────────────
 
-async function callGemini(env: Env, model: string, system: string, user: string, onUsage?: (u: { inputTokens: number; outputTokens: number; usageId: string | null }) => void): Promise<string> {
+export function extractGeminiCandidateText(body: any): string {
+  const parts = body?.candidates?.[0]?.content?.parts;
+
+  if (!Array.isArray(parts)) return '';
+
+  return parts
+    .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+    .join('');
+}
+
+export function getGeminiFinishReason(body: any): string {
+  return String(body?.candidates?.[0]?.finishReason ?? '')
+    .trim()
+    .toUpperCase();
+}
+
+export function buildTranslationResponseSchema(
+  targets: TranslationTarget[],
+): Record<string, unknown> {
+  const targetProperties = Object.fromEntries(
+    targets.map(target => [
+      target.key,
+      {
+        type: 'OBJECT',
+        properties: {
+          caption_short: { type: 'STRING' },
+          caption_full: { type: 'STRING' },
+          hashtags: {
+            type: 'ARRAY',
+            items: { type: 'STRING' },
+          },
+        },
+        required: [
+          'caption_short',
+          'caption_full',
+          'hashtags',
+        ],
+      },
+    ]),
+  );
+
+  return {
+    type: 'OBJECT',
+    properties: {
+      items: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            post_id: { type: 'STRING' },
+            url: { type: 'STRING' },
+            translations: {
+              type: 'OBJECT',
+              properties: targetProperties,
+              required: targets.map(target => target.key),
+            },
+          },
+          required: [
+            'post_id',
+            'url',
+            'translations',
+          ],
+        },
+      },
+    },
+    required: ['items'],
+  };
+}
+
+async function callGemini(
+  env: Env,
+  model: string,
+  system: string,
+  user: string,
+  responseSchema?: Record<string, unknown>,
+  onUsage?: (
+    u: {
+      inputTokens: number;
+      outputTokens: number;
+      usageId: string | null;
+    },
+  ) => void,
+): Promise<string> {
   const keyPool = getGeminiKeyPool(env);
   if (keyPool.length === 0) throw new Error('GEMINI_API_KEY or GEMINI_API_KEY_POOL not configured');
 
@@ -1957,6 +2046,7 @@ async function callGemini(env: Env, model: string, system: string, user: string,
           temperature: 0.1,
           maxOutputTokens: cfgMaxOutputTokens(env),
           responseMimeType: 'application/json',
+          ...(responseSchema ? { responseSchema } : {}),
         },
       }),
       signal: AbortSignal.timeout(90_000),
@@ -1974,12 +2064,107 @@ async function callGemini(env: Env, model: string, system: string, user: string,
 
     const body = await res.json() as any;
     const usage = extractGeminiUsage(body);
+    const text = extractGeminiCandidateText(body);
+    const finishReason = getGeminiFinishReason(body);
+    const finishMessage = String(
+      body?.candidates?.[0]?.finishMessage ?? '',
+    ).slice(0, 200);
+
+    const parts = body?.candidates?.[0]?.content?.parts;
+    const partCount = Array.isArray(parts) ? parts.length : 0;
+
+    const thoughtsTokens =
+      Number(body?.usageMetadata?.thoughtsTokenCount ?? 0) || 0;
+
+    const totalTokens =
+      Number(body?.usageMetadata?.totalTokenCount ?? 0) || 0;
+
+    const metadata = [
+      `finishReason=${finishReason || 'unknown'}`,
+      `parts=${partCount}`,
+      `chars=${text.length}`,
+      `candidateTokens=${usage.outputTokens}`,
+      `thoughtsTokens=${thoughtsTokens}`,
+      `totalTokens=${totalTokens}`,
+    ].join(' ');
+
+    if (finishReason && finishReason !== 'STOP') {
+      const message = [
+        'Gemini translation stopped before completion',
+        metadata,
+        finishMessage
+          ? `finishMessage=${finishMessage}`
+          : '',
+      ].filter(Boolean).join(' ');
+
+      await recordAIUsage(env, {
+        provider: 'gemini',
+        purpose: 'translation',
+        model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        status: 'failed',
+        errorMessage: message,
+      });
+
+      console.error(`[Gemini] ${message}`);
+      throw new Error(message);
+    }
+
+    if (!text) {
+      const message =
+        `Gemini returned no translation text ${metadata}`;
+
+      await recordAIUsage(env, {
+        provider: 'gemini',
+        purpose: 'translation',
+        model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        status: 'failed',
+        errorMessage: message,
+      });
+
+      console.error(`[Gemini] ${message}`);
+      throw new Error(message);
+    }
+
+    // Only the main translation request uses the strict {"items":[...]}
+    // schema. Repair calls intentionally return smaller JSON objects such as
+    // {"caption_short":"...","caption_full":"..."} and are parsed by their
+    // own callers.
+    if (responseSchema && !extractJsonObject(text)) {
+      const message =
+        `Gemini translation returned invalid structured JSON ${metadata}`;
+
+      await recordAIUsage(env, {
+        provider: 'gemini',
+        purpose: 'translation',
+        model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        status: 'failed',
+        errorMessage: message,
+      });
+
+      console.error(
+        `[Gemini] ${message} preview=${debugPreview(text)}`,
+      );
+
+      throw new Error(message);
+    }
+
     const usageId = await recordAIUsage(env, {
-      provider: 'gemini', purpose: 'translation', model,
-      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, status: 'success',
+      provider: 'gemini',
+      purpose: 'translation',
+      model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      status: 'success',
     });
+
     onUsage?.({ ...usage, usageId });
-    return body.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    return text;
   }
 
   throw new Error(lastErr || 'Gemini failed for all configured keys');
