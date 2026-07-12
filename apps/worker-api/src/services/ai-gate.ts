@@ -323,6 +323,7 @@ export async function attachTranslations(
     }
   });
 
+  const terminalFailures: TerminalTranslationFailureMap = new Map();
   const translationsMap = await runTranslation(
     env,
     cfg,
@@ -330,6 +331,7 @@ export async function attachTranslations(
     category,
     attrByPostId,
     scoringContextByPostId,
+    terminalFailures,
   );
 
   return scoreResults.map((result, i) => {
@@ -337,10 +339,36 @@ export async function attachTranslations(
     if (!result.publish) return result;
     if (!needsTranslation(i)) return result; // already had translations (e.g. mock)
     const t = getTranslationsForItem(translationsMap, item);
+    const terminalByTarget = getTerminalTranslationFailuresForItem(
+      terminalFailures,
+      item,
+    );
     if (!t || Object.keys(t).length === 0) {
-      // ترجمه موجود نیست — این یک خطای مشخص است نه رد ساکت
+      // ترجمه موجود نیست. خطای factual فقط وقتی terminal است که
+      // repair داخلی کامل شده و همه targetها همان‌جا رد شده باشند.
       console.warn(`[AIGate] No translation returned for item ${item.postId}`);
-      return { ...result, publish: false, riskFlags: [...result.riskFlags, 'translation_missing'] };
+
+      const terminalReasons = cfg.translationTargets
+        .map(target => terminalByTarget?.[target.key])
+        .filter((reason): reason is string => Boolean(reason));
+
+      const allTargetsTerminal =
+        cfg.translationTargets.length > 0
+        && terminalReasons.length === cfg.translationTargets.length;
+
+      const terminalReason = allTargetsTerminal
+        ? Array.from(new Set(terminalReasons)).join('|').slice(0, 160)
+        : null;
+
+      return {
+        ...result,
+        publish: false,
+        translationTerminalReason: terminalReason,
+        riskFlags: Array.from(new Set([
+          'translation_missing',
+          ...result.riskFlags,
+        ])).slice(0, 20),
+      };
     }
     // بررسی اینکه آیا همه targetهای لازم پوشش داده شدند
     const missingTargets = cfg.translationTargets.filter(target => !t[target.key]);
@@ -1237,6 +1265,78 @@ function getTranslationsForItem(
   return undefined;
 }
 
+type TranslationFailureKind = 'transient' | 'terminal';
+
+type TerminalTranslationFailureMap = Map<
+  string,
+  Record<string, string>
+>;
+
+/**
+ * A caption failure is terminal only after the in-request repair completed and
+ * the result still violates a factual/safety rule. Provider, JSON, RTL, title,
+ * style and generic quality failures remain retryable.
+ */
+export function classifyTranslationFailureReason(
+  reason: string | undefined,
+  repairCompleted: boolean,
+): TranslationFailureKind {
+  if (!repairCompleted) return 'transient';
+
+  const normalized = String(reason ?? '').trim().toLowerCase();
+
+  if (normalized.startsWith('caption_unsupported_number:')) {
+    return 'terminal';
+  }
+
+  return [
+    'caption_unsupported_exact_figure',
+    'caption_unsupported_figure',
+    'caption_missing_required_attribution',
+  ].includes(normalized)
+    ? 'terminal'
+    : 'transient';
+}
+
+function setTerminalTranslationFailureForItem(
+  failures: TerminalTranslationFailureMap,
+  item: Pick<NormalizedItem, 'postId' | 'sourceUrl'>,
+  targetKey: string,
+  reason: string,
+): void {
+  const keys = [
+    item.postId ? postIdLookupKey(item.postId) : null,
+    ...urlLookupKeys(item.sourceUrl),
+  ].filter((key): key is string => Boolean(key));
+
+  for (const key of keys) {
+    const current = failures.get(key) ?? {};
+
+    failures.set(key, {
+      ...current,
+      [targetKey]: String(reason).slice(0, 160),
+    });
+  }
+}
+
+function getTerminalTranslationFailuresForItem(
+  failures: TerminalTranslationFailureMap,
+  item: Pick<NormalizedItem, 'postId' | 'sourceUrl'>,
+): Record<string, string> | undefined {
+  const byPostId = item.postId
+    ? failures.get(postIdLookupKey(item.postId))
+    : undefined;
+
+  if (byPostId) return byPostId;
+
+  for (const key of urlLookupKeys(item.sourceUrl)) {
+    const found = failures.get(key);
+    if (found) return found;
+  }
+
+  return undefined;
+}
+
 // ══════════════════════════════════════════════════════════════
 // مرحله ۲ — Translation Provider (Gemini یا OpenAI)
 // ══════════════════════════════════════════════════════════════
@@ -1248,6 +1348,7 @@ async function runTranslation(
   category: CategoryRow,
   attrByPostId?: Map<string, AttributionItem>,
   scoringContextByPostId?: Map<string, TranslationScoringContext>,
+  terminalFailures: TerminalTranslationFailureMap = new Map(),
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const result = new Map<string, any>();
   if (items.length === 0) return result;
@@ -1264,6 +1365,7 @@ async function runTranslation(
       offset,
       attrByPostId,
       scoringContextByPostId,
+      terminalFailures,
     );
     for (const [key, value] of chunkMap.entries()) result.set(key, value);
   }
@@ -1280,6 +1382,7 @@ async function runTranslationChunk(
   offset: number,
   attrByPostId?: Map<string, AttributionItem>,
   scoringContextByPostId?: Map<string, TranslationScoringContext>,
+  terminalFailures: TerminalTranslationFailureMap = new Map(),
 ): Promise<Map<string, Record<string, { captionShort: string; captionFull: string; hashtags: string[] }>>> {
   const provider = cfg.translationProvider;
   const result = new Map<string, any>();
@@ -1376,6 +1479,7 @@ async function runTranslationChunk(
         };
 
         const repaired = await repairRtlTranslationLeadIfNeeded(env, cfg, target, translation, provider);
+        let qualityRepairCompleted = false;
         let qualityDecision: { ok: boolean; translation?: TranslationValue; reason?: string } = repaired
           ? applyPersianCaptionQualityGuard(target.language, repaired, originalItem?.text ?? '', {
               repairEnabled: String((env as any).CAPTION_QUALITY_REPAIR_ENABLED ?? '').toLowerCase() === 'true',
@@ -1403,6 +1507,7 @@ async function runTranslationChunk(
           );
           if (styleRepaired) {
             const rtlSafe = await repairRtlTranslationLeadIfNeeded(env, cfg, target, styleRepaired, provider);
+            qualityRepairCompleted = Boolean(rtlSafe);
             qualityDecision = rtlSafe
               ? applyPersianCaptionQualityGuard(target.language, rtlSafe, originalItem?.text ?? '', {
                   repairEnabled: String((env as any).CAPTION_QUALITY_REPAIR_ENABLED ?? '').toLowerCase() === 'true',
@@ -1423,7 +1528,25 @@ async function runTranslationChunk(
         if (qualityDecision.ok && qualityDecision.translation) {
           translations[target.key] = qualityDecision.translation;
         } else {
-          console.warn(`[Translation] Caption quality guard omitted target=${target.key} reason=${qualityDecision.reason ?? 'unknown'} post_id=${postId || 'n/a'} url=${url || 'n/a'}`);
+          const reason = qualityDecision.reason ?? 'unknown';
+
+          console.warn(`[Translation] Caption quality guard omitted target=${target.key} reason=${reason} post_id=${postId || 'n/a'} url=${url || 'n/a'}`);
+
+          if (
+            originalItem
+            && classifyTranslationFailureReason(
+              reason,
+              qualityRepairCompleted,
+            ) === 'terminal'
+          ) {
+            setTerminalTranslationFailureForItem(
+              terminalFailures,
+              originalItem,
+              target.key,
+              reason,
+            );
+          }
+
           missingCount++;
         }
       } else {
