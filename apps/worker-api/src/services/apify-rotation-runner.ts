@@ -24,6 +24,44 @@ interface DatasetHealth {
   }>;
 }
 
+
+export type RotationClaimState =
+  | 'claimed'
+  | 'active'
+  | 'uncertain'
+  | 'completed'
+  | 'failed';
+
+export interface RotationSlotClaimPlan {
+  sourceId: string;
+  taskId: string | null;
+  categoryId: string;
+  platform: string;
+}
+
+export interface RotationSlotClaim {
+  version: 1;
+  state: RotationClaimState;
+  slot: number;
+  rotationRunId: string;
+  claimedAt: string;
+  plans: RotationSlotClaimPlan[];
+  actorRunId?: string | null;
+  datasetId?: string | null;
+  status?: string | null;
+  recoveryMisses?: number;
+  results?: unknown;
+}
+
+export interface ApifyTaskRunSummary {
+  id?: string | null;
+  actorTaskId?: string | null;
+  status?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  defaultDatasetId?: string | null;
+}
+
 export interface ApifyRotationOptions {
   force?: boolean;
   dryRun?: boolean;
@@ -123,6 +161,7 @@ export async function runApifyRotation(
     : Number.POSITIVE_INFINITY;
 
   const plans: RotationPlan[] = [];
+  let claimedSlot: number | null = null;
 
   if (options.force || options.dryRun) {
     for (const plan of allPlans) {
@@ -150,15 +189,25 @@ export async function runApifyRotation(
       ordered = ordered.filter(plan => plan.source.id === fixedSourceId);
     }
 
-    // Claim the SLOT once (not per-source). The first cron tick inside a slot
-    // wins and fires exactly the designated source(s); later ticks in the same
-    // slot find the slot already claimed and skip.
-    const claimed = await claimRotationSlot(env, slot);
+    // Recover a previous invocation that died after claiming its slot but
+    // before durably recording the Apify result. Recovery only reads Apify
+    // task runs; it never starts a paid Actor run.
+    await recoverStaleRotationClaims(env);
+
+    const candidatePlans = ordered.slice(0, perSlot);
+
+    // Claim the SLOT once (not per-source). Store enough durable context to
+    // determine whether an ambiguous Apify request already created a run.
+    const claimed = await claimRotationSlot(
+      env,
+      slot,
+      rotationRunId,
+      candidatePlans,
+    );
+
     if (claimed) {
-      for (const plan of ordered) {
-        if (plans.length >= perSlot) break;
-        plans.push(plan);
-      }
+      claimedSlot = slot;
+      plans.push(...candidatePlans);
     }
   } else {
     const maxSourcesPerTick = Math.min(hardCap, getMaxSourcesPerTick(env));
@@ -404,6 +453,23 @@ export async function runApifyRotation(
   }
 
   const ok = results.every(row => !row.error);
+
+  if (claimedSlot != null) {
+    const ambiguous = results.some(row => {
+      if (!row.error) return false;
+      if (row.error === 'missing_apify_task_id') return false;
+      if (/Apify task run failed 4\d\d/.test(row.error)) return false;
+      return !(row.attempts ?? []).some(attempt => Boolean(attempt.actorRunId));
+    });
+
+    await finalizeRotationSlotClaim(
+      env,
+      claimedSlot,
+      rotationRunId,
+      ambiguous ? 'uncertain' : ok ? 'completed' : 'failed',
+      results,
+    );
+  }
 
   await recordRunEvent(env, {
     runId: rotationRunId,
@@ -1147,13 +1213,435 @@ export function orderPlansForSlot<T>(plans: T[], slot: number): T[] {
   return out;
 }
 
-async function claimRotationSlot(env: Env, slot: number): Promise<boolean> {
+function getRotationClaimStaleSeconds(env: Env): number {
+  const value = Number((env as any).APIFY_ROTATION_STALE_CLAIM_SECONDS ?? 180);
+  if (!Number.isFinite(value)) return 180;
+  return Math.min(Math.max(Math.floor(value), 120), 900);
+}
+
+export function parseRotationSlotClaim(value: unknown): RotationSlotClaim | null {
+  const raw = String(value ?? '').trim();
+  if (!raw.startsWith('{')) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<RotationSlotClaim>;
+
+    if (
+      parsed.version !== 1 ||
+      !Number.isFinite(Number(parsed.slot)) ||
+      typeof parsed.rotationRunId !== 'string' ||
+      typeof parsed.claimedAt !== 'string' ||
+      !Array.isArray(parsed.plans)
+    ) {
+      return null;
+    }
+
+    return parsed as RotationSlotClaim;
+  } catch {
+    return null;
+  }
+}
+
+export function findMatchingTaskRun(
+  runs: ApifyTaskRunSummary[],
+  claimedAtMs: number,
+  nowMs: number = Date.now(),
+): ApifyTaskRunSummary | null {
+  if (!Number.isFinite(claimedAtMs)) return null;
+
+  const lowerBound = claimedAtMs - 30_000;
+  const upperBound = Math.min(nowMs, claimedAtMs + 10 * 60_000);
+
+  const candidates = runs
+    .map(run => {
+      const startedAtMs = Date.parse(String(run.startedAt ?? ''));
+      return {
+        run,
+        startedAtMs,
+        distance: Math.abs(startedAtMs - claimedAtMs),
+      };
+    })
+    .filter(row =>
+      Number.isFinite(row.startedAtMs) &&
+      row.startedAtMs >= lowerBound &&
+      row.startedAtMs <= upperBound,
+    )
+    .sort((a, b) => a.distance - b.distance);
+
+  return candidates[0]?.run ?? null;
+}
+
+export function isApifyRunStillActive(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toUpperCase();
+
+  return [
+    'READY',
+    'RUNNING',
+    'TIMING-OUT',
+    'ABORTING',
+  ].includes(normalized);
+}
+
+async function claimRotationSlot(
+  env: Env,
+  slot: number,
+  rotationRunId: string,
+  plans: RotationPlan[],
+): Promise<boolean> {
   const key = `apify_rotation_slot_${slot}`;
+
+  const claim: RotationSlotClaim = {
+    version: 1,
+    state: 'claimed',
+    slot,
+    rotationRunId,
+    claimedAt: new Date().toISOString(),
+    plans: plans.map(plan => ({
+      sourceId: String(plan.source.id),
+      taskId: safeString(plan.source.apify_task_id),
+      categoryId: String(plan.source.category_id ?? ''),
+      platform: String(plan.source.platform ?? ''),
+    })),
+  };
+
   const result = await env.DB.prepare(`
     INSERT OR IGNORE INTO settings (key, value, updated_at)
-    VALUES (?, 'claimed', CURRENT_TIMESTAMP)
-  `).bind(key).run();
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+  `).bind(key, JSON.stringify(claim)).run();
+
   return (result.meta.changes ?? 0) > 0;
+}
+
+async function finalizeRotationSlotClaim(
+  env: Env,
+  slot: number,
+  rotationRunId: string,
+  state: 'completed' | 'failed' | 'uncertain',
+  results: unknown,
+): Promise<void> {
+  const key = `apify_rotation_slot_${slot}`;
+
+  const row = await env.DB.prepare(`
+    SELECT value
+    FROM settings
+    WHERE key=?
+    LIMIT 1
+  `).bind(key).first<{ value: string }>();
+
+  const claim = parseRotationSlotClaim(row?.value);
+  if (!claim || claim.rotationRunId !== rotationRunId) return;
+
+  if (state === 'uncertain') {
+    await env.DB.prepare(`
+      UPDATE settings
+      SET value=?, updated_at=CURRENT_TIMESTAMP
+      WHERE key=?
+    `).bind(JSON.stringify({
+      ...claim,
+      state,
+      results,
+    }), key).run();
+    return;
+  }
+
+  await env.DB.prepare(`
+    UPDATE settings
+    SET value=?, updated_at=CURRENT_TIMESTAMP
+    WHERE key=?
+  `).bind(state, key).run();
+}
+
+async function fetchRecentTaskRuns(
+  env: Env,
+  taskId: string,
+): Promise<ApifyTaskRunSummary[]> {
+  const token = String(env.APIFY_TOKEN ?? '').trim();
+  if (!token) throw new Error('missing_apify_token');
+
+  const url =
+    `${APIFY_API_BASE}/actor-tasks/${encodeURIComponent(taskId)}/runs` +
+    `?token=${encodeURIComponent(token)}&desc=1&limit=20`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Apify task runs lookup failed ${response.status}: ${text.slice(0, 300)}`,
+    );
+  }
+
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+
+  return Array.isArray(json?.data?.items)
+    ? json.data.items as ApifyTaskRunSummary[]
+    : [];
+}
+
+async function writeRotationSlotClaim(
+  env: Env,
+  key: string,
+  claim: RotationSlotClaim,
+): Promise<void> {
+  await env.DB.prepare(`
+    UPDATE settings
+    SET value=?, updated_at=CURRENT_TIMESTAMP
+    WHERE key=?
+  `).bind(JSON.stringify(claim), key).run();
+}
+
+export async function recoverStaleRotationClaims(
+  env: Env,
+): Promise<{
+  inspected: number;
+  recovered: number;
+  active: number;
+  released: number;
+  failed: number;
+}> {
+  const summary = {
+    inspected: 0,
+    recovered: 0,
+    active: 0,
+    released: 0,
+    failed: 0,
+  };
+
+  const staleSeconds = getRotationClaimStaleSeconds(env);
+
+  const rows = await env.DB.prepare(`
+    SELECT key, value, updated_at
+    FROM settings
+    WHERE key LIKE 'apify_rotation_slot_%'
+      AND value LIKE '{%'
+      AND updated_at <= datetime('now', ?)
+    ORDER BY updated_at ASC
+    LIMIT 10
+  `).bind(`-${staleSeconds} seconds`).all<{
+    key: string;
+    value: string;
+    updated_at: string;
+  }>();
+
+  for (const row of rows.results ?? []) {
+    const claim = parseRotationSlotClaim(row.value);
+    if (!claim) continue;
+    if (!['claimed', 'active', 'uncertain'].includes(claim.state)) continue;
+
+    summary.inspected++;
+
+    // Multi-source slots require per-plan leases. Production currently uses one
+    // source per slot, so refuse an unsafe automatic retry rather than risk
+    // duplicating a paid Actor run.
+    if (claim.plans.length !== 1) {
+      await recordRunEvent(env, {
+        runId: claim.rotationRunId,
+        eventType: 'apify.rotation.recovery_skipped',
+        phase: 'apify_rotation',
+        severity: 'warn',
+        message: 'Automatic stale-claim recovery requires exactly one source per slot.',
+        metadata: {
+          slot: claim.slot,
+          planCount: claim.plans.length,
+        },
+      });
+      continue;
+    }
+
+    const plan = claim.plans[0];
+    if (!plan?.taskId) {
+      await env.DB.prepare(`
+        UPDATE settings
+        SET value='failed', updated_at=CURRENT_TIMESTAMP
+        WHERE key=?
+      `).bind(row.key).run();
+
+      summary.failed++;
+      continue;
+    }
+
+    try {
+      const claimedAtMs = Date.parse(claim.claimedAt);
+      const runs = await fetchRecentTaskRuns(env, plan.taskId);
+      const matched = findMatchingTaskRun(runs, claimedAtMs);
+
+      if (!matched) {
+        const recoveryMisses =
+          Math.max(0, Number(claim.recoveryMisses ?? 0)) + 1;
+
+        // Do not release after a single empty lookup. Apify's run list could be
+        // briefly delayed, and an immediate retry could create a duplicate paid
+        // Actor run. Require two successful read-only lookups with no match.
+        if (recoveryMisses < 2) {
+          await writeRotationSlotClaim(env, row.key, {
+            ...claim,
+            state: 'uncertain',
+            recoveryMisses,
+          });
+
+          await recordRunEvent(env, {
+            runId: claim.rotationRunId,
+            eventType: 'apify.rotation.recovery_unconfirmed',
+            phase: 'apify_rotation',
+            severity: 'warn',
+            sourceId: plan.sourceId,
+            categoryId: plan.categoryId || undefined,
+            platform: plan.platform || undefined,
+            message: 'No matching Apify run found yet; keeping the claim until a second confirmation.',
+            metadata: {
+              slot: claim.slot,
+              taskId: plan.taskId,
+              claimedAt: claim.claimedAt,
+              recoveryMisses,
+            },
+          });
+
+          continue;
+        }
+
+        const deleted = await env.DB.prepare(`
+          DELETE FROM settings
+          WHERE key=? AND value=?
+        `).bind(row.key, row.value).run();
+
+        if ((deleted.meta.changes ?? 0) > 0) {
+          summary.released++;
+
+          await recordRunEvent(env, {
+            runId: claim.rotationRunId,
+            eventType: 'apify.rotation.claim_released',
+            phase: 'apify_rotation',
+            severity: 'warn',
+            sourceId: plan.sourceId,
+            categoryId: plan.categoryId || undefined,
+            platform: plan.platform || undefined,
+            message: 'Released stale rotation claim after two checks confirmed no matching Apify task run exists.',
+            metadata: {
+              slot: claim.slot,
+              taskId: plan.taskId,
+              claimedAt: claim.claimedAt,
+              recoveryMisses,
+            },
+          });
+        }
+
+        continue;
+      }
+
+      const status = safeString(matched.status);
+      const actorRunId = safeString(matched.id);
+      const datasetId = safeString(matched.defaultDatasetId);
+
+      if (isApifyRunStillActive(status)) {
+        await writeRotationSlotClaim(env, row.key, {
+          ...claim,
+          state: 'active',
+          actorRunId,
+          datasetId,
+          status,
+          recoveryMisses: 0,
+        });
+
+        summary.active++;
+        continue;
+      }
+
+      if (status === 'SUCCEEDED' && datasetId) {
+        await syncApifySourceDataset(env, plan.sourceId, datasetId);
+
+        await recordApifyDatasetJob(env, {
+          sourceId: plan.sourceId,
+          datasetId,
+          actorRunId,
+          rotationRunId: claim.rotationRunId,
+          categoryId: plan.categoryId || null,
+          platform: plan.platform || null,
+        });
+
+        await env.DB.prepare(`
+          UPDATE settings
+          SET value='completed', updated_at=CURRENT_TIMESTAMP
+          WHERE key=?
+        `).bind(row.key).run();
+
+        await recordRunEvent(env, {
+          runId: claim.rotationRunId,
+          eventType: 'apify.rotation.recovered',
+          phase: 'apify_rotation',
+          sourceId: plan.sourceId,
+          datasetId,
+          actorRunId: actorRunId ?? undefined,
+          categoryId: plan.categoryId || undefined,
+          platform: plan.platform || undefined,
+          metadata: {
+            slot: claim.slot,
+            taskId: plan.taskId,
+            claimedAt: claim.claimedAt,
+            status,
+          },
+        });
+
+        summary.recovered++;
+        continue;
+      }
+
+      await env.DB.prepare(`
+        UPDATE settings
+        SET value='failed', updated_at=CURRENT_TIMESTAMP
+        WHERE key=?
+      `).bind(row.key).run();
+
+      await recordRunEvent(env, {
+        runId: claim.rotationRunId,
+        eventType: 'apify.rotation.recovery_terminal',
+        phase: 'apify_rotation',
+        severity: 'error',
+        sourceId: plan.sourceId,
+        datasetId: datasetId ?? undefined,
+        actorRunId: actorRunId ?? undefined,
+        categoryId: plan.categoryId || undefined,
+        platform: plan.platform || undefined,
+        message: `Recovered Apify run ended with terminal status ${status ?? 'UNKNOWN'}.`,
+        metadata: {
+          slot: claim.slot,
+          taskId: plan.taskId,
+          claimedAt: claim.claimedAt,
+          status,
+        },
+      });
+
+      summary.failed++;
+    } catch (error) {
+      // A failed read must never release the claim. Otherwise an observability
+      // outage could create a duplicate paid Actor run.
+      await recordRunEvent(env, {
+        runId: claim.rotationRunId,
+        eventType: 'apify.rotation.recovery_lookup_failed',
+        phase: 'apify_rotation',
+        severity: 'error',
+        sourceId: plan.sourceId,
+        categoryId: plan.categoryId || undefined,
+        platform: plan.platform || undefined,
+        message: error instanceof Error ? error.message : String(error),
+        metadata: {
+          slot: claim.slot,
+          taskId: plan.taskId,
+          claimedAt: claim.claimedAt,
+        },
+      });
+    }
+  }
+
+  return summary;
 }
 
 /**
