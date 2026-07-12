@@ -41,6 +41,8 @@ import { cleanupStoryIntelligenceEvents } from './services/story-intelligence';
 import { isCronCoordinatorEnabled, pickCoordinatorPhase, shouldRunCoordinatorHousekeeping, shouldRunHeavyPhaseAfterPublish } from './services/cron-coordinator';
 import { recordRunEvent } from './services/run-events';
 import { isDatasetJobProcessorEnabled, isDirectPostRotationCurationEnabled, runNextApifyDatasetJob } from './services/apify-dataset-jobs';
+import { isAiBacklogStageJobsEnabled } from './services/ai-backlog-dispatcher';
+import { runAiBacklogCronTick } from './services/ai-backlog-cron';
 
 export default {
 
@@ -245,6 +247,20 @@ export default {
         // Publishing stays first; backlog errors are isolated so cleanup still runs.
         if (!heavyPhaseConsumed && isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
           try {
+            if (
+              isAiBacklogStageJobsEnabled(env)
+            ) {
+              const stagedResult =
+                await runAiBacklogCronTick(
+                  env,
+                  scheduledTimeMs,
+                );
+
+              console.log(
+                '[Scheduled] AI candidate staged backlog:',
+                stagedResult,
+              );
+            } else {
             const recovered = await recoverStaleScoringCandidates(env);
             const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);
             const skippedStale = await skipStaleCandidates(env);
@@ -337,6 +353,7 @@ export default {
               skippedStale,
               drainResult,
             });
+            }
           } catch (err) {
             console.error('[Scheduled] AI candidate backlog failed:', err instanceof Error ? err.message : String(err));
           }
@@ -582,6 +599,20 @@ async function runRssFallbackCoordinatorTick(env: Env, scheduledTimeMs: number):
   if (phase === 'ai_drain') {
     if (isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
       try {
+        if (
+          isAiBacklogStageJobsEnabled(env)
+        ) {
+          const stagedResult =
+            await runAiBacklogCronTick(
+              env,
+              scheduledTimeMs,
+            );
+
+          console.log(
+            '[Scheduled] Coordinator AI staged backlog:',
+            stagedResult,
+          );
+        } else {
         const recovered = await recoverStaleScoringCandidates(env);
         const failedMaxAttempts = await failMaxAttemptPendingCandidates(env);
         const skippedStale = await skipStaleCandidates(env);
@@ -597,6 +628,7 @@ async function runRssFallbackCoordinatorTick(env: Env, scheduledTimeMs: number):
           skippedStale,
           drainResult,
         });
+        }
       } catch (err) {
         console.error('[Scheduled] Coordinator AI candidate backlog failed:', err instanceof Error ? err.message : String(err));
       }

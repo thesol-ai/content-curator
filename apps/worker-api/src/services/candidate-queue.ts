@@ -198,7 +198,9 @@ export async function releaseClaimedCandidatesToPending(
             last_error=?,
             claimed_at=NULL,
             attempt_count=CASE WHEN ? AND attempt_count > 0 THEN attempt_count - 1 ELSE attempt_count END
-        WHERE id=? AND status='scoring'
+        WHERE id=?
+          AND status='scoring'
+          AND processing_job_id IS NULL
       `).bind(reason, opts.decrementAttempt ? 1 : 0, id).run();
     } catch (err) {
       console.warn(`[CandidateQueue] releaseClaimedCandidatesToPending failed for ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -223,6 +225,7 @@ export async function fetchPendingCandidates(
 
     const conds = [
       "status IN ('pending', 'needs_translation')",
+      'processing_job_id IS NULL',
       'created_at > ?',
       "((status = 'needs_translation' AND attempt_count < ?) OR (status != 'needs_translation' AND attempt_count < ?))",
     ];
@@ -268,6 +271,7 @@ export async function hasPendingCandidatesForPlatform(
     const cutoff = sqliteTimestampFromMs(Date.now() - maxAgeHours * 3600 * 1000);
     const conds = [
       "status IN ('pending', 'needs_translation')",
+      'processing_job_id IS NULL',
       'platform = ?',
       "((status = 'needs_translation' AND attempt_count < ?) OR (status != 'needs_translation' AND attempt_count < ?))",
       'created_at > ?',
@@ -302,6 +306,7 @@ export async function claimCandidateBatch(
             last_error=NULL
         WHERE id=?
           AND status IN ('pending', 'needs_translation')
+          AND processing_job_id IS NULL
           AND (
             (status = 'needs_translation' AND attempt_count < ?)
             OR
@@ -325,12 +330,17 @@ export async function countPendingCandidates(env: Env, categoryId?: string): Pro
     if (categoryId) {
       const row = await env.DB.prepare(`
         SELECT COUNT(*) as cnt FROM ai_candidate_queue
-        WHERE status IN ('pending', 'needs_translation') AND category_id = ?
+        WHERE status IN ('pending', 'needs_translation')
+          AND processing_job_id IS NULL
+          AND category_id = ?
       `).bind(categoryId).first<{ cnt: number }>();
       return row?.cnt ?? 0;
     }
     const row = await env.DB.prepare(`
-      SELECT COUNT(*) as cnt FROM ai_candidate_queue WHERE status IN ('pending', 'needs_translation')
+      SELECT COUNT(*) as cnt
+      FROM ai_candidate_queue
+      WHERE status IN ('pending', 'needs_translation')
+        AND processing_job_id IS NULL
     `).first<{ cnt: number }>();
     return row?.cnt ?? 0;
   } catch {
@@ -356,6 +366,7 @@ export async function recoverStaleScoringCandidates(env: Env, staleMinutes = 15)
           last_error='recovered_stale_scoring',
           claimed_at=NULL
       WHERE status='scoring'
+        AND processing_job_id IS NULL
         AND claimed_at < datetime('now', ?)
         AND attempt_count < ?
     `).bind(`-${safeMinutes} minutes`, maxAttempts).run();
@@ -366,6 +377,7 @@ export async function recoverStaleScoringCandidates(env: Env, staleMinutes = 15)
           last_error='max_attempts_exceeded_after_stale_scoring',
           claimed_at=NULL
       WHERE status='scoring'
+        AND processing_job_id IS NULL
         AND claimed_at < datetime('now', ?)
         AND attempt_count >= ?
     `).bind(`-${safeMinutes} minutes`, maxAttempts).run();
@@ -386,6 +398,7 @@ export async function failMaxAttemptPendingCandidates(env: Env): Promise<number>
       UPDATE ai_candidate_queue
       SET status='failed', last_error='max_attempts_exceeded'
       WHERE status='pending'
+        AND processing_job_id IS NULL
         AND attempt_count >= ?
     `).bind(maxAttempts).run();
 
@@ -393,6 +406,7 @@ export async function failMaxAttemptPendingCandidates(env: Env): Promise<number>
       UPDATE ai_candidate_queue
       SET status='failed', last_error='translation_max_attempts_exceeded'
       WHERE status='needs_translation'
+        AND processing_job_id IS NULL
         AND attempt_count >= ?
     `).bind(translationMaxAttempts).run();
 
@@ -412,6 +426,7 @@ export async function skipStaleCandidates(env: Env): Promise<number> {
       UPDATE ai_candidate_queue
       SET status = 'skipped', last_error = 'stale: exceeded max age'
       WHERE status IN ('pending', 'needs_translation')
+        AND processing_job_id IS NULL
         AND created_at <= ?
     `).bind(cutoff).run();
 

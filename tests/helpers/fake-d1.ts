@@ -43,6 +43,33 @@ export class FakeD1 {
   prepare(sql: string): FakeStatement {
     return new FakeStatement(this.db, sql);
   }
+
+  async batch(
+    statements: FakeStatement[],
+  ): Promise<Array<{
+    success: boolean;
+    meta: {
+      changes: number;
+      last_row_id: number;
+    };
+  }>> {
+    this.db.exec('BEGIN IMMEDIATE');
+
+    try {
+      const results = [];
+
+      for (const statement of statements) {
+        results.push(await statement.run());
+      }
+
+      this.db.exec('COMMIT');
+      return results;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   /** Direct access for test setup/assertions (not part of the D1 surface). */
   exec(sql: string): void { this.db.exec(sql); }
   get<T = any>(sql: string, ...params: unknown[]): T | undefined {
