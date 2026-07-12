@@ -55,6 +55,7 @@ export interface Env {
   TRANSLATION_PROVIDER: string;
   TRANSLATION_MODEL: string;
   TRANSLATION_DEBUG_ENABLED?: string;
+  AI_TRANSLATION_TERMINAL_REJECT_ENABLED?: string;
 
   // Apify
   APIFY_CURATION_ENABLED: string;
@@ -287,6 +288,11 @@ export interface AIGateResult {
   topicFingerprint: string;
   publishPriority: PublishPriority;
   translations: Record<string, TranslationOutput>;
+  /**
+   * Set only when every required translation target still violates a
+   * deterministic factual/safety rule after the in-request repair completed.
+   */
+  translationTerminalReason?: string | null;
   /** Phase 6K (observe-only): structured story key derived from the model's
    *  primary_entities/event_type/canonical_date. Logged, never used to reject yet. */
   storyKey?: string | null;

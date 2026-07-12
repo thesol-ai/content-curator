@@ -1584,6 +1584,15 @@ async function persistCandidateDecision(
   rejectReason: string | null,
 ): Promise<{ selected: number; rejected: number; queued: number }> {
   const itemId = ev.itemId;
+  const terminalTranslationReason = getTerminalTranslationRejectReason(
+    env,
+    ai,
+  );
+
+  if (rejectReason === null && terminalTranslationReason) {
+    rejectReason = `translation_terminal:${terminalTranslationReason}`;
+  }
+
   const isRejected = rejectReason !== null;
 
   await saveDiscoveryItem(env, itemId, candidate.row.run_id ?? 'backlog', candidate.row.category_id, candidate.item, ai, isRejected ? 'ai_rejected' : 'ai_selected', rejectReason);
@@ -2640,6 +2649,25 @@ function normalizeAccount(value: unknown): string {
     .trim()
     .toLowerCase()
     .replace(/^@+/, '');
+}
+
+export function getTerminalTranslationRejectReason(
+  env: Pick<Env, 'AI_TRANSLATION_TERMINAL_REJECT_ENABLED'>,
+  ai: Pick<AIGateResult, 'translationTerminalReason'>,
+): string | null {
+  if (
+    String(
+      env.AI_TRANSLATION_TERMINAL_REJECT_ENABLED ?? '',
+    ).toLowerCase() !== 'true'
+  ) {
+    return null;
+  }
+
+  const reason = String(
+    ai.translationTerminalReason ?? '',
+  ).trim();
+
+  return reason ? reason.slice(0, 180) : null;
 }
 
 function isSourceDailyCapEnabled(env: Env): boolean {
