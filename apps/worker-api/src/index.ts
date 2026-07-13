@@ -106,14 +106,6 @@ export default {
             return;
           }
 
-          const publishResult =
-            await publishDueItems(env);
-
-          console.log(
-            '[FastScheduled] Published:',
-            publishResult,
-          );
-
           const stagedResult =
             await runAiBacklogFastCronTick(
               env,
@@ -248,14 +240,13 @@ export default {
           console.error('[Scheduled] Market snapshot direct failed:', err instanceof Error ? err.message : String(err));
         }
 
-        if (!fastCronEnabled) {
-          const publishResult =
-            await publishDueItems(env);
-          console.log(
-            '[Scheduled] Published:',
-            publishResult,
-          );
-        }
+        const publishResult =
+          await publishDueItems(env);
+
+        console.log(
+          '[Scheduled] Published:',
+          publishResult,
+        );
 
         if (!heavyPhaseConsumed && isDatasetJobProcessorEnabled(env)) {
           try {
