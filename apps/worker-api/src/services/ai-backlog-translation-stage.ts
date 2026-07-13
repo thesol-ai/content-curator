@@ -283,6 +283,43 @@ function errorMessage(
     : String(error);
 }
 
+export function isRetryableTranslationResult(
+  result: AIGateResult,
+): boolean {
+  const flags = Array.isArray(
+    result.riskFlags,
+  )
+    ? result.riskFlags.map(String)
+    : [];
+
+  const missingFlag = flags.some(
+    flag =>
+      flag === 'translation_missing'
+      || flag.startsWith(
+        'translation_missing:',
+      ),
+  );
+
+  const hasTranslations =
+    Object.keys(
+      result.translations ?? {},
+    ).length > 0;
+
+  const terminalReason =
+    typeof result.translationTerminalReason
+      === 'string'
+    && result.translationTerminalReason
+      .trim().length > 0;
+
+  return (
+    !terminalReason
+    && (
+      missingFlag
+      || !hasTranslations
+    )
+  );
+}
+
 export function getAiBacklogTranslationMaxFailures(
   env: Env,
 ): number {
@@ -861,15 +898,40 @@ export async function runAiBacklogTranslationStage(
         );
       }
 
-      const checkpoints =
-        nonRss.map(
-          (entry, index) =>
+      const checkpoints:
+        Array<{
+          candidateId: string;
+          result:
+            TranslationCheckpointPayload;
+        }> = [];
+
+      nonRss.forEach(
+        (entry, index) => {
+          const translatedResult =
+            translated[index]!;
+
+          if (
+            isRetryableTranslationResult(
+              translatedResult,
+            )
+          ) {
+            addRetryFailure(
+              entry,
+              'translation_missing_after_provider',
+            );
+
+            return;
+          }
+
+          checkpoints.push(
             buildTranslatedCheckpoint(
               entry,
-              translated[index]!,
+              translatedResult,
               'translation',
             ),
-        );
+          );
+        },
+      );
 
       const count =
         await checkpointBatch(
