@@ -42,7 +42,7 @@ import { isCronCoordinatorEnabled, pickCoordinatorPhase, shouldRunCoordinatorHou
 import { recordRunEvent } from './services/run-events';
 import { isDatasetJobProcessorEnabled, isDirectPostRotationCurationEnabled, runNextApifyDatasetJob } from './services/apify-dataset-jobs';
 import { isAiBacklogStageJobsEnabled } from './services/ai-backlog-dispatcher';
-import { runAiBacklogCronTick } from './services/ai-backlog-cron';
+import { runAiBacklogCronTick, runAiBacklogFastCronTick } from './services/ai-backlog-cron';
 
 export default {
 
@@ -83,6 +83,13 @@ export default {
     ctx.waitUntil((async () => {
       try {
         const scheduledTimeMs = _controller.scheduledTime ?? Date.now();
+        const fastCronEnabled =
+          (env as Env & {
+            AI_BACKLOG_FAST_CRON_ENABLED?: string;
+          }).AI_BACKLOG_FAST_CRON_ENABLED === 'true'
+          && isAiBacklogStageJobsEnabled(env);
+        const isFastCronTick =
+          _controller.cron === '* * * * *';
         const runtime = await getRuntimeConfig(env);
         await recordFixedCryptoV2WindowTick(env, {
           scheduledTimeMs,
@@ -91,6 +98,33 @@ export default {
 
         if (runtime.maintenanceMode) {
           console.log('[Scheduled] Skipped — maintenance_mode is active');
+          return;
+        }
+
+        if (isFastCronTick) {
+          if (!fastCronEnabled) {
+            return;
+          }
+
+          const publishResult =
+            await publishDueItems(env);
+
+          console.log(
+            '[FastScheduled] Published:',
+            publishResult,
+          );
+
+          const stagedResult =
+            await runAiBacklogFastCronTick(
+              env,
+              scheduledTimeMs,
+            );
+
+          console.log(
+            '[FastScheduled] AI candidate staged backlog:',
+            stagedResult,
+          );
+
           return;
         }
 
@@ -214,8 +248,14 @@ export default {
           console.error('[Scheduled] Market snapshot direct failed:', err instanceof Error ? err.message : String(err));
         }
 
-        const publishResult = await publishDueItems(env);
-        console.log('[Scheduled] Published:', publishResult);
+        if (!fastCronEnabled) {
+          const publishResult =
+            await publishDueItems(env);
+          console.log(
+            '[Scheduled] Published:',
+            publishResult,
+          );
+        }
 
         if (!heavyPhaseConsumed && isDatasetJobProcessorEnabled(env)) {
           try {
@@ -245,7 +285,7 @@ export default {
 
         // 3. Controlled AI candidate backlog drain. Runs only when explicitly enabled.
         // Publishing stays first; backlog errors are isolated so cleanup still runs.
-        if (!heavyPhaseConsumed && isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
+        if (!fastCronEnabled && !heavyPhaseConsumed && isCandidateBacklogEnabled(env) && isAiBacklogCronDrainEnabled(env)) {
           try {
             if (
               isAiBacklogStageJobsEnabled(env)

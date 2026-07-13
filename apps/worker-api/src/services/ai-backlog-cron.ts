@@ -447,3 +447,120 @@ export async function runAiBacklogCronTick(
     workerAfter,
   };
 }
+
+export interface AIBacklogFastCronTickResult
+  extends AIBacklogCronTickResult {
+  chainedWorkers: AIBacklogJobWorkerResult[];
+}
+
+function shouldChainFastAction(
+  action: string | undefined,
+): boolean {
+  return action === 'score'
+    || action === 'translation'
+    || action === 'persist';
+}
+
+function latestWorkerResult(
+  result: AIBacklogCronTickResult,
+): AIBacklogJobWorkerResult | undefined {
+  return result.workerAfter
+    ?? result.workerBefore;
+}
+
+export async function runAiBacklogFastCronTick(
+  env: Env,
+  scheduledTimeMs: number,
+  dependencies:
+    AIBacklogCronDependencies =
+      DEFAULT_DEPENDENCIES,
+): Promise<AIBacklogFastCronTickResult> {
+  const base =
+    await runAiBacklogCronTick(
+      env,
+      scheduledTimeMs,
+      dependencies,
+    );
+
+  const chainedWorkers:
+    AIBacklogJobWorkerResult[] = [];
+
+  let current =
+    latestWorkerResult(base);
+
+  for (
+    let chainIndex = 0;
+    chainIndex < 3;
+    chainIndex++
+  ) {
+    if (
+      !base.ok
+      || !current
+      || current.skipped
+      || !current.step?.progressed
+      || current.step.completed
+      || !shouldChainFastAction(
+        current.step.action,
+      )
+    ) {
+      break;
+    }
+
+    let next:
+      AIBacklogJobWorkerResult;
+
+    try {
+      next =
+        await dependencies.runWorker(env);
+    } catch (error) {
+      return {
+        ...base,
+        ok: false,
+        skipped: false,
+        error:
+          `fast_chain_exception:${errorMessage(error)}`,
+        chainedWorkers,
+      };
+    }
+
+    chainedWorkers.push(next);
+    current = next;
+
+    if (!next.ok) {
+      return {
+        ...base,
+        ok: false,
+        skipped: false,
+        error:
+          next.error
+          ?? 'fast_chain_worker_failed',
+        chainedWorkers,
+      };
+    }
+  }
+
+  const last =
+    chainedWorkers.length > 0
+      ? chainedWorkers[
+          chainedWorkers.length - 1
+        ]
+      : undefined;
+
+  return {
+    ...base,
+    ok:
+      last?.ok
+      ?? base.ok,
+    skipped:
+      base.skipped
+      && chainedWorkers.length === 0,
+    reason:
+      last?.step?.completed
+        ? 'fast_chain_completed'
+        : base.reason,
+    error:
+      last?.error
+      ?? base.error,
+    chainedWorkers,
+  };
+}
