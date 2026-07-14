@@ -141,8 +141,12 @@ export async function createOrGetAiBacklogJob(
 export async function reserveCandidatesForAiBacklogJob(
   env: Env,
   jobId: string,
+  leaseToken: string,
   candidateIds: string[],
 ): Promise<AIBacklogJobItemRow[]> {
+  const normalizedLeaseToken =
+    String(leaseToken ?? '').trim();
+
   const uniqueIds = Array.from(
     new Set(
       candidateIds
@@ -151,7 +155,12 @@ export async function reserveCandidatesForAiBacklogJob(
     ),
   );
 
-  if (uniqueIds.length === 0) return [];
+  if (
+    uniqueIds.length === 0
+    || normalizedLeaseToken.length === 0
+  ) {
+    return [];
+  }
 
   const statements: D1PreparedStatement[] = [];
 
@@ -166,7 +175,25 @@ export async function reserveCandidatesForAiBacklogJob(
             processing_job_id IS NULL
             OR processing_job_id = ?
           )
-      `).bind(jobId, candidateId, jobId),
+          AND EXISTS (
+            SELECT 1
+            FROM ai_backlog_jobs AS job
+            WHERE job.id = ?
+              AND job.status = 'processing'
+              AND job.stage = 'claimed'
+              AND job.lease_token = ?
+              AND job.lease_expires_at IS NOT NULL
+              AND job.lease_expires_at >
+                CURRENT_TIMESTAMP
+              AND job.completed_at IS NULL
+          )
+      `).bind(
+        jobId,
+        candidateId,
+        jobId,
+        jobId,
+        normalizedLeaseToken,
+      ),
     );
 
     statements.push(
@@ -179,22 +206,89 @@ export async function reserveCandidatesForAiBacklogJob(
           created_at,
           updated_at
         )
-        SELECT ?, id, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-        FROM ai_candidate_queue
+        SELECT
+          ?,
+          candidate.id,
+          ?,
+          'pending',
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM ai_candidate_queue AS candidate
+        WHERE candidate.id = ?
+          AND candidate.processing_job_id = ?
+          AND EXISTS (
+            SELECT 1
+            FROM ai_backlog_jobs AS job
+            WHERE job.id = ?
+              AND job.status = 'processing'
+              AND job.stage = 'claimed'
+              AND job.lease_token = ?
+              AND job.lease_expires_at IS NOT NULL
+              AND job.lease_expires_at >
+                CURRENT_TIMESTAMP
+              AND job.completed_at IS NULL
+          )
+      `).bind(
+        jobId,
+        ordinal,
+        candidateId,
+        jobId,
+        jobId,
+        normalizedLeaseToken,
+      ),
+    );
+
+    statements.push(
+      env.DB.prepare(`
+        UPDATE ai_candidate_queue
+        SET processing_job_id = NULL
         WHERE id = ?
           AND processing_job_id = ?
-      `).bind(jobId, ordinal, candidateId, jobId),
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ai_backlog_job_items AS job_item
+            WHERE job_item.job_id = ?
+              AND job_item.candidate_id = ?
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM ai_backlog_jobs AS job
+            WHERE job.id = ?
+              AND job.lease_token = ?
+              AND job.completed_at IS NULL
+          )
+      `).bind(
+        candidateId,
+        jobId,
+        jobId,
+        candidateId,
+        jobId,
+        normalizedLeaseToken,
+      ),
     );
   });
 
   await env.DB.batch(statements);
 
   const rows = await env.DB.prepare(`
-    SELECT *
-    FROM ai_backlog_job_items
-    WHERE job_id = ?
-    ORDER BY ordinal ASC
-  `).bind(jobId).all<AIBacklogJobItemRow>();
+    SELECT job_item.*
+    FROM ai_backlog_job_items AS job_item
+    WHERE job_item.job_id = ?
+      AND EXISTS (
+        SELECT 1
+        FROM ai_backlog_jobs AS job
+        WHERE job.id = ?
+          AND job.status = 'processing'
+          AND job.stage = 'claimed'
+          AND job.lease_token = ?
+          AND job.completed_at IS NULL
+      )
+    ORDER BY job_item.ordinal ASC
+  `).bind(
+    jobId,
+    jobId,
+    normalizedLeaseToken,
+  ).all<AIBacklogJobItemRow>();
 
   return rows.results ?? [];
 }

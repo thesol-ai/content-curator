@@ -436,6 +436,7 @@ export async function dispatchAiBacklogJob(
       await dependencies.reserveCandidates(
         env,
         job.id,
+        leaseToken,
         selection.selected.map(
           candidate => candidate.id,
         ),

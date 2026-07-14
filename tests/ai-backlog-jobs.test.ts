@@ -145,18 +145,51 @@ describe('ai-backlog-jobs', () => {
     const rows = await reserveCandidatesForAiBacklogJob(
       env,
       'job-1',
+      'lease-token',
       ['candidate-1', 'candidate-2', 'candidate-1'],
     );
 
     expect(batch).toHaveBeenCalledTimes(1);
-    expect(batch.mock.calls[0]![0]).toHaveLength(4);
+    expect(batch.mock.calls[0]![0]).toHaveLength(6);
+
     expect(rows.map(row => row.candidate_id)).toEqual([
       'candidate-1',
       'candidate-2',
     ]);
+
     expect(state.sql.some(sql =>
-      sql.includes('processing_job_id = ?')
+      sql.includes("job.status = 'processing'")
     )).toBe(true);
+
+    expect(state.sql.some(sql =>
+      sql.includes("job.stage = 'claimed'")
+    )).toBe(true);
+
+    expect(state.sql.some(sql =>
+      sql.includes('job.lease_token = ?')
+    )).toBe(true);
+
+    expect(state.sql.some(sql =>
+      sql.includes('job.lease_expires_at >')
+    )).toBe(true);
+
+    expect(state.bound.some(args =>
+      args.includes('lease-token')
+    )).toBe(true);
+  });
+
+  it('does not reserve candidates without a lease token', async () => {
+    const { env, batch } = makeEnv(state);
+
+    const rows = await reserveCandidatesForAiBacklogJob(
+      env,
+      'job-1',
+      '',
+      ['candidate-1'],
+    );
+
+    expect(rows).toEqual([]);
+    expect(batch).not.toHaveBeenCalled();
   });
 
   it('returns a lease token only after an atomic claim succeeds', async () => {

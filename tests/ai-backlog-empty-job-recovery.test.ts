@@ -22,6 +22,7 @@ import {
   getNextRunnableAiBacklogJob,
   recoverExpiredAiBacklogJobLeases,
   recoverStaleEmptyAiBacklogJobs,
+  reserveCandidatesForAiBacklogJob,
 } from '../apps/worker-api/src/services/ai-backlog-jobs';
 
 import {
@@ -424,6 +425,131 @@ describe('AI backlog stale empty-job recovery', () => {
         readJobStatus('job-active-lease')
           ?.status,
       ).toBe('processing');
+    },
+  );
+
+  it(
+    'blocks reservation after the dispatch lease expires',
+    async () => {
+      const jobId = 'job-expired-dispatch-lease';
+      const candidateId =
+        'candidate-expired-dispatch-lease';
+      const leaseToken = 'expired-dispatch-lease';
+
+      insertEmptyJob(
+        jobId,
+        'claimed',
+        10,
+        {
+          status: 'processing',
+          leaseToken,
+          leaseExpiresAt: '2000-01-01 00:00:00',
+        },
+      );
+
+      insertCandidate(candidateId);
+
+      const reserved =
+        await reserveCandidatesForAiBacklogJob(
+          env,
+          jobId,
+          leaseToken,
+          [candidateId],
+        );
+
+      expect(reserved).toEqual([]);
+
+      const candidate = db.get<{
+        processing_job_id: string | null;
+      }>(`
+        SELECT processing_job_id
+        FROM ai_candidate_queue
+        WHERE id = '${sqlEscape(candidateId)}'
+      `);
+
+      expect(
+        candidate?.processing_job_id ?? null,
+      ).toBeNull();
+
+      const itemCount = db.get<{
+        total: number;
+      }>(`
+        SELECT COUNT(*) AS total
+        FROM ai_backlog_job_items
+        WHERE job_id = '${sqlEscape(jobId)}'
+      `);
+
+      expect(itemCount?.total).toBe(0);
+    },
+  );
+
+  it(
+    'blocks a late dispatcher after empty-job quarantine',
+    async () => {
+      const jobId = 'job-late-dispatcher';
+      const candidateId = 'candidate-late-dispatcher';
+      const leaseToken = 'stale-dispatch-lease';
+
+      insertEmptyJob(
+        jobId,
+        'claimed',
+        10,
+        {
+          status: 'processing',
+          leaseToken,
+          leaseExpiresAt: '2000-01-01 00:00:00',
+        },
+      );
+
+      insertCandidate(candidateId);
+
+      expect(
+        await recoverExpiredAiBacklogJobLeases(env),
+      ).toBe(1);
+
+      db.exec(`
+        UPDATE ai_backlog_jobs
+        SET
+          created_at = datetime('now', '-10 minutes'),
+          updated_at = datetime('now', '-10 minutes')
+        WHERE id = '${sqlEscape(jobId)}';
+      `);
+
+      expect(
+        await recoverStaleEmptyAiBacklogJobs(env),
+      ).toBe(1);
+
+      const reserved =
+        await reserveCandidatesForAiBacklogJob(
+          env,
+          jobId,
+          leaseToken,
+          [candidateId],
+        );
+
+      expect(reserved).toEqual([]);
+
+      const candidate = db.get<{
+        processing_job_id: string | null;
+      }>(`
+        SELECT processing_job_id
+        FROM ai_candidate_queue
+        WHERE id = '${sqlEscape(candidateId)}'
+      `);
+
+      expect(
+        candidate?.processing_job_id ?? null,
+      ).toBeNull();
+
+      const itemCount = db.get<{
+        total: number;
+      }>(`
+        SELECT COUNT(*) AS total
+        FROM ai_backlog_job_items
+        WHERE job_id = '${sqlEscape(jobId)}'
+      `);
+
+      expect(itemCount?.total).toBe(0);
     },
   );
 

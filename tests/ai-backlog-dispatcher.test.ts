@@ -124,6 +124,7 @@ function makeDependencies(
     reserveCandidates: vi.fn(async (
       _env,
       _jobId,
+      _leaseToken,
       candidateIds,
     ) => candidateIds.map(
       (candidateId, index) =>
@@ -449,6 +450,7 @@ describe('ai-backlog-dispatcher', () => {
     ).toHaveBeenCalledWith(
       expect.anything(),
       'ai_job:cron:300000',
+      'dispatch-lease',
       [
         'candidate-1',
         'candidate-2',
@@ -531,6 +533,7 @@ it('keeps each job scoped to one category', async () => {
   ).toHaveBeenCalledWith(
     expect.anything(),
     'ai_job:cron:300000',
+    'dispatch-lease',
     [
       'crypto-1',
       'crypto-2',
