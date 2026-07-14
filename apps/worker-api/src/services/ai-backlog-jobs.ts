@@ -8,6 +8,7 @@ import type {
 
 const DEFAULT_SLOT_MS = 5 * 60 * 1000;
 const DEFAULT_LEASE_SECONDS = 5 * 60;
+const DEFAULT_EMPTY_JOB_GRACE_MINUTES = 5;
 
 export type AIBacklogCheckpoint =
   | 'score'
@@ -422,6 +423,56 @@ export async function getAiBacklogJobById(
   `).bind(jobId).first<AIBacklogJobRow>();
 }
 
+export async function recoverStaleEmptyAiBacklogJobs(
+  env: Env,
+  graceMinutes = DEFAULT_EMPTY_JOB_GRACE_MINUTES,
+): Promise<number> {
+  const safeGraceMinutes = safePositiveInteger(
+    graceMinutes,
+    DEFAULT_EMPTY_JOB_GRACE_MINUTES,
+    24 * 60,
+  );
+
+  const cutoffModifier =
+    `-${safeGraceMinutes} minutes`;
+
+  const result = await env.DB.prepare(`
+    UPDATE ai_backlog_jobs
+    SET
+      status = 'failed',
+      lease_token = NULL,
+      lease_expires_at = NULL,
+      next_run_at = NULL,
+      last_error =
+        'stale_empty_job_quarantined',
+      updated_at = CURRENT_TIMESTAMP
+    WHERE status = 'pending'
+      AND completed_at IS NULL
+      AND lease_token IS NULL
+      AND lease_expires_at IS NULL
+      AND stage IN ('created', 'claimed')
+      AND created_at <= datetime('now', ?)
+      AND updated_at <= datetime('now', ?)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ai_backlog_job_items AS job_item
+        WHERE job_item.job_id =
+          ai_backlog_jobs.id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ai_candidate_queue AS candidate
+        WHERE candidate.processing_job_id =
+          ai_backlog_jobs.id
+      )
+  `).bind(
+    cutoffModifier,
+    cutoffModifier,
+  ).run();
+
+  return result.meta.changes ?? 0;
+}
+
 export async function getNextRunnableAiBacklogJob(
   env: Env,
 ): Promise<AIBacklogJobRow | null> {
@@ -433,6 +484,12 @@ export async function getNextRunnableAiBacklogJob(
       AND (
         next_run_at IS NULL
         OR next_run_at <= CURRENT_TIMESTAMP
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM ai_backlog_job_items AS job_item
+        WHERE job_item.job_id =
+          ai_backlog_jobs.id
       )
     ORDER BY
       CASE stage

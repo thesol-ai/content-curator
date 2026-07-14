@@ -6,6 +6,7 @@ import type {
 import {
   getNextRunnableAiBacklogJob,
   recoverExpiredAiBacklogJobLeases,
+  recoverStaleEmptyAiBacklogJobs,
 } from './ai-backlog-jobs';
 
 import {
@@ -21,6 +22,7 @@ export interface AIBacklogJobWorkerResult {
   ok: boolean;
   skipped: boolean;
   recoveredLeases: number;
+  recoveredEmptyJobs?: number;
   jobId?: string;
   reason?: string;
   error?: string;
@@ -30,6 +32,9 @@ export interface AIBacklogJobWorkerResult {
 export interface AIBacklogJobWorkerDependencies {
   recoverExpiredLeases:
     typeof recoverExpiredAiBacklogJobLeases;
+
+  recoverStaleEmptyJobs?:
+    typeof recoverStaleEmptyAiBacklogJobs;
 
   getNextJob:
     typeof getNextRunnableAiBacklogJob;
@@ -42,6 +47,9 @@ const DEFAULT_DEPENDENCIES:
   AIBacklogJobWorkerDependencies = {
     recoverExpiredLeases:
       recoverExpiredAiBacklogJobLeases,
+
+    recoverStaleEmptyJobs:
+      recoverStaleEmptyAiBacklogJobs,
 
     getNextJob:
       getNextRunnableAiBacklogJob,
@@ -58,14 +66,35 @@ function errorMessage(
     : String(error);
 }
 
+function recoveryMetadata(
+  recoveredLeases: number,
+  recoveredEmptyJobs: number,
+): Pick<
+  AIBacklogJobWorkerResult,
+  'recoveredLeases' | 'recoveredEmptyJobs'
+> {
+  return recoveredEmptyJobs > 0
+    ? {
+        recoveredLeases,
+        recoveredEmptyJobs,
+      }
+    : {
+        recoveredLeases,
+      };
+}
+
 function skippedResult(
   reason: string,
   recoveredLeases = 0,
+  recoveredEmptyJobs = 0,
 ): AIBacklogJobWorkerResult {
   return {
     ok: true,
     skipped: true,
-    recoveredLeases,
+    ...recoveryMetadata(
+      recoveredLeases,
+      recoveredEmptyJobs,
+    ),
     reason,
   };
 }
@@ -98,6 +127,27 @@ export async function runAiBacklogJobWorker(
     };
   }
 
+  let recoveredEmptyJobs = 0;
+
+  if (dependencies.recoverStaleEmptyJobs) {
+    try {
+      recoveredEmptyJobs =
+        await dependencies
+          .recoverStaleEmptyJobs(env);
+    } catch (error) {
+      return {
+        ok: false,
+        skipped: true,
+        ...recoveryMetadata(
+          recoveredLeases,
+          recoveredEmptyJobs,
+        ),
+        error:
+          `empty_job_recovery_failed:${errorMessage(error)}`,
+      };
+    }
+  }
+
   let job: AIBacklogJobRow | null;
 
   try {
@@ -107,7 +157,10 @@ export async function runAiBacklogJobWorker(
     return {
       ok: false,
       skipped: true,
-      recoveredLeases,
+      ...recoveryMetadata(
+        recoveredLeases,
+        recoveredEmptyJobs,
+      ),
       error:
         `job_lookup_failed:${errorMessage(error)}`,
     };
@@ -117,6 +170,7 @@ export async function runAiBacklogJobWorker(
     return skippedResult(
       'no_runnable_job',
       recoveredLeases,
+      recoveredEmptyJobs,
     );
   }
 
@@ -132,7 +186,10 @@ export async function runAiBacklogJobWorker(
     return {
       ok: false,
       skipped: false,
-      recoveredLeases,
+      ...recoveryMetadata(
+        recoveredLeases,
+        recoveredEmptyJobs,
+      ),
       jobId: job.id,
       error:
         `job_step_exception:${errorMessage(error)}`,
@@ -142,7 +199,10 @@ export async function runAiBacklogJobWorker(
   return {
     ok: step.ok,
     skipped: false,
-    recoveredLeases,
+    ...recoveryMetadata(
+      recoveredLeases,
+      recoveredEmptyJobs,
+    ),
     jobId: job.id,
     reason:
       step.reason,
