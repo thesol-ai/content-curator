@@ -498,6 +498,80 @@ describe('ai-backlog-dispatcher', () => {
     );
   });
 
+
+  it(
+    'reuses durable items found after an empty reservation result',
+    async () => {
+      const lateVisibleItems = [
+        makeJobItem(
+          'candidate-late-visible',
+          0,
+        ),
+      ];
+
+      let reservationAttempted = false;
+
+      const getJobItems = vi.fn(
+        async () => (
+          reservationAttempted
+            ? lateVisibleItems
+            : []
+        ),
+      );
+
+      const reserveCandidates = vi.fn(
+        async () => {
+          reservationAttempted = true;
+          return [];
+        },
+      );
+
+      const dependencies = makeDependencies({
+        getJobItems,
+        reserveCandidates,
+      });
+
+      const result = await dispatchAiBacklogJob(
+        makeEnv({
+          AI_BACKLOG_STAGE_JOBS_ENABLED:
+            'true',
+        }),
+        {
+          scheduledTimeMs: 300001,
+        },
+        dependencies,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.skipped).toBe(false);
+      expect(result.reason).toBe(
+        'existing_job_reused',
+      );
+      expect(result.reusedExistingJob).toBe(true);
+      expect(result.reservedCount).toBe(1);
+      expect(result.candidateIds).toEqual([
+        'candidate-late-visible',
+      ]);
+
+      expect(
+        getJobItems.mock.calls.length,
+      ).toBeGreaterThanOrEqual(2);
+
+      expect(
+        dependencies.releaseJobLease,
+      ).toHaveBeenCalledWith(
+        expect.anything(),
+        'ai_job:cron:300000',
+        'dispatch-lease',
+        'dispatch_complete',
+      );
+
+      expect(
+        dependencies.completeJob,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
 it('keeps each job scoped to one category', async () => {
   const candidates = [
     makeCandidate('crypto-1', 'crypto'),

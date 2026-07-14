@@ -443,6 +443,50 @@ export async function dispatchAiBacklogJob(
       );
 
     if (reserved.length === 0) {
+      const existingAfterReservation =
+        await dependencies.getJobItems(
+          env,
+          job.id,
+        );
+
+      if (existingAfterReservation.length > 0) {
+        const released =
+          await dependencies.releaseJobLease(
+            env,
+            job.id,
+            leaseToken,
+            'dispatch_complete',
+          );
+
+        if (!released) {
+          return {
+            ok: false,
+            skipped: false,
+            reason: 'dispatch_lease_release_failed',
+            dispatchId,
+            jobId: job.id,
+            reusedExistingJob: true,
+            candidatePoolSize:
+              existingAfterReservation.length,
+            selectedCount:
+              existingAfterReservation.length,
+            reservedCount:
+              existingAfterReservation.length,
+            candidateIds:
+              existingAfterReservation.map(
+                item => item.candidate_id,
+              ),
+            selectionStats: selection.stats,
+          };
+        }
+
+        return existingJobResult(
+          dispatchId,
+          job,
+          existingAfterReservation,
+        );
+      }
+
       const completed =
         await dependencies.completeJob(
           env,

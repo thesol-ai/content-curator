@@ -554,6 +554,101 @@ describe('AI backlog stale empty-job recovery', () => {
   );
 
   it(
+    'releases only the candidate whose job-item insert is ignored',
+    async () => {
+      const jobId =
+        'job-cleanup-insert-ignored';
+      const candidateId =
+        'candidate-cleanup-insert-ignored';
+      const untouchedCandidateId =
+        'candidate-cleanup-untouched';
+      const leaseToken =
+        'cleanup-active-lease';
+
+      insertEmptyJob(
+        jobId,
+        'claimed',
+        0,
+        {
+          status: 'processing',
+          leaseToken,
+          leaseExpiresAt:
+            '2999-01-01 00:00:00',
+        },
+      );
+
+      insertCandidate(candidateId);
+
+      insertCandidate(
+        untouchedCandidateId,
+        jobId,
+      );
+
+      db.exec(`
+        CREATE TRIGGER
+          ignore_target_job_item_insert
+        BEFORE INSERT
+        ON ai_backlog_job_items
+        WHEN NEW.candidate_id =
+          '${sqlEscape(candidateId)}'
+        BEGIN
+          SELECT RAISE(IGNORE);
+        END;
+      `);
+
+      const reserved =
+        await reserveCandidatesForAiBacklogJob(
+          env,
+          jobId,
+          leaseToken,
+          [candidateId],
+        );
+
+      expect(reserved).toEqual([]);
+
+      const cleanedCandidate = db.get<{
+        processing_job_id: string | null;
+      }>(`
+        SELECT processing_job_id
+        FROM ai_candidate_queue
+        WHERE id =
+          '${sqlEscape(candidateId)}'
+      `);
+
+      expect(
+        cleanedCandidate?.processing_job_id
+          ?? null,
+      ).toBeNull();
+
+      const untouchedCandidate = db.get<{
+        processing_job_id: string | null;
+      }>(`
+        SELECT processing_job_id
+        FROM ai_candidate_queue
+        WHERE id =
+          '${sqlEscape(untouchedCandidateId)}'
+      `);
+
+      expect(
+        untouchedCandidate?.processing_job_id,
+      ).toBe(jobId);
+
+      const targetItemCount = db.get<{
+        total: number;
+      }>(`
+        SELECT COUNT(*) AS total
+        FROM ai_backlog_job_items
+        WHERE job_id =
+          '${sqlEscape(jobId)}'
+          AND candidate_id =
+            '${sqlEscape(candidateId)}'
+      `);
+
+      expect(targetItemCount?.total).toBe(0);
+    },
+  );
+
+  it(
     'does not quarantine a job that already has an item',
     async () => {
       insertEmptyJob('job-with-item', 'claimed', 10);
