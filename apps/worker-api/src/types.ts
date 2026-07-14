@@ -50,6 +50,9 @@ export interface Env {
   AI_FAIR_SOURCE_PICKER_ENABLED?: string;   // default: "false"
   AI_FAIR_SOURCE_PICKER_POOL_MULTIPLIER?: string; // default: "6"
   AI_BACKLOG_INLINE_DRAIN_ENABLED?: string; // default: "false" in production
+  AI_BACKLOG_STAGE_JOBS_ENABLED?: string;  // default: "false"
+  AI_BACKLOG_JOB_BATCH_SIZE?: string;      // default: AI_SCORING_BATCH_SIZE
+  AI_BACKLOG_JOB_DISPATCH_SLOT_MINUTES?: string; // default: "5"
 
   // ── AI — Translation ───────────────────────────────────────
   TRANSLATION_PROVIDER: string;
@@ -189,6 +192,10 @@ export interface Env {
 
   ENVIRONMENT: string;
   LOG_LEVEL: string;
+
+  AI_BACKLOG_TRANSLATION_MAX_FAILURES?: string;
+  AI_BACKLOG_TRANSLATION_RETRY_BASE_SECONDS?: string;
+  AI_BACKLOG_TRANSLATION_RETRY_MAX_SECONDS?: string;
 }
 
 // ── Platform types ────────────────────────────────────────────
@@ -485,6 +492,7 @@ export interface AICandidateRow {
   created_at: string;
   claimed_at: string | null;
   scored_at: string | null;
+  processing_job_id?: string | null;
 }
 
 /** ورودی enqueue یک candidate جدید */
@@ -500,4 +508,73 @@ export interface AICandidateEnqueueInput {
   normalizedItem: NormalizedItem;
   dedupeKeys: string[];
   priorityScore?: number;
+}
+
+
+
+
+// Durable AI backlog jobs
+
+export type AIBacklogJobStatus =
+  | 'pending'
+  | 'processing'
+  | 'paused'
+  | 'completed'
+  | 'failed';
+
+export type AIBacklogJobStage =
+  | 'created'
+  | 'claimed'
+  | 'scored'
+  | 'gated'
+  | 'duplicate_checked'
+  | 'translated'
+  | 'persisted'
+  | 'completed';
+
+export type AIBacklogJobItemStatus =
+  | 'pending'
+  | 'scored'
+  | 'gated'
+  | 'duplicate_checked'
+  | 'translated'
+  | 'persisted'
+  | 'failed';
+
+export interface AIBacklogJobRow {
+  id: string;
+  dispatch_id: string;
+  source: string;
+  status: AIBacklogJobStatus;
+  stage: AIBacklogJobStage;
+  stage_cursor: number;
+  scheduled_time_ms: number | null;
+  batch_context_json: string | null;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  queue_sent_at: string | null;
+  next_run_at: string | null;
+  delivery_attempts: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface AIBacklogJobItemRow {
+  job_id: string;
+  candidate_id: string;
+  ordinal: number;
+  status: AIBacklogJobItemStatus;
+  score_result_json: string | null;
+  gate_result_json: string | null;
+  duplicate_result_json: string | null;
+  translation_result_json: string | null;
+  persist_result_json: string | null;
+  provider_attempts: number;
+  translation_failures?: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
 }

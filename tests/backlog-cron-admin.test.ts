@@ -6,6 +6,8 @@ import { cleanupOldDedupeKeys } from '../apps/worker-api/src/services/dedupe';
 import { maybeSendMarketSnapshotDirect } from '../apps/worker-api/src/services/market-snapshot';
 import { getRuntimeConfig } from '../apps/worker-api/src/services/runtime-config';
 import { drainAICandidateQueue } from '../apps/worker-api/src/services/backlog-drain';
+import { isAiBacklogStageJobsEnabled } from '../apps/worker-api/src/services/ai-backlog-dispatcher';
+import { runAiBacklogCronTick } from '../apps/worker-api/src/services/ai-backlog-cron';
 import {
   failMaxAttemptPendingCandidates,
   getCandidateBacklogDrainLimit,
@@ -45,6 +47,14 @@ vi.mock('../apps/worker-api/src/services/backlog-drain', () => ({
   drainAICandidateQueue: vi.fn(),
 }));
 
+vi.mock('../apps/worker-api/src/services/ai-backlog-dispatcher', () => ({
+  isAiBacklogStageJobsEnabled: vi.fn(),
+}));
+
+vi.mock('../apps/worker-api/src/services/ai-backlog-cron', () => ({
+  runAiBacklogCronTick: vi.fn(),
+}));
+
 vi.mock('../apps/worker-api/src/services/candidate-queue', () => ({
   failMaxAttemptPendingCandidates: vi.fn(),
   getCandidateBacklogDrainLimit: vi.fn(),
@@ -65,6 +75,8 @@ const cleanupOldDedupeKeysMock = vi.mocked(cleanupOldDedupeKeys);
 const maybeSendMarketSnapshotDirectMock = vi.mocked(maybeSendMarketSnapshotDirect);
 const getRuntimeConfigMock = vi.mocked(getRuntimeConfig);
 const drainAICandidateQueueMock = vi.mocked(drainAICandidateQueue);
+const isAiBacklogStageJobsEnabledMock = vi.mocked(isAiBacklogStageJobsEnabled);
+const runAiBacklogCronTickMock = vi.mocked(runAiBacklogCronTick);
 const isCandidateBacklogEnabledMock = vi.mocked(isCandidateBacklogEnabled);
 const recoverStaleScoringCandidatesMock = vi.mocked(recoverStaleScoringCandidates);
 const failMaxAttemptPendingCandidatesMock = vi.mocked(failMaxAttemptPendingCandidates);
@@ -137,6 +149,12 @@ beforeEach(() => {
   publishDueItemsMock.mockResolvedValue({ published: 0, failed: 0, skipped: 0 });
   cleanupOldDedupeKeysMock.mockResolvedValue(0);
   isCandidateBacklogEnabledMock.mockReturnValue(false);
+  isAiBacklogStageJobsEnabledMock.mockReturnValue(false);
+  runAiBacklogCronTickMock.mockResolvedValue({
+    ok: true,
+    skipped: true,
+    reason: 'no_runnable_job',
+  });
   recoverStaleScoringCandidatesMock.mockResolvedValue({ recovered: 0, failed: 0 });
   failMaxAttemptPendingCandidatesMock.mockResolvedValue(0);
   skipStaleCandidatesMock.mockResolvedValue(0);
@@ -191,6 +209,75 @@ describe('Phase 4 scheduled backlog drain', () => {
 
     expect(order).toEqual(['publish', 'recover', 'fail-max', 'skip-stale', 'drain', 'cleanup']);
     expect(drainAICandidateQueueMock).toHaveBeenCalledWith(expect.anything(), { recoverStale: false, skipStale: false });
+  });
+
+  it('uses staged X processing without calling the legacy drain', async () => {
+    const order: string[] = [];
+
+    isCandidateBacklogEnabledMock.mockReturnValue(true);
+    isAiBacklogStageJobsEnabledMock.mockReturnValue(true);
+
+    publishDueItemsMock.mockImplementation(async () => {
+      order.push('publish');
+
+      return {
+        published: 0,
+        failed: 0,
+        skipped: 0,
+      };
+    });
+
+    runAiBacklogCronTickMock.mockImplementation(async () => {
+      order.push('staged');
+
+      return {
+        ok: true,
+        skipped: false,
+        reason: 'x_job_dispatched',
+      };
+    });
+
+    cleanupOldDedupeKeysMock.mockImplementation(async () => {
+      order.push('cleanup');
+      return 0;
+    });
+
+    await runScheduled(env({
+      AI_BACKLOG_STAGE_JOBS_ENABLED: 'true',
+    }));
+
+    expect(order).toEqual([
+      'publish',
+      'staged',
+      'cleanup',
+    ]);
+
+    expect(
+      runAiBacklogCronTickMock,
+    ).toHaveBeenCalledTimes(1);
+
+    expect(
+      runAiBacklogCronTickMock,
+    ).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Number),
+    );
+
+    expect(
+      drainAICandidateQueueMock,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      recoverStaleScoringCandidatesMock,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      failMaxAttemptPendingCandidatesMock,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      skipStaleCandidatesMock,
+    ).not.toHaveBeenCalled();
   });
 
   it('isolates backlog errors so dedupe cleanup still runs', async () => {

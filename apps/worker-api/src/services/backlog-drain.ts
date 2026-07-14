@@ -1219,7 +1219,7 @@ function normalizeFingerprintForBatch(value: unknown): string | null {
   return fp;
 }
 
-async function evaluateCandidateDb(
+export async function evaluateCandidateDb(
   env: Env,
   channels: ChannelRow[],
   candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
@@ -1283,7 +1283,7 @@ async function evaluateCandidateDb(
 }
 
 
-async function getRssBriefPreflightRejectReason(
+export async function getRssBriefPreflightRejectReason(
   env: Env,
   channels: ChannelRow[],
   candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
@@ -1343,11 +1343,11 @@ async function getRssBriefPreflightRejectReason(
   return `rss_brief_preflight_blocked:${lastReason}`;
 }
 
-function isWeakPostAiGateOverrideEnabled(env: Env): boolean {
+export function isWeakPostAiGateOverrideEnabled(env: Env): boolean {
   return String(env.WEAK_POST_AI_GATE_OVERRIDE_ENABLED ?? '').toLowerCase() === 'true';
 }
 
-function getWeakPostAiGateOverrideScoreMargin(env: Env): number {
+export function getWeakPostAiGateOverrideScoreMargin(env: Env): number {
   const raw = Number(env.WEAK_POST_AI_GATE_OVERRIDE_SCORE_MARGIN ?? 5);
   return Number.isFinite(raw)
     ? Math.max(0, Math.min(30, Math.floor(raw)))
@@ -1364,7 +1364,7 @@ export interface PublishQueueStarvationSnapshot {
   }>;
 }
 
-function emptyPublishQueueStarvationSnapshot(): PublishQueueStarvationSnapshot {
+export function emptyPublishQueueStarvationSnapshot(): PublishQueueStarvationSnapshot {
   return {
     allEnabledChannelsStarving: false,
     minScheduledNext6h: 0,
@@ -1372,7 +1372,7 @@ function emptyPublishQueueStarvationSnapshot(): PublishQueueStarvationSnapshot {
   };
 }
 
-async function getPublishQueueStarvationSnapshot(
+export async function getPublishQueueStarvationSnapshot(
   env: Env,
   channels: ChannelRow[],
 ): Promise<PublishQueueStarvationSnapshot> {
@@ -1480,7 +1480,7 @@ export function shouldOverrideSoftEditorialReject(args: {
   return true;
 }
 
-async function maybeOverrideSoftEditorialReject(
+export async function maybeOverrideSoftEditorialReject(
   env: Env,
   category: CategoryRow,
   candidate: { item: NormalizedItem; row: AICandidateRow; keys: string[] },
@@ -1574,7 +1574,7 @@ export function resolveCandidateRejectReason(
  * queue per channel. Returns count deltas. Shared by both drain paths so the
  * legacy behavior and the gated-translation behavior cannot drift apart.
  */
-async function persistCandidateDecision(
+export async function persistCandidateDecision(
   env: Env,
   channels: ChannelRow[],
   category: CategoryRow,
