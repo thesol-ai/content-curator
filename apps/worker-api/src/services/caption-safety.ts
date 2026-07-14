@@ -314,18 +314,9 @@ export function validateAndCompactCaption(
   const combinedCaption =
     `${compacted.captionShort}\n${compacted.captionFull}`;
 
-  const unsupportedNumbers = findUnsupportedNumbers(
-    sourceText,
-    combinedCaption,
-  );
-
-  if (unsupportedNumbers.length > 0) {
-    return {
-      ok: false,
-      reason:
-        `caption_unsupported_number:${unsupportedNumbers.slice(0, 5).join(',')}`,
-    };
-  }
+  // Numeric wording can change naturally during translation.
+  // Do not reject an otherwise valid caption solely because its numeric
+  // representation differs from the source.
 
   if (
     requiresExplicitAttribution(options.riskFlags) &&

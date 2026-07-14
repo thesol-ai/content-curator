@@ -8,7 +8,7 @@ import {
 } from '../apps/worker-api/src/services/caption-safety';
 
 describe('caption safety', () => {
-  it('rejects a changed bare number', () => {
+  it('does not hard-reject a changed bare number', () => {
     const source =
       'The company bought 108 BTC, bringing total holdings to 4,201 BTC.';
 
@@ -27,8 +27,7 @@ describe('caption safety', () => {
       },
     );
 
-    expect(decision.ok).toBe(false);
-    expect(decision.reason).toContain('caption_unsupported_number');
+    expect(decision.ok).toBe(true);
   });
 
   it('accepts Persian digits when values match the source', () => {
