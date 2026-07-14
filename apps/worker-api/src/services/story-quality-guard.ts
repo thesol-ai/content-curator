@@ -277,14 +277,34 @@ export function applyPersianCaptionQualityGuard(
     return { ok: false, reason: 'caption_vague_or_formal' };
   }
 
-  // Phase 6G: factual grounding — if the caption introduces currency/percent
-  // figures and NOT ONE of them appears in the source, treat it as fabricated.
-  if (hasUnsupportedExactGroundableFigure(sourceText, combinedCaption)) {
-    return { ok: false, reason: 'caption_unsupported_exact_figure' };
-  }
+  // Legacy configurations retain the old numeric checks.
+  // Safety V2 does not use numeric differences as a publish blocker.
+  if (!opts?.safetyEnabled) {
+    if (
+      hasUnsupportedExactGroundableFigure(
+        sourceText,
+        combinedCaption,
+      )
+    ) {
+      return {
+        ok: false,
+        reason:
+          'caption_unsupported_exact_figure',
+      };
+    }
 
-  if (hasFullyUngroundedFigures(sourceText, combinedCaption)) {
-    return { ok: false, reason: 'caption_unsupported_figure' };
+    if (
+      hasFullyUngroundedFigures(
+        sourceText,
+        combinedCaption,
+      )
+    ) {
+      return {
+        ok: false,
+        reason:
+          'caption_unsupported_figure',
+      };
+    }
   }
 
   // Phase-next caption quality (repair-first). Repair already happened above
@@ -292,7 +312,12 @@ export function applyPersianCaptionQualityGuard(
   // still below the bar AND reject is enabled, drop it as caption_quality_low.
   if (opts?.repairEnabled) {
     const combined = `${repaired.captionShort ?? ''}\n${repaired.captionFull ?? ''}`.trim();
-    const q = scoreCaptionQuality(combined, sourceText);
+    const q =
+      scoreCaptionQuality(
+        combined,
+        sourceText,
+        !opts?.safetyEnabled,
+      );
     if (opts.rejectEnabled && q.score < (opts.minScore ?? 70)) {
       return { ok: false, reason: 'caption_quality_low' };
     }
@@ -591,22 +616,59 @@ export interface CaptionQualityScore {
   score: number;              // 0..100 overall
 }
 
-export function scoreCaptionQuality(caption: unknown, sourceText: unknown = ''): CaptionQualityScore {
+export function scoreCaptionQuality(
+  caption: unknown,
+  sourceText: unknown = '',
+  includeNumericGrounding = true,
+): CaptionQualityScore {
   const text = String(caption ?? '').trim();
   const src = String(sourceText ?? '');
   const len = text.length;
 
   const boringOrGeneric = hasBannedGenericFiller(text);
-  const unsupportedClaim = hasFullyUngroundedFigures(src, text);
+  const unsupportedClaim =
+    includeNumericGrounding
+      && hasFullyUngroundedFigures(
+        src,
+        text,
+      );
   const vagueOrFormal = hasVaguePersianEditorialLanguage(text);
   const nonPersianLead = !hasPersianFirstRealWord(text);
 
-  // grounding: fraction of caption currency/percent figures found in source.
-  const figs = extractGroundableFigureCores(text);
-  const srcDigits = normalizeDigits(src).replace(/[,،]/g, '');
+  const figures =
+    includeNumericGrounding
+      ? extractGroundableFigureCores(
+          text,
+        )
+      : [];
+
+  const sourceDigits =
+    normalizeDigits(src)
+      .replace(/[,،]/g, '');
+
   let grounded = 0;
-  for (const f of figs) if (srcDigits.includes(f)) grounded++;
-  const sourceGrounding = figs.length === 0 ? 100 : Math.round((grounded / figs.length) * 100);
+
+  for (const figure of figures) {
+    if (
+      sourceDigits.includes(
+        figure,
+      )
+    ) {
+      grounded++;
+    }
+  }
+
+  const sourceGrounding =
+    !includeNumericGrounding
+      ? 0
+      : figures.length === 0
+        ? 100
+        : Math.round(
+            (
+              grounded
+              / figures.length
+            ) * 100,
+          );
 
   // telegram-native: reward 120..320 chars, penalise very short/very long.
   const telegramNative = len < 60 ? 30 : len <= 320 ? 100 : len <= 500 ? 70 : 40;
@@ -619,9 +681,25 @@ export function scoreCaptionQuality(caption: unknown, sourceText: unknown = ''):
   if (!captionHasConcreteSignal(text)) clarity -= 30;
   clarity = Math.max(0, clarity);
 
-  const score = Math.round(
-    0.35 * clarity + 0.30 * sourceGrounding + 0.20 * telegramNative + (unsupportedClaim ? 0 : 15),
-  );
+  const score =
+    includeNumericGrounding
+      ? Math.round(
+          0.35 * clarity
+          + 0.30 * sourceGrounding
+          + 0.20 * telegramNative
+          + (
+            unsupportedClaim
+              ? 0
+              : 15
+          ),
+        )
+      : Math.round(
+          (
+            0.35 * clarity
+            + 0.20 * telegramNative
+          )
+          / 0.55,
+        );
   return { clarity, sourceGrounding, telegramNative, boringOrGeneric, unsupportedClaim, vagueOrFormal, nonPersianLead, score: Math.min(100, score) };
 }
 

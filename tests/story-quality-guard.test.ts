@@ -100,4 +100,32 @@ describe('story quality guard', () => {
     expect(decision.ok).toBe(false);
     expect(decision.reason).toBe('caption_year_mismatch');
   });
+
+  it('does not reject an otherwise valid caption only because a number changed', () => {
+    const decision =
+      applyPersianCaptionQualityGuard(
+        'fa',
+        {
+          captionShort:
+            'گزارش ذخایر بایننس\n\nبایننس ذخایر خود را ۶۴۱ هزار بیت‌کوین اعلام کرد.',
+          captionFull:
+            'گزارش ذخایر بایننس\n\nبایننس ذخایر خود را ۶۴۱ هزار بیت‌کوین اعلام کرد.',
+          hashtags: [],
+        },
+        'Binance reported reserves of 640,000 BTC.',
+        {
+          repairEnabled: true,
+          rejectEnabled: true,
+          safetyEnabled: true,
+          minScore: 70,
+          categoryId: 'crypto',
+          riskFlags: [],
+          shortMaxChars: 500,
+          fullMaxChars: 1000,
+        },
+      );
+
+    expect(decision.ok).toBe(true);
+  });
+
 });
