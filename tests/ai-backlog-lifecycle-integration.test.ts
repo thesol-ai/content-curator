@@ -413,7 +413,7 @@ describe(
       });
     });
 
-    it('recovers an expired lease and makes the job runnable again', async () => {
+    it('recovers an expired lease with a cooldown and keeps the job retryable', async () => {
       insertDurableJob(
         'job-expired-1',
         'candidate-expired-1',
@@ -457,6 +457,20 @@ describe(
       );
 
       expect(job.lease_token).toBeNull();
+
+      const delayed =
+        await getNextRunnableAiBacklogJob(
+          env,
+        );
+
+      expect(delayed).toBeNull();
+
+      db.exec(`
+        UPDATE ai_backlog_jobs
+        SET next_run_at =
+          '2000-01-01 00:00:00'
+        WHERE id = 'job-expired-1';
+      `);
 
       const next =
         await getNextRunnableAiBacklogJob(

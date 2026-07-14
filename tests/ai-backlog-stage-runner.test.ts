@@ -251,10 +251,41 @@ describe('ai-backlog-stage-runner', () => {
     expect(result.error).toBe('provider_failure');
 
     expect(state.bound.some(args =>
-      args.some(value =>
-        value === 'stage_error:provider_failure'
-      )
+      typeof args[0] === 'string'
+      && args[0] !== ''
+      && args[1]
+        === 'stage_error:provider_failure'
     )).toBe(true);
+  });
+
+  it('delays an unsupported stage instead of retrying immediately', async () => {
+    state.job = makeJob({
+      stage:
+        'unknown_stage' as AIBacklogJobRow['stage'],
+    });
+
+    const env = makeEnv(state);
+    const handlers = makeHandlers();
+
+    const result = await runAiBacklogJobStep(
+      env,
+      'job-1',
+      handlers,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(
+      'unsupported_stage:unknown_stage',
+    );
+
+    expect(state.bound.some(args =>
+      typeof args[0] === 'string'
+      && args[0] !== ''
+      && args[1]
+        === 'unsupported_stage:unknown_stage'
+    )).toBe(true);
+
+    expect(handlers.score).not.toHaveBeenCalled();
   });
 
   it('refuses to advance a job with no reserved items', async () => {
@@ -272,6 +303,12 @@ describe('ai-backlog-stage-runner', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe('job_has_no_items');
     expect(handlers.score).not.toHaveBeenCalled();
+
+    expect(state.bound.some(args =>
+      typeof args[0] === 'string'
+      && args[0] !== ''
+      && args[1] === 'job_has_no_items'
+    )).toBe(true);
   });
   it('creates the complete default stage handler map', () => {
     const handlers =

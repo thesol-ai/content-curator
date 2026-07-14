@@ -458,6 +458,10 @@ export async function recoverExpiredAiBacklogJobLeases(
       status = 'pending',
       lease_token = NULL,
       lease_expires_at = NULL,
+      next_run_at = datetime(
+        'now',
+        '+2 minutes'
+      ),
       last_error = 'recovered_expired_lease',
       updated_at = CURRENT_TIMESTAMP
     WHERE status = 'processing'

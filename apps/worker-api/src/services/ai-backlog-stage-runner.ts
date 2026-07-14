@@ -119,6 +119,20 @@ const NEXT_STAGE_BY_ACTION: Record<
   persist: 'persisted',
 };
 
+const STAGE_ERROR_COOLDOWN_MS =
+  2 * 60 * 1000;
+
+function buildStageErrorRetryAt(
+  nowMs = Date.now(),
+): string {
+  return new Date(
+    nowMs + STAGE_ERROR_COOLDOWN_MS,
+  )
+    .toISOString()
+    .slice(0, 19)
+    .replace('T', ' ');
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
@@ -263,6 +277,7 @@ export async function runAiBacklogJobStep(
         jobId,
         leaseToken,
         `unsupported_stage:${job.stage}`,
+        buildStageErrorRetryAt(),
       );
 
       return {
@@ -283,6 +298,7 @@ export async function runAiBacklogJobStep(
         jobId,
         leaseToken,
         'job_has_no_items',
+        buildStageErrorRetryAt(),
       );
 
       return {
@@ -356,6 +372,10 @@ export async function runAiBacklogJobStep(
       retryDirective?.reason
       || message;
 
+    const nextRunAt =
+      retryDirective?.nextRunAt
+      ?? buildStageErrorRetryAt();
+
     await releaseAiBacklogJobLease(
       env,
       jobId,
@@ -363,8 +383,7 @@ export async function runAiBacklogJobStep(
       retryDirective
         ? `stage_retry:${safeMessage}`
         : `stage_error:${safeMessage}`,
-      retryDirective?.nextRunAt
-      ?? null,
+      nextRunAt,
     );
 
     return {
