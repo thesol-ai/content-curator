@@ -277,36 +277,6 @@ export function applyPersianCaptionQualityGuard(
     return { ok: false, reason: 'caption_vague_or_formal' };
   }
 
-  // Legacy configurations retain the old numeric checks.
-  // Safety V2 does not use numeric differences as a publish blocker.
-  if (!opts?.safetyEnabled) {
-    if (
-      hasUnsupportedExactGroundableFigure(
-        sourceText,
-        combinedCaption,
-      )
-    ) {
-      return {
-        ok: false,
-        reason:
-          'caption_unsupported_exact_figure',
-      };
-    }
-
-    if (
-      hasFullyUngroundedFigures(
-        sourceText,
-        combinedCaption,
-      )
-    ) {
-      return {
-        ok: false,
-        reason:
-          'caption_unsupported_figure',
-      };
-    }
-  }
-
   // Phase-next caption quality (repair-first). Repair already happened above
   // (filler-tail stripped). When repair mode is on and the repaired caption is
   // still below the bar AND reject is enabled, drop it as caption_quality_low.
@@ -315,8 +285,6 @@ export function applyPersianCaptionQualityGuard(
     const q =
       scoreCaptionQuality(
         combined,
-        sourceText,
-        !opts?.safetyEnabled,
       );
     if (opts.rejectEnabled && q.score < (opts.minScore ?? 70)) {
       return { ok: false, reason: 'caption_quality_low' };
@@ -606,101 +574,100 @@ function hasPersianFirstRealWord(text: unknown): boolean {
 // Pure, no AI call, never rejects on its own. Lets a report flag dull/risky
 // captions so the operator can audit real output before tightening anything.
 export interface CaptionQualityScore {
-  clarity: number;            // 0..100
-  sourceGrounding: number;    // 0..100 (share of caption figures present in source)
-  telegramNative: number;     // 0..100 (length/structure heuristic)
+  clarity: number;
+  telegramNative: number;
   boringOrGeneric: boolean;
-  unsupportedClaim: boolean;
   vagueOrFormal: boolean;
   nonPersianLead: boolean;
-  score: number;              // 0..100 overall
+  score: number;
 }
 
 export function scoreCaptionQuality(
   caption: unknown,
-  sourceText: unknown = '',
-  includeNumericGrounding = true,
+  _sourceText: unknown = '',
 ): CaptionQualityScore {
-  const text = String(caption ?? '').trim();
-  const src = String(sourceText ?? '');
-  const len = text.length;
+  const text =
+    String(caption ?? '')
+      .trim();
 
-  const boringOrGeneric = hasBannedGenericFiller(text);
-  const unsupportedClaim =
-    includeNumericGrounding
-      && hasFullyUngroundedFigures(
-        src,
-        text,
-      );
-  const vagueOrFormal = hasVaguePersianEditorialLanguage(text);
-  const nonPersianLead = !hasPersianFirstRealWord(text);
+  const len =
+    text.length;
 
-  const figures =
-    includeNumericGrounding
-      ? extractGroundableFigureCores(
-          text,
-        )
-      : [];
+  const boringOrGeneric =
+    hasBannedGenericFiller(
+      text,
+    );
 
-  const sourceDigits =
-    normalizeDigits(src)
-      .replace(/[,،]/g, '');
+  const vagueOrFormal =
+    hasVaguePersianEditorialLanguage(
+      text,
+    );
 
-  let grounded = 0;
+  const nonPersianLead =
+    !hasPersianFirstRealWord(
+      text,
+    );
 
-  for (const figure of figures) {
-    if (
-      sourceDigits.includes(
-        figure,
-      )
-    ) {
-      grounded++;
-    }
+  const telegramNative =
+    len < 60
+      ? 30
+      : len <= 320
+        ? 100
+        : len <= 500
+          ? 70
+          : 40;
+
+  let clarity = 100;
+
+  if (boringOrGeneric) {
+    clarity -= 35;
   }
 
-  const sourceGrounding =
-    !includeNumericGrounding
-      ? 0
-      : figures.length === 0
-        ? 100
-        : Math.round(
-            (
-              grounded
-              / figures.length
-            ) * 100,
-          );
+  if (vagueOrFormal) {
+    clarity -= 25;
+  }
 
-  // telegram-native: reward 120..320 chars, penalise very short/very long.
-  const telegramNative = len < 60 ? 30 : len <= 320 ? 100 : len <= 500 ? 70 : 40;
+  if (nonPersianLead) {
+    clarity -= 40;
+  }
 
-  // clarity: penalise filler and a missing concrete signal.
-  let clarity = 100;
-  if (boringOrGeneric) clarity -= 35;
-  if (vagueOrFormal) clarity -= 25;
-  if (nonPersianLead) clarity -= 40;
-  if (!captionHasConcreteSignal(text)) clarity -= 30;
-  clarity = Math.max(0, clarity);
+  if (
+    !captionHasConcreteSignal(
+      text,
+    )
+  ) {
+    clarity -= 30;
+  }
 
+  clarity =
+    Math.max(
+      0,
+      clarity,
+    );
+
+  // Same non-numeric weighting already used by Safety V2,
+  // now expressed directly without hidden numeric fields.
   const score =
-    includeNumericGrounding
-      ? Math.round(
-          0.35 * clarity
-          + 0.30 * sourceGrounding
-          + 0.20 * telegramNative
-          + (
-            unsupportedClaim
-              ? 0
-              : 15
-          ),
-        )
-      : Math.round(
-          (
-            0.35 * clarity
-            + 0.20 * telegramNative
-          )
-          / 0.55,
-        );
-  return { clarity, sourceGrounding, telegramNative, boringOrGeneric, unsupportedClaim, vagueOrFormal, nonPersianLead, score: Math.min(100, score) };
+    Math.round(
+      (
+        0.35 * clarity
+        + 0.20 * telegramNative
+      )
+      / 0.55,
+    );
+
+  return {
+    clarity,
+    telegramNative,
+    boringOrGeneric,
+    vagueOrFormal,
+    nonPersianLead,
+    score:
+      Math.min(
+        100,
+        score,
+      ),
+  };
 }
 
 /**
@@ -731,87 +698,13 @@ function stripTrailingFillerFromText(text: unknown): string {
   return body;
 }
 
-/** Caption carries its own concrete signal: a figure, $, %, or material term. */
-function captionHasConcreteSignal(text: string): boolean {
-  const body = normalizeDigits(String(text ?? ''));
-  if (/[0-9]/.test(body) || body.includes('$') || body.includes('%') || body.includes('٪')) return true;
-  return hasMaterialCryptoImpact(text);
-}
-
-/**
- * Extract currency/percent numeric cores from the caption. We only police
- * these (not every bare number) to keep false positives low. A "core" is the
- * leading integer run of the figure, e.g. "81.7" → "81", "$2" → "2".
- */
-function extractGroundableFigureCores(text: string): string[] {
-  const body = normalizeDigits(String(text ?? ''));
-  const cores = new Set<string>();
-  const patterns = [
-    /\$\s*([0-9][0-9.,]*)/g,            // $2, $81.7
-    /([0-9][0-9.,]*)\s*(?:%|٪|درصد)/g,  // 12%, ۱۲ درصد
-    /([0-9][0-9.,]*)\s*(?:میلیون|میلیارد|تریلیون|million|billion|trillion)/gi,
-  ];
-  for (const re of patterns) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(body)) !== null) {
-      const intPart = String(m[1] ?? '').replace(/[,،]/g, '').split('.')[0];
-      if (intPart && intPart.length >= 1) cores.add(intPart);
-    }
-  }
-  return Array.from(cores);
-}
-
-function canonicalGroundableFigure(raw: string): string {
-  let value = normalizeDigits(String(raw ?? ''))
-    .replace(/[٬،,\s]/g, '')
-    .replace(/٫/g, '.')
-    .trim();
-
-  if (value.includes('.')) {
-    value = value.replace(/0+$/g, '').replace(/\.$/g, '');
-  }
-
-  return value;
-}
-
-function extractExactGroundableFigures(text: unknown): string[] {
-  const body = normalizeDigits(String(text ?? '')).replace(/٫/g, '.');
-  const figures = new Set<string>();
-  const patterns = [
-    /[$€£]\s*([0-9][0-9,٬]*(?:\.[0-9]+)?)/g,
-    /([0-9][0-9,٬]*(?:\.[0-9]+)?)\s*(?:%|٪|درصد|bps|bp)/gi,
-    /([0-9][0-9,٬]*(?:\.[0-9]+)?)\s*(?:میلیون|میلیارد|تریلیون|million|billion|trillion|BTC|ETH|USDT|USDC|USD|EUR|BNB|SOL|XRP)/gi,
-  ];
-
-  for (const re of patterns) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(body)) !== null) {
-      const fig = canonicalGroundableFigure(String(m[1] ?? ''));
-      if (fig) figures.add(fig);
-    }
-  }
-
-  return Array.from(figures);
-}
-
-function hasUnsupportedExactGroundableFigure(sourceText: unknown, caption: string): boolean {
-  const captionFigures = extractExactGroundableFigures(caption);
-  if (captionFigures.length === 0) return false;
-
-  const sourceFigures = new Set(extractExactGroundableFigures(sourceText));
-  const normalizedSourceText = canonicalGroundableFigure(String(sourceText ?? ''));
-
-  return captionFigures.some(fig => !sourceFigures.has(fig) && !normalizedSourceText.includes(fig));
-}
-
-
-function hasFullyUngroundedFigures(sourceText: unknown, caption: string): boolean {
-  const cores = extractGroundableFigureCores(caption);
-  if (cores.length === 0) return false; // no policed figures → nothing to ground
-  const src = normalizeDigits(String(sourceText ?? '')).replace(/[,،]/g, '');
-  // grounded if ANY core appears in the source digits
-  const grounded = cores.some(core => src.includes(core));
-  return !grounded;
+/** Caption carries a material, non-numeric crypto signal. */
+function captionHasConcreteSignal(
+  text: string,
+): boolean {
+  return hasMaterialCryptoImpact(
+    text,
+  );
 }
 
 function isProjectShillThread(rawText: unknown): boolean {

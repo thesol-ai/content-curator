@@ -38,57 +38,6 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
-function canonicalNumber(value: string): string {
-  let result = normalizeDigits(value)
-    .replace(/[٬،,_\s]/g, '')
-    .replace(/٫/g, '.')
-    .trim();
-
-  if (result.includes('.')) {
-    result = result
-      .replace(/0+$/g, '')
-      .replace(/\.$/g, '');
-  }
-
-  result = result.replace(/^0+(?=\d)/g, '');
-
-  return result || '0';
-}
-
-/**
- * Extract every explicit numeric value, not only currency/percentage values.
- *
- * Examples:
- * 4,201 -> 4201
- * ۸۶.۸ -> 86.8
- * 99.90 -> 99.9
- * V4 -> 4
- */
-export function extractCanonicalNumbers(value: unknown): string[] {
-  const text = normalizeDigits(value).replace(/٫/g, '.');
-
-  const matches =
-    text.match(/[0-9][0-9,٬،_]*(?:\.[0-9]+)?/g) ?? [];
-
-  return Array.from(
-    new Set(
-      matches
-        .map(canonicalNumber)
-        .filter(Boolean),
-    ),
-  );
-}
-
-export function findUnsupportedNumbers(
-  sourceText: unknown,
-  caption: unknown,
-): string[] {
-  const sourceNumbers = new Set(extractCanonicalNumbers(sourceText));
-  const captionNumbers = extractCanonicalNumbers(caption);
-
-  return captionNumbers.filter(number => !sourceNumbers.has(number));
-}
-
 function stripLeadingDecoration(value: string): string {
   return value
     .replace(
@@ -274,7 +223,7 @@ function hasSuspiciousTrailingConnector(value: unknown): boolean {
 }
 
 export function validateAndCompactCaption(
-  sourceText: unknown,
+  _sourceText: unknown,
   translation: TranslationOutput,
   options: CaptionSafetyOptions = {},
 ): CaptionSafetyResult {
@@ -310,13 +259,6 @@ export function validateAndCompactCaption(
       reason: 'caption_title_mismatch',
     };
   }
-
-  const combinedCaption =
-    `${compacted.captionShort}\n${compacted.captionFull}`;
-
-  // Numeric wording can change naturally during translation.
-  // Do not reject an otherwise valid caption solely because its numeric
-  // representation differs from the source.
 
   if (
     requiresExplicitAttribution(options.riskFlags) &&

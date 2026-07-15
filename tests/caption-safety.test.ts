@@ -2,30 +2,47 @@ import { describe, expect, it } from 'vitest';
 
 import {
   captionsUseSameTitle,
-  findUnsupportedNumbers,
   truncateCaptionAtBoundary,
   validateAndCompactCaption,
 } from '../apps/worker-api/src/services/caption-safety';
 
 describe('caption safety', () => {
-  it('does not hard-reject a changed bare number', () => {
-    const source =
-      'The company bought 108 BTC, bringing total holdings to 4,201 BTC.';
+  it('allows numeric differences by product policy', () => {
+    const decision =
+      validateAndCompactCaption(
+        'Version V4 reported 4,201 units at $50 with a 64% rate.',
+        {
+          captionShort:
+            'گزارش تازه بیت‌کوین\n\nنسخه ۵ شامل ۴۲۰۰ واحد با قیمت ۵۵ دلار و نرخ ۶۵ درصد است.',
+          captionFull:
+            'گزارش تازه بیت‌کوین\n\nنسخه ۵ شامل ۴۲۰۰ واحد با قیمت ۵۵ دلار و نرخ ۶۵ درصد است.',
+          hashtags: [],
+        },
+        {
+          shortMaxChars: 280,
+          fullMaxChars: 600,
+        },
+      );
 
-    const decision = validateAndCompactCaption(
-      source,
-      {
-        captionShort:
-          'ذخایر بیت‌کوین شرکت به ۴۲۰۰ واحد رسید\n\nاین شرکت ۱۰۸ بیت‌کوین خرید.',
-        captionFull:
-          'ذخایر بیت‌کوین شرکت به ۴۲۰۰ واحد رسید\n\nاین شرکت ۱۰۸ بیت‌کوین خرید.',
-        hashtags: [],
-      },
-      {
-        shortMaxChars: 280,
-        fullMaxChars: 600,
-      },
-    );
+    expect(decision.ok).toBe(true);
+  });
+
+  it('allows word-to-digit translation without numeric gating', () => {
+    const decision =
+      validateAndCompactCaption(
+        'Interactive Brokers added trading support for nine tokens.',
+        {
+          captionShort:
+            'افزوده‌شدن ۹ توکن به معاملات\n\nاین کارگزاری پشتیبانی از ۹ توکن را اضافه کرد.',
+          captionFull:
+            'افزوده‌شدن ۹ توکن به معاملات\n\nاین کارگزاری پشتیبانی از ۹ توکن را اضافه کرد.',
+          hashtags: [],
+        },
+        {
+          shortMaxChars: 280,
+          fullMaxChars: 600,
+        },
+      );
 
     expect(decision.ok).toBe(true);
   });
@@ -124,12 +141,4 @@ describe('caption safety', () => {
     expect(result).not.toContain('Moonbeam نیز برنامه');
   });
 
-  it('reports every unsupported explicit number', () => {
-    const unsupported = findUnsupportedNumbers(
-      'The source contains 275 and 2026.',
-      'خروجی شامل ۲۷۵، ۲۰۲۶ و ۹۹.۹ درصد است.',
-    );
-
-    expect(unsupported).toEqual(['99.9']);
-  });
 });

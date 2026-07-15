@@ -101,18 +101,45 @@ describe('story quality guard', () => {
     expect(decision.reason).toBe('caption_year_mismatch');
   });
 
-  it('does not reject an otherwise valid caption only because a number changed', () => {
+  it('does not block publishing for numeric differences', () => {
     const decision =
       applyPersianCaptionQualityGuard(
         'fa',
         {
           captionShort:
-            'گزارش ذخایر بایننس\n\nبایننس ذخایر خود را ۶۴۱ هزار بیت‌کوین اعلام کرد.',
+            'گزارش تازه بیت‌کوین\n\nنسخه ۵ شامل ۴۲۰۰ واحد با قیمت ۵۵ دلار و نرخ ۶۵ درصد است.',
           captionFull:
-            'گزارش ذخایر بایننس\n\nبایننس ذخایر خود را ۶۴۱ هزار بیت‌کوین اعلام کرد.',
+            'گزارش تازه بیت‌کوین\n\nنسخه ۵ شامل ۴۲۰۰ واحد با قیمت ۵۵ دلار و نرخ ۶۵ درصد است.',
           hashtags: [],
         },
-        'Binance reported reserves of 640,000 BTC.',
+        'Version V4 reported 4,201 units at $50 with a 64% rate.',
+        {
+          repairEnabled: true,
+          rejectEnabled: true,
+          safetyEnabled: true,
+          minScore: 70,
+          categoryId: 'crypto',
+          riskFlags: [],
+          shortMaxChars: 500,
+          fullMaxChars: 1000,
+        },
+      );
+
+    expect(decision.ok).toBe(true);
+  });
+
+  it('allows nine to become ۹ through the full guard', () => {
+    const decision =
+      applyPersianCaptionQualityGuard(
+        'fa',
+        {
+          captionShort:
+            'افزوده‌شدن ۹ توکن به معاملات\n\nاین کارگزاری پشتیبانی از ۹ توکن را اضافه کرد.',
+          captionFull:
+            'افزوده‌شدن ۹ توکن به معاملات\n\nاین کارگزاری پشتیبانی از ۹ توکن را اضافه کرد.',
+          hashtags: [],
+        },
+        'Interactive Brokers added trading support for nine tokens.',
         {
           repairEnabled: true,
           rejectEnabled: true,

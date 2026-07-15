@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import {
+  describe,
+  expect,
+  it,
+} from 'vitest';
 
 import {
   classifyTranslationFailureReason,
@@ -20,113 +24,112 @@ function aiWithTerminalReason(
     publish: false,
     score: 90,
     riskLevel: 'low',
-    riskFlags: ['translation_missing'],
-    topicFingerprint: 'bitcoin-etf-flow',
-    publishPriority: 'normal',
+    riskFlags: [
+      'translation_missing',
+    ],
+    topicFingerprint:
+      'bitcoin-etf-flow',
+    publishPriority:
+      'normal',
     translations: {},
-    translationTerminalReason: reason ?? null,
+    translationTerminalReason:
+      reason ?? null,
   };
 }
 
-describe('terminal factual caption rejection', () => {
-  it('requires a completed in-request repair', () => {
-    expect(
-      classifyTranslationFailureReason(
-        'caption_unsupported_exact_figure',
-        false,
-      ),
-    ).toBe('transient');
+describe(
+  'terminal caption rejection',
+  () => {
+    it('keeps legacy numeric reasons transient', () => {
+      expect(
+        classifyTranslationFailureReason(
+          'caption_unsupported_exact_figure',
+          true,
+        ),
+      ).toBe('transient');
 
-    expect(
-      classifyTranslationFailureReason(
-        'caption_unsupported_exact_figure',
-        true,
-      ),
-    ).toBe('terminal');
+      expect(
+        classifyTranslationFailureReason(
+          'caption_unsupported_number:42',
+          true,
+        ),
+      ).toBe('transient');
+    });
 
-    expect(
-      classifyTranslationFailureReason(
-        'caption_unsupported_number:42',
-        true,
-      ),
-    ).toBe('terminal');
-  });
+    it('keeps missing attribution terminal only after repair', () => {
+      expect(
+        classifyTranslationFailureReason(
+          'caption_missing_required_attribution',
+          false,
+        ),
+      ).toBe('transient');
 
-  it('keeps temporary, structural, and stylistic failures retryable', () => {
-    expect(
-      classifyTranslationFailureReason(
-        'translation_invalid_json',
-        true,
-      ),
-    ).toBe('transient');
+      expect(
+        classifyTranslationFailureReason(
+          'caption_missing_required_attribution',
+          true,
+        ),
+      ).toBe('terminal');
+    });
 
-    expect(
-      classifyTranslationFailureReason(
-        'rtl_repair_failed',
-        true,
-      ),
-    ).toBe('transient');
+    it('keeps structural, stylistic, and year failures retryable', () => {
+      for (
+        const reason
+        of [
+          'translation_invalid_json',
+          'rtl_repair_failed',
+          'caption_title_mismatch',
+          'caption_quality_low',
+          'caption_year_mismatch',
+        ]
+      ) {
+        expect(
+          classifyTranslationFailureReason(
+            reason,
+            true,
+          ),
+        ).toBe('transient');
+      }
+    });
 
-    expect(
-      classifyTranslationFailureReason(
-        'caption_title_mismatch',
-        true,
-      ),
-    ).toBe('transient');
+    it('requires both the rollout flag and a terminal reason', () => {
+      const enabled = {
+        AI_TRANSLATION_TERMINAL_REJECT_ENABLED:
+          'true',
+      } as Env;
 
-    expect(
-      classifyTranslationFailureReason(
-        'caption_quality_low',
-        true,
-      ),
-    ).toBe('transient');
+      const disabled = {
+        AI_TRANSLATION_TERMINAL_REJECT_ENABLED:
+          'false',
+      } as Env;
 
-    expect(
-      classifyTranslationFailureReason(
-        'caption_year_mismatch',
-        false,
-      ),
-    ).toBe('transient');
-  });
+      const ai =
+        aiWithTerminalReason(
+          'caption_missing_required_attribution',
+        );
 
-  it('requires both the rollout flag and a dedicated terminal reason', () => {
-    const enabled = {
-      AI_TRANSLATION_TERMINAL_REJECT_ENABLED: 'true',
-    } as Env;
+      expect(
+        getTerminalTranslationRejectReason(
+          enabled,
+          ai,
+        ),
+      ).toBe(
+        'caption_missing_required_attribution',
+      );
 
-    const disabled = {
-      AI_TRANSLATION_TERMINAL_REJECT_ENABLED: 'false',
-    } as Env;
+      expect(
+        getTerminalTranslationRejectReason(
+          disabled,
+          ai,
+        ),
+      ).toBeNull();
 
-    const ai = aiWithTerminalReason(
-      'caption_unsupported_exact_figure',
-    );
-
-    expect(
-      getTerminalTranslationRejectReason(enabled, ai),
-    ).toBe('caption_unsupported_exact_figure');
-
-    expect(
-      getTerminalTranslationRejectReason(disabled, ai),
-    ).toBeNull();
-
-    expect(
-      getTerminalTranslationRejectReason(
-        enabled,
-        aiWithTerminalReason(),
-      ),
-    ).toBeNull();
-
-    expect(
-      getTerminalTranslationRejectReason(
-        enabled,
-        {
-          ...aiWithTerminalReason(),
-          riskFlags: [
-            'translation_terminal:caption_unsupported_exact_figure',
-          ],
-        },
-      ),
-    ).toBeNull();
-  });
-});
+      expect(
+        getTerminalTranslationRejectReason(
+          enabled,
+          aiWithTerminalReason(),
+        ),
+      ).toBeNull();
+    });
+  },
+);
