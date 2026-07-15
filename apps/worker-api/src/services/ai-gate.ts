@@ -1047,7 +1047,7 @@ function buildRtlLeadRepairSystem(target: TranslationTarget): string {
   return [
     `You repair Telegram captions for ${languageName}.`,
     'Return ONLY JSON with this exact structure: {"caption_short":"...","caption_full":"..."}',
-    'Preserve the exact meaning, facts, names, numbers, entities, and tone.',
+    'Preserve the source-backed meaning, facts, names, entities, and tone.',
     'Do not add facts. Do not remove important details.',
     'Do not add a fixed or static prefix.',
     'If the caption has a title line followed by a blank line, preserve that title/body structure.',
@@ -1073,10 +1073,6 @@ function shouldRetryPersianCaptionQuality(
 ): boolean {
   if (!reason) return false;
 
-  if (reason.startsWith('caption_unsupported_number:')) {
-    return true;
-  }
-
   return [
     'caption_crypto_meta_or_audience_addressing',
     'caption_vague_or_formal',
@@ -1086,8 +1082,7 @@ function shouldRetryPersianCaptionQuality(
     'caption_title_mismatch',
     'caption_missing_required_attribution',
     'caption_incomplete_sentence',
-    'caption_unsupported_exact_figure',
-    'caption_unsupported_figure',
+    'caption_year_mismatch',
   ].includes(reason);
 }
 
@@ -1095,7 +1090,7 @@ function buildPersianCaptionStyleRepairSystem(): string {
   return [
     'You repair Persian Telegram news captions.',
     'Return ONLY JSON: {"caption_short":"...","caption_full":"..."}',
-    'Keep the same facts, numbers, entities, and source-backed meaning.',
+    'Preserve the source-backed facts and meaning accurately.',
     'Do not add facts, advice, predictions, hype, or links.',
     'Rewrite as a normal factual channel post appropriate to the configured category.',
     'Do NOT address the reader or audience.',
@@ -1105,7 +1100,7 @@ function buildPersianCaptionStyleRepairSystem(): string {
     'The first line is the title: make it clear, professional, concrete, and correctly punctuated. If it is a question, end it with "؟", not ".".',
     'caption_short must not end mid-sentence or mid-clause. If it is too long, shorten it into a complete sentence.',
     'Use the exact same first-line title in caption_short and caption_full.',
-    'Every explicit number, date, percentage, amount, count, version, and year must appear in source_text. Remove or correct unsupported numbers.',
+    'Preserve years exactly when a year appears in source_text.',
     'If validation_reason requires attribution, the first-line title itself must preserve attribution or uncertainty using wording such as "به گفته"، "طبق گزارش"، "مدعی شد"، "احتمال" or an explicit named source.',
     'Preserve procedural stages exactly: proposed, applied, approved, signed, became law, launched, completed, accused, and convicted are different events.',
     'Do not infer refusal, intent, motive, impact, adoption, trust, importance, or market consequences unless source_text explicitly states them.',
@@ -1281,21 +1276,19 @@ export function classifyTranslationFailureReason(
   reason: string | undefined,
   repairCompleted: boolean,
 ): TranslationFailureKind {
-  if (!repairCompleted) return 'transient';
-
-  const normalized = String(reason ?? '').trim().toLowerCase();
-
-  if (normalized.startsWith('caption_unsupported_number:')) {
-    return 'terminal';
+  if (!repairCompleted) {
+    return 'transient';
   }
 
-  return [
-    'caption_unsupported_exact_figure',
-    'caption_unsupported_figure',
-    'caption_missing_required_attribution',
-  ].includes(normalized)
-    ? 'terminal'
-    : 'transient';
+  const normalized =
+    String(reason ?? '')
+      .trim()
+      .toLowerCase();
+
+  return normalized
+    === 'caption_missing_required_attribution'
+      ? 'terminal'
+      : 'transient';
 }
 
 function setTerminalTranslationFailureForItem(
@@ -1802,7 +1795,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
 
   const universalCaptionGuidance = [
     'Universal factual caption rules:',
-    '- Before writing, identify the source subject, action, object, figures, attribution, and uncertainty.',
+    '- Before writing, identify the source subject, action, object, attribution, and uncertainty.',
     '- The title must state the main source-supported fact, not a generic claim about importance, growth, adoption, or market impact.',
     '- Every title and body claim must be directly supported by the supplied source text.',
     '- Preserve attribution: a claim, opinion, forecast, allegation, estimate, or analysis must not be rewritten as an established fact.',
@@ -1811,7 +1804,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Preserve the exact procedural stage of an event. Applied, proposed, approved, signed, became law, launched, completed, accused, and convicted are not interchangeable.',
     '- Do not infer intent or motive from absence or inaction. For example, "did not sign" must not become "refused to sign" unless refusal is explicit.',
     '- Compression means selecting supported facts, not inventing likely context, impact, adoption, confidence, importance, or market consequences.',
-    '- Do not introduce a proper noun, role, date, figure, organization, product, or location that is absent from the source text and supplied scoring context.',
+    '- Do not introduce unsupported factual claims, entities, roles, organizations, products, or locations.',
     '- caption_short and caption_full must use the exact same first-line title for a target.',
     '- If the source text is brief or risk flags indicate limited context, use one concise body sentence and stop. Do not manufacture explanatory context.',
     '- Do not invent causes, motives, consequences, urgency, importance, sentiment, or likely market effects.',
@@ -1827,7 +1820,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Every Persian caption MUST start with a clear factual title on the first line, then exactly one blank line, then the news body.',
     '- Required Persian format: "<optional formal emoji> <clear factual Persian title>\\n\\n<body>".',
     '- The title must prioritize factual accuracy, technical correctness, source support, and clarity. Attraction is secondary.',
-    '- The title must summarize the real editorial angle of the source tweet/news. Do not invent consequences, numbers, price impact, motives, or urgency.',
+    '- The title must summarize the real editorial angle of the source tweet/news. Do not invent consequences, price impact, motives, or urgency.',
     '- Title length: usually 6-14 Persian words. It should be sharp, concrete, and Telegram-native, not vague or corporate.',
     '- The first real word after any optional emoji must be Persian. Never start the title with English, a Latin brand name, ticker, number, @handle, URL, hashtag, or punctuation.',
     '- Emoji is optional. Do not force emojis. If used, use at most one relevant formal emoji at the start of the Persian title.',
@@ -1835,7 +1828,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Structure every Persian crypto caption as a normal Telegram news post: concrete fact first, then only source-backed context. Do NOT address the audience or explain that something is important “for users/readers”.',
     '- Explain crypto terms briefly when needed inside the sentence, not as a textbook aside. Examples: TVL = پولی که داخل پروتکل‌های دیفای قفل شده؛ ETF = صندوق قابل معامله در بورس؛ RWA = دارایی واقعی مثل طلا/سهام/اوراق که روی بلاکچین آمده؛ smart contract = قرارداد خودکار روی بلاکچین؛ liquidity = نقدینگی بازار؛ liquidation = بسته‌شدن اجباری معامله اهرمی.',
     '- Prefer short Telegram-native Persian: one concrete lead sentence, then one plain context sentence. caption_short should usually be 1-2 sentences; caption_full should usually be 2-4 short lines/paragraphs.',
-    '- Lead with the concrete event, number, asset, protocol, institution, or risk. Do not begin with abstract framing or vague importance language.',
+    '- Lead with the concrete event, asset, protocol, institution, or risk. Do not begin with abstract framing or vague importance language.',
     '- Do not dress weakly crypto-adjacent stories as major crypto news. If the connection is weak, state the concrete connection briefly or keep the caption restrained.',
     '- Banned Persian caption style: do NOT use audience-addressing or meta-explainer phrases such as "برای کاربران کریپتو", "برای کاربران", "نکته مهم این است", "معنی ساده‌اش", "این خبر از جنس", "این خبر بیشتر درباره", "اگر این مدل‌ها", "نه فقط معامله", "نشان می‌دهد ... نیست". Write the news directly.',
     '- Good style examples: "پولی که داخل پروتکل‌های دیفای قفل شده، به زیر ۷۰ میلیارد دلار رسیده است. این یعنی سرمایه از دیفای خارج شده و بازار محتاط‌تر شده." / "مورفو ۱۷۵ میلیون دلار سرمایه جذب کرده و ارزشش به حدود ۲ میلیارد دلار رسیده است. حضور سرمایه‌گذارهای بزرگ یعنی دیفای هنوز برای پول نهادی جذاب است."',
@@ -1848,7 +1841,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     'Before writing each item, privately construct an editorial fact frame containing: the central source-supported fact, claim type, attribution, must-include details, and forbidden unsupported inferences.',
     'Use scoring_context only as advisory metadata to identify the likely event, entities, risk, and uncertainty. The supplied source text is authoritative whenever the two differ.',
     'Do not output the editorial fact frame, hidden analysis, or reasoning. Return only the translations JSON contract below.',
-    'Use the same private fact frame for caption_short and caption_full so their title, certainty, attribution, figures, dates, and central event remain consistent.',
+    'Use the same private fact frame for caption_short and caption_full so their title, certainty, attribution, years, and central event remain consistent.',
     ...universalCaptionGuidance,
     ...cryptoCaptionGuidance,
     'Make the post feel like a real channel post: news, educational, or analytical based on the target settings.',
@@ -1879,10 +1872,10 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Persian captions must read like a normal crypto channel post, not a lesson addressed to the reader. Do not write "برای کاربران..." or "نکته مهم..." lines. If there is no concrete source-backed context, stop after the facts.',
     '- Avoid generic filler such as "نشان‌دهنده پذیرش نهادی", "گامی مهم", "می‌تواند تأثیرگذار باشد" unless the source gives a concrete reason.',
     '- BANNED generic filler in Persian — do NOT use these or close variants: "نشان‌دهنده پذیرش", "نشان‌دهنده افزایش", "نشان‌دهنده تغییرات", "نشان‌دهنده بلوغ", "گامی در جهت", "می‌تواند تأثیرگذار باشد", "پتانسیل دموکراتیزه کردن", "یکی از بزرگترین رویدادهای تاریخ", "محسوب می‌شود". If you cannot give a concrete source-backed reason, omit the "why it matters" line entirely.',
-    '- Every number, percentage, ticker, $ amount, date, and named entity in the caption MUST appear in the source text. Do NOT invent figures, valuations, IPO implications, or predictions absent from the source.',
+    '- Preserve the source-backed facts and meaning accurately. Do not invent unsupported factual claims.',
     '- Bad (filler): "این خبر نشان‌دهنده پذیرش نهادی است و می‌تواند تأثیرگذار باشد." Good (concrete): "نوبیتکس در پی هک ۸۱.۷ میلیون دلار از دست داد؛ وجوه به آدرس‌های سوخت‌شده منتقل شد."',
     '- Prefer short, sharp, Telegram-native Persian: lead with the concrete fact, then at most one context line the source supports.',
-    '- NO speculation: do NOT add hedging guesses such as "می‌تواند نشان‌دهنده ... باشد" / "ممکن است ... باشد" about why a transfer or move happened. For whale/transfer/on-chain-movement items, state ONLY the confirmed facts (amount, asset, from/to) and stop; do not guess motive or market impact unless the source states it.',
+    '- NO speculation: do NOT add hedging guesses such as "می‌تواند نشان‌دهنده ... باشد" / "ممکن است ... باشد" about why a transfer or move happened. For whale/transfer/on-chain-movement items, state only the confirmed transfer or movement facts and stop; do not guess motive or market impact unless the source states it.',
     '- Persian caption_full and caption_short must start with a factual Persian title. One formal title emoji may be used, but is optional.',
     '- After the title line, insert exactly one blank line, then write the body. This blank line is required so Telegram can render the first line as the visual title.',
     '- The first real word of every non-empty title/body block after optional emoji/spacing MUST be Persian.',
@@ -1895,7 +1888,7 @@ export function buildTranslationSystem(targets: TranslationTarget[], category: C
     '- Do NOT include source URLs or raw links. The publisher adds source attribution separately.',
     '- Do NOT include HTML tags — plain text only',
     '- Do NOT invent facts not present in the source text',
-    '- Preserve dates and years exactly. If the source says 2026, the Persian caption must not say ۲۰۲۴ or ۲۰۲۵.',
+    '- Preserve years exactly. If the source says 2026, the Persian caption must not say ۲۰۲۴ or ۲۰۲۵.',
     '- Do NOT provide financial/investment advice',
     '- Remove source engagement bait and CTA questions such as "Which are you watching?", "What do you think?", "Which report matters most?", or equivalent phrasing in any language; replace with concise editorial context only when useful.',
     '- For crypto/blockchain items about macroeconomic data, explain the relevance to crypto or digital-asset markets; do not publish a generic economic calendar without that angle.',

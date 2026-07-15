@@ -65,6 +65,18 @@ describe('crypto Persian caption writing quality', () => {
     expect(financeSystem).toContain(
       'Every title and body claim must be directly supported by the supplied source text',
     );
+
+    expect(cryptoSystem).not.toContain(
+      'Every number, percentage, ticker, $ amount, date',
+    );
+
+    expect(cryptoSystem).not.toContain(
+      'Every explicit number, date, percentage, amount',
+    );
+
+    expect(cryptoSystem).toContain(
+      'Preserve years exactly',
+    );
     expect(financeSystem).not.toContain('Crypto Persian caption writing mode');
     expect(financeSystem).not.toContain('TVL = پولی که داخل پروتکل‌های دیفای قفل شده');
   });

@@ -110,10 +110,29 @@ describe('topic mix + cap preview (pure)', () => {
 });
 
 describe('caption quality score (pure, observe-only)', () => {
-  it('rewards a grounded, concrete caption', () => {
-    const s = scoreCaptionQuality('بیت‌کوین ETF امروز ۲۰۰ میلیون دلار ورودی داشت.', 'Bitcoin ETF saw $200 million inflow.');
-    expect(s.unsupportedClaim).toBe(false);
-    expect(s.score).toBeGreaterThan(70);
+  it('does not use source-number matching in the score', () => {
+    const caption =
+      'بیت‌کوین ETF امروز ۲۰۰ میلیون دلار ورودی داشت.';
+
+    const matching =
+      scoreCaptionQuality(
+        caption,
+        'Bitcoin ETF saw $200 million inflow.',
+      );
+
+    const different =
+      scoreCaptionQuality(
+        caption,
+        'Bitcoin ETF activity was reported.',
+      );
+
+    expect(matching.score).toBe(
+      different.score,
+    );
+
+    expect(matching.score).toBeGreaterThan(
+      70,
+    );
   });
   it('penalizes a generic filler caption', () => {
     const s = scoreCaptionQuality('این خبر نشان‌دهنده پذیرش نهادی است.');
