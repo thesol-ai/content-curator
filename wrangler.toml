@@ -86,6 +86,14 @@ STREAM_TRANSCODE_ENABLED = "false"
 # ══════════════════════════════════════════════════════════════
 
 # Apify cost control
+
+# Telegraph Instant Article
+TELEGRAPH_INSTANT_ENABLED = "false"
+TELEGRAPH_INSTANT_CHANNEL_ALLOWLIST = "crypto_fa_pilot"
+TELEGRAPH_INSTANT_TIMEOUT_MS = "5000"
+TELEGRAPH_INSTANT_AUTHOR_NAME = "The Sol"
+TELEGRAPH_INSTANT_AUTHOR_URL = "https://t.me/thesolcrypto_fa"
+TELEGRAPH_INSTANT_LINK_LABEL = "📖 ادامه مطلب"
 [env.production]
 name = "content-curator"
 workers_dev = true
@@ -247,9 +255,9 @@ DEDUPE_WINDOW_HOURS = "168"
 # Paid video transcoding fallback. Keep disabled unless explicitly approved.
 STREAM_TRANSCODE_ENABLED = "false"
 
-MARKET_SNAPSHOT_ENABLED = "false"
-MARKET_SNAPSHOT_INTERVAL_HOURS = "1"
-MARKET_SNAPSHOT_SLOTS = "09:05,12:35,15:35,18:35,21:35"
+MARKET_SNAPSHOT_ENABLED = "true"
+MARKET_SNAPSHOT_INTERVAL_HOURS = "6"
+MARKET_SNAPSHOT_SLOTS = "00:15,07:15,13:15,19:15"
 MARKET_SNAPSHOT_CHANNEL_ID = "crypto_fa_pilot"
 APIFY_ATTEMPT_YIELD_DOWNSTREAM_ENABLED = "true"
 APIFY_SECOND_ATTEMPT_DAILY_BUDGET = "0"
@@ -268,6 +276,14 @@ APIFY_TASK_MAX_RETRIES = "0"
 
 APIFY_PRE_RUN_MAX_RUNS_PER_DAY = "30"
 AI_BACKLOG_CRON_DRAIN_ENABLED = "true"
+
+# Telegraph Instant Article
+TELEGRAPH_INSTANT_ENABLED = "true"
+TELEGRAPH_INSTANT_CHANNEL_ALLOWLIST = "crypto_fa_pilot"
+TELEGRAPH_INSTANT_TIMEOUT_MS = "5000"
+TELEGRAPH_INSTANT_AUTHOR_NAME = "The Sol"
+TELEGRAPH_INSTANT_AUTHOR_URL = "https://t.me/thesolcrypto_fa"
+TELEGRAPH_INSTANT_LINK_LABEL = "📖 ادامه مطلب"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "content-curator-db-v2"

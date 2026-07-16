@@ -76,6 +76,16 @@ export interface Env {
   TELEGRAM_PUBLISH_SCHEDULER_ENABLED: string;
   TELEGRAM_PUBLISH_DUE_LIMIT: string;
 
+  // Telegraph Instant Article.
+  // Default/off preserves the exact previous publisher path.
+  TELEGRAPH_INSTANT_ENABLED?: string;
+  TELEGRAPH_INSTANT_CHANNEL_ALLOWLIST?: string;
+  TELEGRAPH_ACCESS_TOKEN?: string;
+  TELEGRAPH_INSTANT_TIMEOUT_MS?: string;
+  TELEGRAPH_INSTANT_AUTHOR_NAME?: string;
+  TELEGRAPH_INSTANT_AUTHOR_URL?: string;
+  TELEGRAPH_INSTANT_LINK_LABEL?: string;
+
   // Market Snapshot — direct Telegram posting, independent from publish_queue
   MARKET_SNAPSHOT_ENABLED?: string;
   MARKET_SNAPSHOT_INTERVAL_HOURS?: string;

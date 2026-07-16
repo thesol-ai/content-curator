@@ -1,0 +1,25 @@
+name = "content-curator-telegraph-preview"
+main = "apps/worker-api/src/telegraph-preview-worker.ts"
+compatibility_date = "2026-05-01"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "telegraph-preview"
+LOG_LEVEL = "debug"
+
+# Master switch for the entire Telegraph feature.
+# This preview worker is separate from production.
+TELEGRAPH_INSTANT_ENABLED = "true"
+
+TELEGRAPH_AUTHOR_NAME = "The Sol Crypto FA"
+TELEGRAPH_AUTHOR_URL = "https://t.me/thesolcrypto_fa"
+TELEGRAPH_TEST_CHAT_ID = "@thesolcrypto_fa"
+
+# Intentionally no cron triggers.
+# Intentionally no Telegram token.
+# Intentionally no AI or Apify secrets.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "content-curator-db-v2"
+database_id = "e0089316-ca39-45ce-b53f-21fa59a921f6"
