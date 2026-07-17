@@ -10,6 +10,7 @@ import { runAIGate } from './ai-gate';
 import { checkChannelPublishWindowAt, runRuleGate } from './rule-gate';
 import { resolveMedia, extractMediaTypes } from './media-resolver';
 import { publishToTelegram } from './telegram-publisher';
+import { prepareTelegraphPublishInput } from './telegraph-publish';
 import { getRuntimeConfig, withEffectiveCurationEnv, type RuntimeConfigOverrides } from './runtime-config';
 import { recordRunEvent, recordRunItemEvent } from './run-events';
 import { buildPolicyRejectAiResult, findSimilarTopicInRunRejections, getItemRejectReason, getPreAiContentRejectReason } from './content-policy';
@@ -1672,7 +1673,7 @@ export async function publishQueueItem(
   const telegramFileIds = await loadTelegramFileIds(env, row.item_id, mediaUrls.length);
   const videoMetadata = await loadVideoMetadata(env, row.item_id, mediaUrls.length);
 
-  const result = await publishToTelegram(env, {
+  const basePublishInput = {
     chatId:        channel.telegram_chat_id,
     captionShort:  row.caption_short ?? '',
     captionFull:   row.caption_full  ?? '',
@@ -1685,7 +1686,43 @@ export async function publishQueueItem(
     mediaTypes,
     videoMetadata,
     telegramFileIds,
-  });
+  };
+
+  const instant =
+    await prepareTelegraphPublishInput(
+      env,
+      basePublishInput,
+      {
+        channelId: row.channel_id,
+        retryCount:
+          Number(row.retry_count) || 0,
+      },
+    );
+
+  if (instant.applied) {
+    console.log(
+      `[Telegraph] Instant page created for queue ${queueId}`,
+    );
+  } else if (
+    instant.reason === 'create_failed'
+    || instant.reason === 'token_missing'
+  ) {
+    console.warn(
+      `[Telegraph] Fail-open for queue ${queueId}: `
+      + instant.reason
+      + (
+        instant.detail
+          ? ` (${instant.detail})`
+          : ''
+      ),
+    );
+  }
+
+  const result =
+    await publishToTelegram(
+      env,
+      instant.input,
+    );
 
   await syncDiscoveryMediaAfterPublish(env, row.item_id, result.mediaResults, result.ok ? undefined : result);
 
